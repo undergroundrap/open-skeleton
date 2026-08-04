@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "claim_ids": { "type": "array", "items": { "type": "string" } },
+          "narrative": { "type": "string" },
+          "caveats": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["claim_ids", "narrative", "caveats"]
+      }
+    },
+    "conflicts": { "type": "array", "items": { "type": "string" } },
+    "unknowns": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["summary", "findings", "conflicts", "unknowns"]
+}
