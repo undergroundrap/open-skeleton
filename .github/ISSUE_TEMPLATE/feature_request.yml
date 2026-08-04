@@ -1,0 +1,64 @@
+name: Capability request
+description: A new analyzer, probe kind, language adapter, or profile section.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The bar for a new capability is that it can be decided **deterministically
+        from evidence**. If a proposal requires guessing, it belongs in an optional
+        provider rather than the analysis core.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of capability
+      options:
+        - A new language adapter
+        - A new claim category from an existing adapter
+        - A new probe kind
+        - A new section in the standard spec profile
+        - A new export or integration surface
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What question can a developer not answer today
+      description: Describe the gap, not the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What evidence would decide it
+      description: >
+        Which files, symbols, edges, or manifest entries would a deterministic
+        implementation read? If the answer is "a model would infer it", say so
+        explicitly — that is a valid answer, and it scopes the work to the
+        provider layer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: false_positives
+    attributes:
+      label: How could this be wrong
+      description: >
+        What would make a naive implementation report a false positive or a false
+        absence? Answering this up front usually shapes the design.
+    validations:
+      required: true
+
+  - type: textarea
+    id: prior_art
+    attributes:
+      label: Prior art
+      description: >
+        Public documentation, standards, or tools that address this. Do not
+        include vendor-confidential material.
+    validations:
+      required: false

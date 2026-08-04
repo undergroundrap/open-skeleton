@@ -1,0 +1,80 @@
+name: Bug report
+description: A wrong claim, a wrong determination, a crash, or a broken citation.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste proprietary source. A minimal fixture that reproduces
+        the behavior is far more useful than a private repository.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: What went wrong
+      options:
+        - A claim is factually wrong
+        - A claim is missing that the evidence supports
+        - A section determination (present/absent) is wrong
+        - A citation does not resolve or points at the wrong lines
+        - A crash or unhandled error
+        - Performance
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Minimal reproduction
+      description: The smallest file tree that reproduces this. Inline the file contents.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands run
+      value: |
+        python -m open_skeleton analyze <path> --state-dir <state>
+        python -m open_skeleton spec <path> --state-dir <state> --verify
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What it produced
+      description: Paste the relevant claim, probe table, or error. Redact paths if needed.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What it should have produced, and why
+      description: >
+        Cite the file and lines that support your expectation. This project treats
+        evidence as the authority, so a report grounded in source is actionable
+        immediately.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `open-skeleton --version`, or the commit SHA.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Python version
+      placeholder: "Windows 11, Python 3.12.4"
+    validations:
+      required: true
