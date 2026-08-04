@@ -26,6 +26,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Snapshot diffs and stale-claim projection
 - SQLite ledger, JSONL export, concise source-linked Markdown, and a loopback-only dashboard
 - Outline-driven long-form specifications from user-editable profiles, where absence is a verdict backed by the query that found nothing
+- Implemented-capability catalog with traceability computed from call edges and route-path literals, naming the capabilities no test or harness reaches
 - Citation integrity verification that re-resolves every receipt against current source bytes
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract

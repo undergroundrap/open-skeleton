@@ -11,8 +11,9 @@ from typing import Any
 
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import utc_now
+from open_skeleton.spec.capabilities import Capability, build_capabilities
 from open_skeleton.spec.diagrams import Diagram, build_diagram
-from open_skeleton.spec.panels import Panel, build_panel
+from open_skeleton.spec.panels import Panel, PanelContext, build_panel
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
 from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
 
@@ -146,10 +147,12 @@ class SpecDocument:
     stale_claim_count: int
     total_claims: int
     cited_claims: int
+    capabilities: tuple[Capability, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
+            "capabilities": [item.to_dict() for item in self.capabilities],
             "snapshot_id": self.snapshot_id,
             "root": self.root,
             "profile_id": self.profile_id,
@@ -239,6 +242,20 @@ def build_spec(
         evidence=tuple(evidence_by_id.values()),
     )
 
+    capabilities = build_capabilities(
+        files=files,
+        claims=claims,
+        symbols=symbols,
+        edges=edges,
+        evidence_by_id=evidence_by_id,
+    )
+    panel_context = PanelContext(
+        files=files,
+        exclusions=exclusions,
+        snapshot=snapshot_row,
+        capabilities=capabilities,
+    )
+
     used: set[str] = set()
     rendered: list[RenderedSection] = []
 
@@ -276,12 +293,7 @@ def build_spec(
             build_diagram(name, files=files, claims=claims, symbols=symbols, edges=edges)
             for name in section.diagrams
         )
-        panels = tuple(
-            build_panel(
-                name, files=files, exclusions=exclusions, snapshot=snapshot_row
-            )
-            for name in section.panels
-        )
+        panels = tuple(build_panel(name, panel_context) for name in section.panels)
 
         rendered.append(
             RenderedSection(
@@ -327,6 +339,7 @@ def build_spec(
         stale_claim_count=len(ledger.stale_claims(resolved_id)),
         total_claims=len(claims),
         cited_claims=cited,
+        capabilities=capabilities,
     )
 
 

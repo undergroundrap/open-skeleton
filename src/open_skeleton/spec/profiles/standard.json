@@ -78,8 +78,8 @@
     {
       "id": "surface",
       "number": "2",
-      "title": "Functional Surface",
-      "concern": "The behavior this system exposes to callers.",
+      "title": "Functional Surface and Capabilities",
+      "concern": "The behavior this system exposes to callers, and how it traces to verification.",
       "children": [
         {
           "id": "surface.http",
@@ -173,6 +173,47 @@
             ],
             "limit": 20
           }
+        },
+        {
+          "id": "surface.capability-catalog",
+          "number": "2.4",
+          "title": "Implemented Capability Catalog",
+          "concern": "Clusters of behavior the implementation actually exposes.",
+          "panels": [
+            "capability_catalog"
+          ],
+          "framing": "A requirement is a statement of intent, and source code is not intent. This catalog therefore records implemented capabilities recovered from served route prefixes and source module structure. It does not claim to reconstruct what anyone asked for.",
+          "cross_references": [
+            "surface.http",
+            "surface.traceability"
+          ]
+        },
+        {
+          "id": "surface.traceability",
+          "number": "2.5",
+          "title": "Capability Traceability",
+          "concern": "Which files implement each capability and what exercises it.",
+          "panels": [
+            "traceability_matrix"
+          ],
+          "framing": "Each row is computed, not asserted. Implementing files come from symbol receipts; the exercising column follows call edges out of test-role files and operator-harness scripts into the capability's symbols. Every cell can be re-derived from the ledger.",
+          "cross_references": [
+            "verification.tests",
+            "verification.operator-harness"
+          ]
+        },
+        {
+          "id": "surface.verification-gaps",
+          "number": "2.6",
+          "title": "Capabilities Without a Verifying Reference",
+          "concern": "Implemented behavior that no test or harness reaches.",
+          "panels": [
+            "verification_gaps"
+          ],
+          "framing": "A missing reference means no call edge was found from a verifying file into the capability's symbols. Static call resolution cannot observe dynamic dispatch or end-to-end HTTP exercise, so each row is a candidate for review rather than proof that the capability is untested.",
+          "cross_references": [
+            "verification.gaps"
+          ]
         }
       ]
     },

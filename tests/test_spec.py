@@ -11,7 +11,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, verify_spec
-from open_skeleton.spec.panels import build_panel
+from open_skeleton.spec.panels import PanelContext, build_panel
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import render_spec_json
@@ -340,7 +340,7 @@ class PanelTests(TestCase):
 
     def test_language_census_reports_shares_that_sum_sensibly(self) -> None:
         panel = build_panel(
-            "language_census", files=self.FILES, exclusions=(), snapshot={}
+            "language_census", PanelContext(files=self.FILES)
         )
         self.assertEqual(panel.rows[0][0], "Python")
         self.assertEqual(panel.rows[0][1], "2")
@@ -348,16 +348,20 @@ class PanelTests(TestCase):
 
     def test_largest_files_orders_by_line_count(self) -> None:
         panel = build_panel(
-            "largest_files", files=self.FILES, exclusions=(), snapshot={}
+            "largest_files", PanelContext(files=self.FILES)
         )
         self.assertEqual([row[0] for row in panel.rows], ["a.py", "b.py", "c.md"])
 
     def test_exclusions_panel_states_that_content_was_never_read(self) -> None:
         panel = build_panel(
             "exclusions",
-            files=self.FILES,
-            exclusions=({"path": "x", "reason": "binary"}, {"path": "y", "reason": "binary"}),
-            snapshot={},
+            PanelContext(
+                files=self.FILES,
+                exclusions=(
+                    {"path": "x", "reason": "binary"},
+                    {"path": "y", "reason": "binary"},
+                ),
+            ),
         )
         self.assertEqual(panel.rows, (("binary", "2"),))
         assert panel.note is not None

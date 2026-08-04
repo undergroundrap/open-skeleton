@@ -13,10 +13,23 @@ overstates its own coverage.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from open_skeleton.spec.capabilities import Capability
+
 MAX_PANEL_ROWS = 15
+MAX_CELL_ITEMS = 4
+
+
+@dataclass(frozen=True, slots=True)
+class PanelContext:
+    """Everything a panel is allowed to read, all pinned to one snapshot."""
+
+    files: tuple[dict[str, Any], ...] = ()
+    exclusions: tuple[dict[str, Any], ...] = ()
+    snapshot: dict[str, Any] = field(default_factory=dict)
+    capabilities: tuple[Capability, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,25 +161,109 @@ def _snapshot_totals(
     )
 
 
-def build_panel(
-    name: str,
-    *,
-    files: tuple[dict[str, Any], ...],
-    exclusions: tuple[dict[str, Any], ...],
-    snapshot: dict[str, Any],
-) -> Panel:
-    """Render one named composition panel from pinned snapshot records."""
+def _truncate(items: tuple[str, ...]) -> str:
+    if not items:
+        return "—"
+    shown = ", ".join(f"`{item}`" for item in items[:MAX_CELL_ITEMS])
+    remaining = len(items) - MAX_CELL_ITEMS
+    return f"{shown} +{remaining:,} more" if remaining > 0 else shown
+
+
+def _capability_catalog(capabilities: tuple[Capability, ...]) -> Panel:
+    rows = tuple(
+        (
+            item.capability_id,
+            item.label,
+            item.kind,
+            f"{len(item.routes):,}",
+            f"{len(item.symbols):,}",
+            item.verification,
+        )
+        for item in capabilities
+    )
+    return Panel(
+        name="capability_catalog",
+        title="Implemented capability catalog",
+        columns=("ID", "Capability", "Cluster", "Routes", "Symbols", "Verification"),
+        alignments=("left", "left", "left", "right", "right", "left"),
+        rows=rows,
+        note=(
+            "Capabilities are clustered from served route prefixes and source "
+            "module structure. They describe what the implementation exposes, "
+            "not what anyone required it to do."
+        ),
+    )
+
+
+def _traceability_matrix(capabilities: tuple[Capability, ...]) -> Panel:
+    rows = tuple(
+        (
+            item.capability_id,
+            _truncate(item.routes) if item.routes else _truncate(item.symbols),
+            _truncate(item.paths),
+            f"{len(item.evidence_ids):,}",
+            _truncate(item.exercised_by),
+        )
+        for item in capabilities
+    )
+    return Panel(
+        name="traceability_matrix",
+        title="Capability traceability",
+        columns=("ID", "Surface", "Implementing files", "Receipts", "Exercised by"),
+        alignments=("left", "left", "left", "right", "left"),
+        rows=rows,
+        note=(
+            "The exercising column follows call edges out of test-role files and "
+            "operator-harness scripts into each capability's symbols. A reference "
+            "proves the symbol is called from a verifying file; it does not prove "
+            "the assertion is meaningful."
+        ),
+    )
+
+
+def _verification_gaps(capabilities: tuple[Capability, ...]) -> Panel:
+    gaps = [item for item in capabilities if not item.exercised_by]
+    rows = tuple(
+        (item.capability_id, item.label, item.kind, _truncate(item.paths))
+        for item in gaps
+    )
+    covered = len(capabilities) - len(gaps)
+    total = len(capabilities) or 1
+    return Panel(
+        name="verification_gaps",
+        title="Capabilities with no verifying reference",
+        columns=("ID", "Capability", "Cluster", "Implementing files"),
+        alignments=("left", "left", "left", "left"),
+        rows=rows,
+        note=(
+            f"{covered:,} of {len(capabilities):,} capabilities "
+            f"({covered / total:.0%}) are reached from a test-role file or an "
+            "operator-harness script. The rows above are the remainder."
+        ),
+    )
+
+
+def build_panel(name: str, context: PanelContext) -> Panel:
+    """Render one named panel from pinned snapshot records."""
 
     if name == "language_census":
-        return _census("language_census", "Composition by language", files, "language", "Language")
+        return _census(
+            "language_census", "Composition by language", context.files, "language", "Language"
+        )
     if name == "role_census":
-        return _census("role_census", "Composition by role", files, "role", "Role")
+        return _census("role_census", "Composition by role", context.files, "role", "Role")
     if name == "largest_files":
-        return _largest_files(files)
+        return _largest_files(context.files)
     if name == "exclusions":
-        return _exclusions(exclusions)
+        return _exclusions(context.exclusions)
     if name == "snapshot_totals":
-        return _snapshot_totals(files, exclusions, snapshot)
+        return _snapshot_totals(context.files, context.exclusions, context.snapshot)
+    if name == "capability_catalog":
+        return _capability_catalog(context.capabilities)
+    if name == "traceability_matrix":
+        return _traceability_matrix(context.capabilities)
+    if name == "verification_gaps":
+        return _verification_gaps(context.capabilities)
     return Panel(  # pragma: no cover - profile validation rejects unknown panels
         name=name,
         title=name,

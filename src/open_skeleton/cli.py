@@ -507,11 +507,16 @@ def _spec(args: argparse.Namespace) -> int:
     for section in document.sections:
         verdicts[section.verdict] = verdicts.get(section.verdict, 0) + 1
 
+    exercised = sum(
+        1 for item in document.capabilities if item.verification == "exercised"
+    )
     summary: dict[str, object] = {
         "snapshot_id": document.snapshot_id,
         "profile": document.profile_id,
         "sections": len(document.sections),
         "verdicts": verdicts,
+        "capabilities": len(document.capabilities),
+        "capabilities_exercised": exercised,
         "total_claims": document.total_claims,
         "cited_claims": document.cited_claims,
         "stale_claim_count": document.stale_claim_count,
@@ -534,6 +539,11 @@ def _spec(args: argparse.Namespace) -> int:
         for verdict in sorted(verdicts):
             print(f"  {verdict}: {verdicts[verdict]:,}")
         print(f"Claims rendered with receipts: {document.cited_claims:,}")
+        if document.capabilities:
+            print(
+                f"Capabilities: {len(document.capabilities):,} "
+                f"({exercised:,} reached by a test or harness)"
+            )
         if report is not None:
             print(
                 f"Citation integrity: {report.integrity:.1%} "

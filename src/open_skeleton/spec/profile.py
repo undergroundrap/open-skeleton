@@ -32,6 +32,9 @@ PANEL_KINDS = frozenset(
         "largest_files",
         "exclusions",
         "snapshot_totals",
+        "capability_catalog",
+        "traceability_matrix",
+        "verification_gaps",
     }
 )
 

@@ -105,11 +105,63 @@ the analyzers concluded. §1.1 Repository Composition uses all five:
 | `role_census` | The same breakdown per scanner-assigned role |
 | `largest_files` | The largest included files with their content hashes |
 | `exclusions` | Every excluded entry grouped by reason |
+| `capability_catalog` | Implemented capabilities with route and symbol counts |
+| `traceability_matrix` | Per capability: implementing files, receipts, and what exercises it |
+| `verification_gaps` | Capabilities no verifying file reaches |
 
 The exclusions panel is the one that matters most. A census that silently drops
 files overstates its own coverage, so excluded content is counted and labelled —
 and every percentage elsewhere in the document is explicitly relative to the
 included set.
+
+## Capabilities and traceability
+
+Sections §2.4–2.6 answer the question a specification exists to answer: *what does
+this system do, what implements each piece, and what verifies it.*
+
+**These are implemented capabilities, not requirements.** A requirement is a
+statement of intent, and source code is not intent. Claiming to recover
+requirements from an implementation would be inventing the part that matters
+most, so the catalog says only what the code exposes.
+
+Capabilities are clustered two ways, both structural:
+
+- **Route groups** — verified `http_route` claims grouped by leading static path
+  segment (`/action/attack/{id}` and `/action/move/{id}` become one capability).
+- **Modules** — remaining source symbols grouped by containing package
+  directory. Route handlers are excluded so nothing is counted twice.
+
+### Traceability is computed, not asserted
+
+Each capability is linked to what exercises it by following two edge kinds out of
+**verifying files** — those the scanner assigned the `test` role, plus any file
+cited by an `operator_harness` claim:
+
+| Signal | Meaning |
+|---|---|
+| `calls` | A verifying file calls one of the capability's symbols |
+| `references_route_path` | A verifying file contains a string literal naming one of its routes |
+
+The second signal matters more than it sounds. A harness usually exercises an API
+over HTTP rather than by importing handlers, so call edges alone report almost
+everything as untested. Route-path literals close that gap. Both sides are reduced
+to their static prefix before comparison, because a client builds
+`/action/attack/{player_id}` with an f-string and the recorded literal is only
+`/action/attack/`.
+
+Two deliberate exclusions keep the number honest:
+
+- A verifying file calling a helper **defined in that same file** is
+  self-reference, not coverage, and is dropped.
+- Calls from non-verifying files never count, however numerous.
+
+### What a missing reference does and does not mean
+
+`no-verifying-reference` means no call edge and no route-path literal was found
+from any verifying file. Static resolution cannot observe dynamic dispatch,
+reflection, or an end-to-end exercise that names an endpoint indirectly, so a row
+in §2.6 is a **candidate for review, not proof that the capability is untested**.
+The section says so in the rendered output.
 
 ## Citation integrity
 

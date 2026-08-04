@@ -48,6 +48,7 @@ CREATE_TABLE_PATTERN = re.compile(
     r"\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"`\[]?([A-Za-z_][\w]*)",
     re.IGNORECASE,
 )
+ROUTE_PATH_LITERAL = re.compile(r"^/[A-Za-z0-9_\-./{}]*$")
 INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
     re.IGNORECASE,
@@ -291,6 +292,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.scope_ids: list[str] = []
         self.test_evidence: list[str] = []
         self.route_evidence: list[str] = []
+        self.route_path_literals: set[str] = set()
         self.route_auth_control_evidence: list[str] = []
         self.typed_route_evidence: list[str] = []
         self.exit_evidence: list[tuple[int | None, str]] = []
@@ -856,6 +858,27 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 supporting=(evidence.evidence_id,),
             )
         self.generic_visit(node)
+
+    def visit_Constant(self, node: ast.Constant) -> None:  # noqa: N802
+        # Route-path literals are how a client or harness names an endpoint it
+        # never imports. Recording them lets traceability follow HTTP exercise,
+        # not only direct calls.
+        if not isinstance(node.value, str) or not ROUTE_PATH_LITERAL.match(node.value):
+            return
+        if node.value in self.route_path_literals:
+            return
+        self.route_path_literals.add(node.value)
+        evidence = self._evidence(
+            start_line=node.lineno,
+            end_line=node.end_lineno or node.lineno,
+            symbol=self.current_qualified_name,
+            evidence_kind="route_path_literal",
+        )
+        self._edge(
+            relationship="references_route_path",
+            target_ref=node.value,
+            evidence_id=evidence.evidence_id,
+        )
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         call_name = _expr_name(node.func)
