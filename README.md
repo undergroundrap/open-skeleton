@@ -25,6 +25,8 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Atomic `verified`, `inferred`, `conflict`, `unknown`, and `stale` claims with alternatives and invalidation keys
 - Snapshot diffs and stale-claim projection
 - SQLite ledger, JSONL export, concise source-linked Markdown, and a loopback-only dashboard
+- Outline-driven long-form specifications from user-editable profiles, where absence is a verdict backed by the query that found nothing
+- Citation integrity verification that re-resolves every receipt against current source bytes
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract
 - Machine-readable, pinned comparative benchmarks with source-receipt validation
@@ -74,7 +76,21 @@ open-skeleton diff        compare snapshots and project stale claims
 open-skeleton serve       run the read-only local dashboard
 open-skeleton synthesize  explicitly invoke an optional provider
 open-skeleton benchmark   score a pinned fixture and baseline artifact
+open-skeleton spec        render a long-form specification from an outline profile
 ```
+
+## Long-form specifications
+
+```powershell
+open-skeleton spec C:\path\to\repository --verify
+open-skeleton spec C:\path\to\repository --profile my-team-checklist.json
+```
+
+The outline is data, not a prompt. Each node declares re-runnable probes, so a
+concern the repository does not implement is reported as an explicit `absent`
+verdict next to the exact queries that returned nothing — not omitted. `--verify`
+re-resolves every citation against current source bytes and exits non-zero if any
+receipt no longer holds. See [docs/SPEC.md](docs/SPEC.md).
 
 ## Agent access with MCP
 

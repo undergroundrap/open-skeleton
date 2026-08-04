@@ -95,3 +95,51 @@ class CliTests(TestCase):
             self.assertEqual(result, 0)
             claims = json.loads(claims_stdout.getvalue())
             self.assertEqual(claims[0]["claim"], "GET /ready is handled by app.ready.")
+
+    def test_spec_command_writes_both_projections_and_verifies(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            create_sample_repository(root)
+
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(
+                    main(["analyze", str(root), "--state-dir", str(state), "--quiet"]), 0
+                )
+
+            spec_stdout = StringIO()
+            with redirect_stdout(spec_stdout):
+                result = main(
+                    ["spec", str(root), "--state-dir", str(state), "--verify", "--json"]
+                )
+            self.assertEqual(result, 0)
+            summary = json.loads(spec_stdout.getvalue())
+
+            self.assertEqual(summary["citation_integrity"], 1.0)
+            self.assertGreater(summary["verdicts"]["absent"], 0)
+            self.assertGreater(summary["verdicts"]["applicable"], 0)
+            self.assertEqual(summary["cited_claims"], summary["total_claims"])
+            self.assertTrue(Path(summary["markdown"]).is_file())
+            self.assertTrue(Path(summary["json"]).is_file())
+
+    def test_spec_verify_fails_when_a_cited_source_changed(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            create_sample_repository(root)
+
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                main(["analyze", str(root), "--state-dir", str(state), "--quiet"])
+            # package.json is cited by the dependency inventory, so editing it must
+            # surface as a failing citation rather than pass silently.
+            (root / "package.json").write_text(
+                '{"name":"sample","version":"2.0.0"}\n', encoding="utf-8"
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(
+                    ["spec", str(root), "--state-dir", str(state), "--verify", "--json"]
+                )
+            self.assertEqual(result, 1)

@@ -25,10 +25,12 @@ dependencies = []
 [project.optional-dependencies]
 mcp = ["mcp>=2,<3"]
 dev = [
-  "build>=1.2",
-  "mypy>=1.15",
-  "pip-audit>=2.8",
-  "ruff>=0.11",
+  "build>=1.2,<2",
+  # Upper bounds are deliberate: ruff and mypy gate CI, and an unpinned major or
+  # minor bump silently reclassifies existing code as failing.
+  "mypy>=1.15,<2",
+  "pip-audit>=2.8,<3",
+  "ruff>=0.16,<0.17",
 ]
 
 [project.scripts]
@@ -43,6 +45,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"open_skeleton.spec" = ["profiles/*.json"]
 
 [tool.setuptools.data-files]
 "share/open-skeleton/schemas" = ["schemas/*.json"]

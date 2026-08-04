@@ -1,0 +1,1327 @@
+{
+  "schema": "open-skeleton.spec_profile.v1",
+  "profile_id": "standard-technical-specification",
+  "profile_version": "v1",
+  "title": "Technical Specification",
+  "lineage": "Conventional software specification taxonomy — ISO/IEC/IEEE 29148 requirements structure, C4 architectural levels, and a standard operational-readiness checklist. Each node is bound to the analyzer claim categories and probes that can actually decide it for a given repository.",
+  "sections": [
+    {
+      "id": "introduction",
+      "number": "1",
+      "title": "Introduction",
+      "concern": "What this repository is and where execution begins.",
+      "children": [
+        {
+          "id": "introduction.composition",
+          "number": "1.1",
+          "title": "Repository Composition",
+          "concern": "What the scanner included, what it excluded, and why.",
+          "panels": [
+            "snapshot_totals",
+            "language_census",
+            "role_census",
+            "largest_files",
+            "exclusions"
+          ],
+          "framing": "Every percentage elsewhere in this document is relative to the included set below. Excluded content was never read."
+        },
+        {
+          "id": "introduction.entry-points",
+          "number": "1.2",
+          "title": "Entry Points",
+          "concern": "Executable entry points and application bootstrap.",
+          "probes": [
+            {
+              "name": "Declared entry points",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "application_entry"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "application_entry"
+            ],
+            "limit": 20
+          },
+          "cross_references": [
+            "stack.languages"
+          ]
+        },
+        {
+          "id": "introduction.concentration",
+          "number": "1.3",
+          "title": "Architectural Concentration",
+          "concern": "Where implementation mass accumulates, and the maintenance risk that follows.",
+          "probes": [
+            {
+              "name": "Concentration findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "concentration"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "concentration"
+            ],
+            "limit": 15
+          },
+          "diagrams": [
+            "concentration"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "surface",
+      "number": "2",
+      "title": "Functional Surface",
+      "concern": "The behavior this system exposes to callers.",
+      "children": [
+        {
+          "id": "surface.http",
+          "number": "2.1",
+          "title": "HTTP Interface",
+          "concern": "Routes the implementation actually serves.",
+          "probes": [
+            {
+              "name": "Verified routes",
+              "kind": "claim_category",
+              "terms": [
+                "http_route"
+              ]
+            },
+            {
+              "name": "Route inventory",
+              "kind": "claim_category",
+              "terms": [
+                "http_route_inventory"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "http_route_inventory"
+            ],
+            "limit": 10
+          },
+          "diagrams": [
+            "route_surface"
+          ],
+          "cross_references": [
+            "surface.interface-drift",
+            "security.authentication"
+          ]
+        },
+        {
+          "id": "surface.interface-drift",
+          "number": "2.2",
+          "title": "Documented Versus Implemented Interface",
+          "concern": "Divergence between the documented API and the served API.",
+          "probes": [
+            {
+              "name": "Documented route inventory",
+              "kind": "claim_category",
+              "terms": [
+                "documented_http_route_inventory"
+              ]
+            },
+            {
+              "name": "API documentation drift",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "api_documentation_drift"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "api_documentation_drift",
+              "documented_http_route_inventory"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "surface.domain-rules",
+          "number": "2.3",
+          "title": "Domain Rules and Numeric Models",
+          "concern": "Quantitative rules encoded in the implementation.",
+          "probes": [
+            {
+              "name": "Scaling rules",
+              "kind": "claim_category",
+              "terms": [
+                "exponential_scaling"
+              ]
+            },
+            {
+              "name": "Numeric conflicts",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "mathematical_conflict"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "exponential_scaling",
+              "mathematical_conflict"
+            ],
+            "limit": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "stack",
+      "number": "3",
+      "title": "Technology Stack",
+      "concern": "Languages, modules, and declared third-party surface.",
+      "children": [
+        {
+          "id": "stack.languages",
+          "number": "3.1",
+          "title": "Languages and Module Graph",
+          "concern": "Implementation languages and internal module relationships.",
+          "probes": [
+            {
+              "name": "Module symbols",
+              "kind": "symbol_kind",
+              "terms": [
+                "module"
+              ]
+            },
+            {
+              "name": "Import relationships",
+              "kind": "edge_relationship",
+              "terms": [
+                "imports"
+              ]
+            }
+          ],
+          "diagrams": [
+            "module_dependency"
+          ]
+        },
+        {
+          "id": "stack.dependencies",
+          "number": "3.2",
+          "title": "Declared Dependencies",
+          "concern": "Third-party packages declared by project manifests.",
+          "probes": [
+            {
+              "name": "Dependency manifests",
+              "kind": "path_glob",
+              "terms": [
+                "package.json",
+                "requirements*.txt",
+                "pyproject.toml",
+                "Cargo.toml",
+                "go.mod",
+                "Gemfile",
+                "*.csproj"
+              ]
+            },
+            {
+              "name": "Dependency inventory",
+              "kind": "claim_category",
+              "terms": [
+                "dependency_inventory"
+              ]
+            },
+            {
+              "name": "Dependency declarations",
+              "kind": "edge_relationship",
+              "terms": [
+                "declares_dependency"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "dependency_inventory",
+              "dependency_drift"
+            ],
+            "limit": 25
+          }
+        },
+        {
+          "id": "stack.documentation",
+          "number": "3.3",
+          "title": "Documentation Conformance",
+          "concern": "Statements in repository documentation that the implementation does not support.",
+          "probes": [
+            {
+              "name": "Documentation files",
+              "kind": "file_role",
+              "terms": [
+                "documentation"
+              ]
+            },
+            {
+              "name": "Documentation drift",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "documentation_drift"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "documentation_drift"
+            ],
+            "limit": 25
+          }
+        },
+        {
+          "id": "stack.licensing",
+          "number": "3.4",
+          "title": "License and Supply-Chain Artifacts",
+          "concern": "License declarations and machine-readable bill-of-materials artifacts.",
+          "probes": [
+            {
+              "name": "License declarations",
+              "kind": "path_glob",
+              "terms": [
+                "LICENSE",
+                "LICENSE.*",
+                "COPYING",
+                "COPYING.*",
+                "NOTICE",
+                "NOTICE.*"
+              ]
+            },
+            {
+              "name": "Bill of materials",
+              "kind": "path_glob",
+              "terms": [
+                "*.spdx",
+                "*.spdx.json",
+                "sbom*.json",
+                "*.cdx.json",
+                "bom.json"
+              ]
+            }
+          ],
+          "cross_references": [
+            "stack.dependencies"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "number": "4",
+      "title": "State and Persistence",
+      "concern": "What survives a restart, and what does not.",
+      "children": [
+        {
+          "id": "state.durable",
+          "number": "4.1",
+          "title": "Durable Storage",
+          "concern": "Persistent datastores and their serialization model.",
+          "probes": [
+            {
+              "name": "Storage findings",
+              "kind": "claim_category",
+              "terms": [
+                "storage",
+                "storage_schema",
+                "storage_serialization"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "storage",
+              "storage_schema",
+              "storage_serialization"
+            ],
+            "limit": 25
+          },
+          "cross_references": [
+            "state.process-local"
+          ]
+        },
+        {
+          "id": "state.process-local",
+          "number": "4.2",
+          "title": "Process-Local State",
+          "concern": "State held in process memory that no datastore owns.",
+          "probes": [
+            {
+              "name": "Process-local state",
+              "kind": "claim_category",
+              "terms": [
+                "process_local_state"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "process_local_state"
+            ],
+            "limit": 25
+          },
+          "cross_references": [
+            "operations.orchestration"
+          ]
+        },
+        {
+          "id": "state.reconciliation",
+          "number": "4.3",
+          "title": "Reconciliation and Termination",
+          "concern": "How the system repairs state after a restart, and how it shuts down.",
+          "probes": [
+            {
+              "name": "Reconciliation routines",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "state_reconciliation"
+              ]
+            },
+            {
+              "name": "Termination paths",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "process_termination"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "state_reconciliation",
+              "process_termination"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "state.caching",
+          "number": "4.4",
+          "title": "Caching Tier",
+          "concern": "A dedicated cache separate from the primary datastore.",
+          "probes": [
+            {
+              "name": "Cache servers",
+              "kind": "dependency_name",
+              "terms": [
+                "redis",
+                "hiredis",
+                "ioredis",
+                "@redis/*",
+                "memcached",
+                "pymemcache",
+                "python-memcached",
+                "node-cache"
+              ]
+            },
+            {
+              "name": "Cache clients in source",
+              "kind": "import_target",
+              "terms": [
+                "redis",
+                "memcache*",
+                "pymemcache",
+                "cachetools"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "process_local_state",
+              "storage"
+            ],
+            "limit": 6
+          },
+          "cross_references": [
+            "state.process-local"
+          ]
+        },
+        {
+          "id": "state.migrations",
+          "number": "4.5",
+          "title": "Schema Migrations",
+          "concern": "Versioned, replayable schema change management.",
+          "probes": [
+            {
+              "name": "Migration directories",
+              "kind": "path_glob",
+              "terms": [
+                "migrations/*",
+                "*/migrations/*",
+                "alembic.ini",
+                "alembic/*",
+                "db/migrate/*",
+                "prisma/schema.prisma",
+                "knexfile.js",
+                "*.sql"
+              ]
+            },
+            {
+              "name": "Migration tooling",
+              "kind": "dependency_name",
+              "terms": [
+                "alembic",
+                "flyway",
+                "liquibase",
+                "prisma",
+                "knex",
+                "sequelize",
+                "typeorm",
+                "yoyo-migrations"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "storage_schema",
+              "storage_serialization"
+            ],
+            "limit": 6
+          },
+          "cross_references": [
+            "state.durable"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "integration",
+      "number": "5",
+      "title": "Integration and Runtime Topology",
+      "concern": "External processes this system expects, and how it behaves when they are absent.",
+      "children": [
+        {
+          "id": "integration.topology",
+          "number": "5.1",
+          "title": "Runtime Topology",
+          "concern": "Processes and endpoints the system addresses at runtime.",
+          "probes": [
+            {
+              "name": "Topology findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "runtime_topology"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "runtime_topology"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "integration.failure",
+          "number": "5.2",
+          "title": "Failure Behavior",
+          "concern": "Documented behavior when an integration or request fails.",
+          "probes": [
+            {
+              "name": "Integration failure behavior",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "ai_failure_behavior"
+              ]
+            },
+            {
+              "name": "Framework behavior",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "http_framework_behavior"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "ai_failure_behavior",
+              "http_framework_behavior"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "integration.configuration",
+          "number": "5.3",
+          "title": "Configuration",
+          "concern": "Configuration the system reads, and configuration it hardcodes instead.",
+          "probes": [
+            {
+              "name": "Configuration reads",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "configuration_read"
+              ]
+            },
+            {
+              "name": "Environment files",
+              "kind": "path_glob",
+              "terms": [
+                ".env.example",
+                "*.env.example",
+                "config.*",
+                "settings.*"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "configuration_read"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "integration.secrets",
+          "number": "5.4",
+          "title": "Secrets Management",
+          "concern": "How credentials are supplied at runtime rather than committed.",
+          "probes": [
+            {
+              "name": "Secret templates and stores",
+              "kind": "path_glob",
+              "terms": [
+                ".env.example",
+                "*.env.example",
+                ".sops.yaml",
+                "*.vault.yml",
+                "sealed-secret*.yaml",
+                "secrets.example.*"
+              ]
+            },
+            {
+              "name": "Secret manager clients",
+              "kind": "dependency_name",
+              "terms": [
+                "hvac",
+                "python-dotenv",
+                "dotenv",
+                "azure-keyvault*",
+                "@aws-sdk/client-secrets-manager",
+                "@google-cloud/secret-manager"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "configuration_read"
+            ],
+            "limit": 6
+          },
+          "cross_references": [
+            "integration.configuration"
+          ]
+        },
+        {
+          "id": "integration.messaging",
+          "number": "5.5",
+          "title": "Asynchronous Messaging",
+          "concern": "Queues, brokers, and background job processing.",
+          "probes": [
+            {
+              "name": "Broker and queue clients",
+              "kind": "dependency_name",
+              "terms": [
+                "celery",
+                "kombu",
+                "pika",
+                "kafka-python",
+                "confluent-kafka",
+                "aio-pika",
+                "amqplib",
+                "bullmq",
+                "bull",
+                "@google-cloud/pubsub",
+                "rq",
+                "dramatiq"
+              ]
+            },
+            {
+              "name": "Broker imports in source",
+              "kind": "import_target",
+              "terms": [
+                "celery",
+                "pika",
+                "kafka*",
+                "aio_pika",
+                "kombu",
+                "dramatiq"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "number": "6",
+      "title": "Security Posture",
+      "concern": "Access controls present in the implementation, and the boundaries they assume.",
+      "children": [
+        {
+          "id": "security.authentication",
+          "number": "6.1",
+          "title": "Authentication and Authorization Controls",
+          "concern": "Identity and authorization controls attached to the served interface.",
+          "probes": [
+            {
+              "name": "Declared route auth controls",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "auth_control"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "auth_control",
+              "auth_control_census"
+            ],
+            "limit": 15
+          },
+          "framing": "A census counts controls present in route signatures. It does not prove that no protection exists elsewhere, such as in a reverse proxy this repository does not contain."
+        },
+        {
+          "id": "security.boundaries",
+          "number": "6.2",
+          "title": "Transport and Origin Boundaries",
+          "concern": "Origin, transport, and exposure boundaries the implementation declares.",
+          "probes": [
+            {
+              "name": "Security boundaries",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "security_boundary"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "security_boundary"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "security.data-protection",
+          "number": "6.3",
+          "title": "Data Protection and Cryptography",
+          "concern": "Encryption, hashing, and credential-handling primitives in use.",
+          "probes": [
+            {
+              "name": "Cryptographic libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "cryptography",
+                "pynacl",
+                "bcrypt",
+                "argon2-cffi",
+                "passlib",
+                "pyjwt",
+                "jsonwebtoken",
+                "node-forge",
+                "libsodium-wrappers"
+              ]
+            },
+            {
+              "name": "Cryptographic imports",
+              "kind": "import_target",
+              "terms": [
+                "cryptography*",
+                "hashlib",
+                "secrets",
+                "ssl",
+                "hmac",
+                "jwt",
+                "bcrypt",
+                "argon2*",
+                "nacl"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "security.vulnerability-management",
+          "number": "6.4",
+          "title": "Dependency Vulnerability Management",
+          "concern": "Automated detection of known-vulnerable dependencies.",
+          "probes": [
+            {
+              "name": "Update and scan automation",
+              "kind": "path_glob",
+              "terms": [
+                ".github/dependabot.yml",
+                ".github/dependabot.yaml",
+                "renovate.json",
+                ".renovaterc*",
+                ".snyk"
+              ]
+            },
+            {
+              "name": "Audit tooling",
+              "kind": "dependency_name",
+              "terms": [
+                "pip-audit",
+                "safety",
+                "bandit",
+                "audit-ci",
+                "snyk",
+                "semgrep"
+              ]
+            }
+          ],
+          "cross_references": [
+            "stack.dependencies",
+            "operations.automation"
+          ]
+        },
+        {
+          "id": "security.governance",
+          "number": "6.5",
+          "title": "Security Governance Artifacts",
+          "concern": "Disclosure policy, threat modelling, and privacy documentation.",
+          "probes": [
+            {
+              "name": "Governance documents",
+              "kind": "path_glob",
+              "terms": [
+                "SECURITY.md",
+                "SECURITY.*",
+                "THREAT_MODEL*",
+                "PRIVACY*",
+                "CODE_OF_CONDUCT.md",
+                "GOVERNANCE.md",
+                "DPA*"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verification",
+      "number": "7",
+      "title": "Verification",
+      "concern": "Automated and manual verification the repository actually contains.",
+      "children": [
+        {
+          "id": "verification.tests",
+          "number": "7.1",
+          "title": "Automated Tests",
+          "concern": "Test files, frameworks, and declared test entry points.",
+          "probes": [
+            {
+              "name": "Test files",
+              "kind": "file_role",
+              "terms": [
+                "test"
+              ]
+            },
+            {
+              "name": "Test census",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "testing",
+                "testing_census"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "testing",
+              "testing_census"
+            ],
+            "limit": 25
+          }
+        },
+        {
+          "id": "verification.gaps",
+          "number": "7.2",
+          "title": "Verification Gaps",
+          "concern": "Verification the repository documents or implies but does not implement.",
+          "probes": [
+            {
+              "name": "Testing gaps",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "testing_gap"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "testing_gap"
+            ],
+            "limit": 20
+          }
+        },
+        {
+          "id": "verification.operator-harness",
+          "number": "7.3",
+          "title": "Operator Harness",
+          "concern": "Hand-run scripts that substitute for an automated suite.",
+          "probes": [
+            {
+              "name": "Operator harness candidates",
+              "kind": "claim_category",
+              "terms": [
+                "operator_harness"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "operator_harness"
+            ],
+            "limit": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "operations",
+      "number": "8",
+      "title": "Delivery and Operations",
+      "concern": "How this system is built, packaged, deployed, and observed.",
+      "children": [
+        {
+          "id": "operations.automation",
+          "number": "8.1",
+          "title": "Build and Release Automation",
+          "concern": "Continuous integration and release pipelines.",
+          "probes": [
+            {
+              "name": "Pipeline definitions",
+              "kind": "path_glob",
+              "terms": [
+                ".github/workflows/*.yml",
+                ".github/workflows/*.yaml",
+                ".gitlab-ci.yml",
+                "azure-pipelines.yml",
+                "Jenkinsfile",
+                ".circleci/config.yml"
+              ]
+            },
+            {
+              "name": "Delivery automation findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "delivery_automation"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "delivery_automation"
+            ],
+            "limit": 15
+          },
+          "constraints": {
+            "categories": [
+              "testing_gap",
+              "operator_harness",
+              "dependency_drift"
+            ],
+            "limit": 8
+          }
+        },
+        {
+          "id": "operations.containerization",
+          "number": "8.2",
+          "title": "Containerization",
+          "concern": "Container image definitions and build context.",
+          "probes": [
+            {
+              "name": "Image definitions",
+              "kind": "path_glob",
+              "terms": [
+                "Dockerfile",
+                "Dockerfile.*",
+                "*.dockerfile",
+                "Containerfile",
+                "Containerfile.*"
+              ]
+            },
+            {
+              "name": "Multi-container definitions",
+              "kind": "path_glob",
+              "terms": [
+                "docker-compose*.yml",
+                "docker-compose*.yaml",
+                "compose.yml",
+                "compose.yaml"
+              ]
+            },
+            {
+              "name": "Build context control",
+              "kind": "path_glob",
+              "terms": [
+                ".dockerignore"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "configuration_read",
+              "runtime_topology",
+              "storage"
+            ],
+            "limit": 8
+          },
+          "cross_references": [
+            "integration.configuration",
+            "state.durable"
+          ]
+        },
+        {
+          "id": "operations.orchestration",
+          "number": "8.3",
+          "title": "Orchestration",
+          "concern": "Cluster scheduling, replica management, and process supervision.",
+          "probes": [
+            {
+              "name": "Cluster manifests",
+              "kind": "path_glob",
+              "terms": [
+                "Chart.yaml",
+                "values.yaml",
+                "kustomization.yaml",
+                "kustomization.yml",
+                "*.nomad",
+                "*.nomad.hcl"
+              ]
+            },
+            {
+              "name": "Process supervision",
+              "kind": "path_glob",
+              "terms": [
+                "*.service",
+                "supervisord.conf",
+                "ecosystem.config.js",
+                "Procfile"
+              ]
+            },
+            {
+              "name": "Infrastructure as code",
+              "kind": "path_glob",
+              "terms": [
+                "*.tf",
+                "*.tfvars",
+                "template.yaml",
+                "serverless.yml"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "process_local_state",
+              "state_reconciliation",
+              "storage"
+            ],
+            "limit": 10
+          },
+          "framing": "Where orchestration is absent, the constraints below describe implementation properties that a second concurrent instance would violate. They are observations, not recommendations.",
+          "cross_references": [
+            "state.process-local"
+          ]
+        },
+        {
+          "id": "operations.infrastructure-as-code",
+          "number": "8.4",
+          "title": "Infrastructure as Code",
+          "concern": "Declarative, version-controlled provisioning of environments.",
+          "probes": [
+            {
+              "name": "Provisioning definitions",
+              "kind": "path_glob",
+              "terms": [
+                "*.tf",
+                "*.tfvars",
+                "*.bicep",
+                "template.yaml",
+                "template.yml",
+                "serverless.yml",
+                "pulumi.yaml",
+                "cdk.json",
+                "ansible.cfg",
+                "playbook*.yml",
+                "playbook*.yaml"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "operations.observability",
+          "number": "8.5",
+          "title": "Telemetry and Metrics",
+          "concern": "Metrics collection, distributed tracing, and telemetry export.",
+          "probes": [
+            {
+              "name": "Telemetry configuration",
+              "kind": "path_glob",
+              "terms": [
+                "otel-collector*.yaml",
+                "otel-collector*.yml",
+                "prometheus.yml",
+                "prometheus.yaml",
+                "grafana/*",
+                "*.otel.yaml"
+              ]
+            },
+            {
+              "name": "Telemetry libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "opentelemetry*",
+                "@opentelemetry/*",
+                "prometheus-client",
+                "prom-client",
+                "statsd",
+                "datadog",
+                "ddtrace"
+              ]
+            },
+            {
+              "name": "Telemetry imports",
+              "kind": "import_target",
+              "terms": [
+                "opentelemetry*",
+                "prometheus_client",
+                "statsd",
+                "ddtrace"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "process_termination"
+            ],
+            "limit": 6
+          }
+        },
+        {
+          "id": "operations.error-tracking",
+          "number": "8.6",
+          "title": "Error Tracking",
+          "concern": "Aggregated runtime exception reporting.",
+          "probes": [
+            {
+              "name": "Error tracking clients",
+              "kind": "dependency_name",
+              "terms": [
+                "sentry-sdk",
+                "@sentry/*",
+                "rollbar",
+                "bugsnag",
+                "raygun4py"
+              ]
+            },
+            {
+              "name": "Error tracking imports",
+              "kind": "import_target",
+              "terms": [
+                "sentry_sdk",
+                "rollbar",
+                "bugsnag"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "ai_failure_behavior",
+              "http_framework_behavior"
+            ],
+            "limit": 6
+          }
+        },
+        {
+          "id": "operations.structured-logging",
+          "number": "8.7",
+          "title": "Structured Logging",
+          "concern": "Machine-parseable log output suitable for aggregation.",
+          "probes": [
+            {
+              "name": "Structured logging libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "structlog",
+                "loguru",
+                "python-json-logger",
+                "winston",
+                "pino",
+                "bunyan"
+              ]
+            },
+            {
+              "name": "Structured logging imports",
+              "kind": "import_target",
+              "terms": [
+                "structlog",
+                "loguru",
+                "pythonjsonlogger"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "operations.cloud-services",
+          "number": "8.8",
+          "title": "Managed Cloud Services",
+          "concern": "Dependence on a managed cloud provider at runtime.",
+          "probes": [
+            {
+              "name": "Cloud SDKs",
+              "kind": "dependency_name",
+              "terms": [
+                "boto3",
+                "botocore",
+                "google-cloud-*",
+                "azure-*",
+                "@aws-sdk/*",
+                "@google-cloud/*",
+                "firebase-admin"
+              ]
+            },
+            {
+              "name": "Cloud SDK imports",
+              "kind": "import_target",
+              "terms": [
+                "boto3",
+                "botocore",
+                "google.cloud",
+                "azure",
+                "firebase_admin"
+              ]
+            }
+          ],
+          "cross_references": [
+            "operations.infrastructure-as-code"
+          ]
+        },
+        {
+          "id": "operations.continuity",
+          "number": "8.9",
+          "title": "Backup and Recovery",
+          "concern": "Documented or automated recovery of durable state.",
+          "probes": [
+            {
+              "name": "Recovery procedures",
+              "kind": "path_glob",
+              "terms": [
+                "backup*",
+                "*backup*.sh",
+                "*restore*.sh",
+                "RUNBOOK*",
+                "runbook*",
+                "DISASTER*",
+                "disaster-recovery*"
+              ]
+            }
+          ],
+          "constraints": {
+            "categories": [
+              "storage",
+              "storage_schema"
+            ],
+            "limit": 6
+          },
+          "cross_references": [
+            "state.durable"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "maintenance",
+      "number": "9",
+      "title": "Maintenance Surface",
+      "concern": "Unresolved and unreferenced material a maintainer inherits.",
+      "children": [
+        {
+          "id": "maintenance.orphans",
+          "number": "9.1",
+          "title": "Unreferenced Modules",
+          "concern": "Modules no resolved import reaches.",
+          "probes": [
+            {
+              "name": "Orphan candidates",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "orphan_candidate"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "orphan_candidate"
+            ],
+            "limit": 25
+          },
+          "framing": "Static import resolution cannot observe dynamic loading. Each entry is a candidate for review, not a deletion instruction."
+        },
+        {
+          "id": "maintenance.native-index",
+          "number": "9.2",
+          "title": "Native Language Index",
+          "concern": "Coverage supplied by a language's own semantic index rather than a generic parser.",
+          "probes": [
+            {
+              "name": "Native index summary",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "hum_native_summary"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "hum_native_summary"
+            ],
+            "limit": 15
+          }
+        },
+        {
+          "id": "maintenance.conflicts",
+          "number": "9.3",
+          "title": "Unresolved Conflicts",
+          "concern": "Claims where two sources of evidence disagree and neither has been retired.",
+          "probes": [
+            {
+              "name": "Conflicting claims",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "documentation_drift",
+                "api_documentation_drift",
+                "mathematical_conflict",
+                "dependency_drift"
+              ]
+            }
+          ],
+          "findings": {
+            "statuses": [
+              "conflict"
+            ],
+            "limit": 40
+          },
+          "framing": "A conflict preserves both sides. Resolution requires a human decision or stronger evidence; the ledger does not silently prefer one source."
+        },
+        {
+          "id": "maintenance.unmapped",
+          "number": "9.4",
+          "title": "Claims Not Mapped to an Outline Section",
+          "concern": "Ledger claims this profile did not route into any section above.",
+          "findings": {
+            "limit": 200
+          },
+          "framing": "This section exists so that no claim is silently dropped by the outline. A large count here means the profile needs a new section, not that the analysis was incomplete."
+        }
+      ]
+    }
+  ]
+}

@@ -29,9 +29,17 @@ from open_skeleton.providers import (
     CodexCliProvider,
     DisabledProvider,
     LocalCommandProvider,
+    ProviderAdapter,
     ProviderRequest,
 )
 from open_skeleton.scanner import scan_repository
+from open_skeleton.spec import (
+    build_spec,
+    load_profile,
+    render_spec_json,
+    render_spec_markdown,
+    verify_spec,
+)
 from open_skeleton.state import resolve_state_dir
 
 
@@ -161,6 +169,30 @@ def _parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--gold", required=True, type=Path, help="Gold benchmark JSON.")
     benchmark.add_argument("--output-dir", required=True, type=Path)
     benchmark.add_argument("--json", action="store_true")
+
+    spec = subparsers.add_parser(
+        "spec",
+        help="Project the claim ledger through an outline profile into a specification.",
+    )
+    spec.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    spec.add_argument("--state-dir", type=Path, help="State directory.")
+    spec.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
+    spec.add_argument(
+        "--profile",
+        type=Path,
+        help="Outline profile JSON. Defaults to the packaged standard profile.",
+    )
+    spec.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Where to write spec.md and spec.json. Defaults to the state directory.",
+    )
+    spec.add_argument(
+        "--verify",
+        action="store_true",
+        help="Re-resolve every citation against current sources and report integrity.",
+    )
+    spec.add_argument("--json", action="store_true", help="Print the summary as JSON.")
 
     serve = subparsers.add_parser("serve", help="Run the read-only local findings dashboard.")
     serve.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
@@ -412,6 +444,7 @@ def _synthesize(args: argparse.Namespace) -> int:
         model=args.model,
         timeout_seconds=args.timeout_seconds,
     )
+    adapter: ProviderAdapter
     if args.provider == "disabled":
         adapter = DisabledProvider()
     elif args.provider == "codex":
@@ -456,6 +489,62 @@ def _benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _spec(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    ledger = EvidenceLedger(state_dir / "evidence.sqlite3")
+    profile = load_profile(args.profile)
+    document = build_spec(ledger, profile, snapshot_id=args.snapshot)
+
+    output_dir = (args.output_dir or state_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = output_dir / "spec.md"
+    json_path = output_dir / "spec.json"
+    markdown_path.write_text(render_spec_markdown(document), encoding="utf-8", newline="\n")
+    json_path.write_text(render_spec_json(document), encoding="utf-8", newline="\n")
+
+    verdicts: dict[str, int] = {}
+    for section in document.sections:
+        verdicts[section.verdict] = verdicts.get(section.verdict, 0) + 1
+
+    summary: dict[str, object] = {
+        "snapshot_id": document.snapshot_id,
+        "profile": document.profile_id,
+        "sections": len(document.sections),
+        "verdicts": verdicts,
+        "total_claims": document.total_claims,
+        "cited_claims": document.cited_claims,
+        "stale_claim_count": document.stale_claim_count,
+        "markdown": str(markdown_path),
+        "json": str(json_path),
+    }
+
+    report = None
+    if args.verify:
+        report = verify_spec(document, ledger, root=root)
+        summary["citation_integrity"] = report.integrity
+        summary["citations"] = report.to_dict()
+
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False))
+    else:
+        print(f"Snapshot: {document.snapshot_id}")
+        print(f"Profile: {document.profile_id}")
+        print(f"Sections: {len(document.sections):,}")
+        for verdict in sorted(verdicts):
+            print(f"  {verdict}: {verdicts[verdict]:,}")
+        print(f"Claims rendered with receipts: {document.cited_claims:,}")
+        if report is not None:
+            print(
+                f"Citation integrity: {report.integrity:.1%} "
+                f"({report.total:,} citations, {len(report.failures):,} failing)"
+            )
+        print(f"Spec: {markdown_path}")
+    if report is not None and report.failures:
+        return 1
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     root = _resolve_root(args.path)
     state_dir = _resolve_state_dir(root, args.state_dir)
@@ -485,6 +574,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _synthesize(args)
         if args.command == "benchmark":
             return _benchmark(args)
+        if args.command == "spec":
+            return _spec(args)
         if args.command == "serve":
             return _serve(args)
     except (OSError, ValueError, sqlite3.Error) as exc:

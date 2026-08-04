@@ -1,0 +1,149 @@
+# Specification Projection
+
+`open-skeleton spec` renders a long-form technical specification by projecting the
+evidence ledger through an **outline profile**. It generates no claims. Every
+statement in the output already existed in the ledger, and every section heading
+came from a data file the user can edit.
+
+```powershell
+open-skeleton analyze C:\path\to\repository
+open-skeleton spec C:\path\to\repository --verify
+```
+
+This writes `spec.md` and `spec.json` into the state directory.
+
+## Why a profile instead of a prompt
+
+Long-form generators normally encode their outline inside a model prompt. That
+makes the outline unauditable, unversionable, and identical for every repository.
+Here the outline is a JSON document with a validated schema, so a team can encode
+its own review checklist and diff it like code.
+
+The packaged outline is `src/open_skeleton/spec/profiles/standard.json`. Its nine
+top-level sections follow conventional specification taxonomy — the
+ISO/IEC/IEEE 29148 requirements structure, C4 architectural levels, and a standard
+operational-readiness checklist. Supply your own with `--profile`.
+
+## Determination: absence is a verdict, not a silence
+
+Each outline node declares **probes** — named, re-runnable queries over the pinned
+snapshot. The verdict follows from counted matches alone:
+
+| Verdict | Meaning |
+|---|---|
+| `applicable` | At least one probe matched. |
+| `degenerate` | Probes matched, but below the node's `degenerate_below` threshold. |
+| `absent` | Every declared probe returned zero matches. |
+| `structural` | The node declares no probes; it only organizes its children. |
+
+An `absent` section still prints its probe table, so a reader can re-run the query
+that found nothing instead of trusting the conclusion. This is the difference
+between "the specification does not mention containers" and "these six globs
+matched zero paths in snapshot `abc123`."
+
+### Probe kinds
+
+| Kind | Queries |
+|---|---|
+| `path_glob` | Snapshot file paths, matched against full path and basename |
+| `file_language` | Detected language of included files |
+| `file_role` | Scanner-assigned role (`source`, `test`, `documentation`, …) |
+| `claim_category` | Claims in the named categories |
+| `sourced_claim_category` | Claims in the named categories **backed by a real file receipt** |
+| `symbol_kind` | Extracted symbols by kind |
+| `edge_relationship` | Relationship edges by kind |
+| `dependency_name` | Declared dependency names from project manifests |
+| `import_target` | Modules imported by source files |
+
+`dependency_name` and `import_target` glob-match every reasonable spelling of a
+library: the target itself, an npm scope stripped (`@opentelemetry/api` matches
+`opentelemetry*`), the final path segment, and the leading dotted segment
+(`opentelemetry.trace` matches `opentelemetry*`). They never match across
+relationships — a `dependency_name` probe cannot be satisfied by an import.
+
+This pair is what makes enterprise-concern detection real: §8.5 Telemetry, §8.6
+Error Tracking, §8.8 Managed Cloud Services, §6.3 Cryptography, §5.5 Asynchronous
+Messaging, and §4.4 Caching are all decided by asking whether the relevant client
+library is declared or imported, and reporting the exact list of names queried.
+
+### Why `sourced_claim_category` exists
+
+Analyzers record counted absences as claims — "no CI workflow exists under
+`.github/workflows`" is a `delivery_automation` claim with a repository-wide census
+receipt whose path is `.`. A naive `claim_category` probe counts that claim and
+concludes CI is *present*, inverting the finding.
+
+`sourced_claim_category` counts a claim only when at least one supporting receipt
+points at an actual file. Use it for any concern where the analyzer may speak up
+specifically to report that something is missing. The standard profile uses it for
+delivery automation, authentication controls, testing, observability, and every
+drift category.
+
+## Claim routing
+
+Each node's `findings` selector pulls claims by category, status, and minimum
+importance. A claim is consumed by the first node that selects it, so the document
+never counts one finding twice. Section 9.4 has a selector with no filter, which
+catches anything the outline failed to route — a non-empty 9.4 means the profile
+needs a new section, not that the analysis was incomplete.
+
+`constraints` selectors work differently: they are not consumed, and they render
+only under an `absent` verdict. This is how §8.3 Orchestration shows the
+process-local state and single-connection storage claims that a second replica
+would violate — observations drawn from elsewhere in the ledger, not
+recommendations.
+
+## Composition panels
+
+A node may declare `panels`, which report what the scanner saw rather than what
+the analyzers concluded. §1.1 Repository Composition uses all five:
+
+| Panel | Reports |
+|---|---|
+| `snapshot_totals` | File, line, and byte counts; language and role variety; scan duration; policy version |
+| `language_census` | Files, share, lines, and bytes per language |
+| `role_census` | The same breakdown per scanner-assigned role |
+| `largest_files` | The largest included files with their content hashes |
+| `exclusions` | Every excluded entry grouped by reason |
+
+The exclusions panel is the one that matters most. A census that silently drops
+files overstates its own coverage, so excluded content is counted and labelled —
+and every percentage elsewhere in the document is explicitly relative to the
+included set.
+
+## Citation integrity
+
+`--verify` re-resolves every citation in the rendered document against the ledger
+and against the current bytes on disk:
+
+| Status | Meaning |
+|---|---|
+| `current` | Receipt resolves and the file hash still matches the snapshot |
+| `source-changed` | The cited file was edited after the snapshot |
+| `file-missing` | The cited file no longer exists |
+| `unresolvable` | The receipt is not in the ledger, or its path escapes the root |
+| `virtual` | A repository-wide census receipt with no single file |
+
+Integrity is `(current + virtual) / total`. The command exits non-zero when any
+citation fails, which makes it usable as a CI gate: a specification that cites
+lines nobody can find is worse than no specification.
+
+## Diagrams
+
+Diagrams are generated only from structured records — edges, symbols, and counted
+file facts. When the underlying data is absent, the generator emits a stated reason
+rather than an invented picture. Truncation is always reported.
+
+| Generator | Source |
+|---|---|
+| `module_dependency` | `imports` edges resolved to internal module symbols |
+| `route_surface` | Verified `http_route` claims, grouped by path prefix |
+| `concentration` | File line counts from the snapshot |
+
+## What this deliberately does not do
+
+- It does not call a language model. The deterministic path produces the whole
+  document.
+- It does not resolve conflicts. Both sides of a contradiction survive into §9.3.
+- It does not infer runtime behavior from static evidence, and says so in every
+  document's interpretation boundary.

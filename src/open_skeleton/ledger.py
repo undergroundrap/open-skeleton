@@ -7,14 +7,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from open_skeleton.ids import stable_id
 from open_skeleton.models import AnalysisResult, Snapshot, utc_now
-
 
 SCHEMA_VERSION = "3"
 
@@ -858,6 +857,80 @@ class EvidenceLedger:
                     if row["relationship"] == "contradicts"
                 ]
         return results
+
+    def list_files(self, snapshot_id: str) -> list[dict[str, Any]]:
+        """Return every included file of one snapshot, ordered by path."""
+
+        with self._session() as connection:
+            rows = connection.execute(
+                """
+                SELECT path, sha256, size_bytes, line_count, language, role
+                FROM files WHERE snapshot_id = ? ORDER BY path
+                """,
+                (snapshot_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_exclusions(self, snapshot_id: str) -> list[dict[str, Any]]:
+        """Return every entry the scan policy excluded, with its reason."""
+
+        with self._session() as connection:
+            rows = connection.execute(
+                "SELECT path, reason FROM exclusions WHERE snapshot_id = ? ORDER BY path",
+                (snapshot_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_edges(
+        self,
+        snapshot_id: str,
+        *,
+        relationships: Sequence[str] | None = None,
+        limit: int = 20_000,
+    ) -> list[dict[str, Any]]:
+        """Return relationship edges, optionally filtered to specific relationships."""
+
+        if limit < 1 or limit > 200_000:
+            raise ValueError("Edge limit must be between 1 and 200000")
+        clauses = ["snapshot_id = ?"]
+        parameters: list[object] = [snapshot_id]
+        if relationships:
+            placeholders = ", ".join("?" for _ in relationships)
+            clauses.append(f"relationship IN ({placeholders})")
+            parameters.extend(relationships)
+        parameters.append(limit)
+        with self._session() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT edge_id, source_symbol_id, source_path, relationship, target_ref,
+                       target_symbol_id, evidence_id, analyzer
+                FROM edges
+                WHERE {' AND '.join(clauses)}
+                ORDER BY relationship, source_path, target_ref
+                LIMIT ?
+                """,
+                tuple(parameters),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_evidence(self, snapshot_id: str) -> list[dict[str, Any]]:
+        """Return every evidence receipt of one snapshot."""
+
+        with self._session() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.evidence_id, e.snapshot_id, e.path, e.start_line, e.end_line,
+                       e.symbol, e.evidence_kind, e.excerpt_sha256, e.analyzer,
+                       e.created_at, f.sha256 AS file_sha256
+                FROM evidence e
+                LEFT JOIN files f
+                    ON f.snapshot_id = e.snapshot_id AND f.path = e.path
+                WHERE e.snapshot_id = ?
+                ORDER BY e.path, e.start_line, e.evidence_id
+                """,
+                (snapshot_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_evidence(self, evidence_id: str) -> dict[str, Any] | None:
         with self._session() as connection:
