@@ -196,20 +196,202 @@ def _concentration(files: tuple[dict[str, Any], ...]) -> Diagram:
     )
 
 
-def build_diagram(
+def _receivers_by_file(
+    symbols: tuple[dict[str, Any], ...], edges: tuple[dict[str, Any], ...]
+) -> dict[str, frozenset[str]]:
+    """Per file, the names that identify a module-level collaborator.
+
+    A call target such as ``result.get`` names a local value and tells a reader
+    nothing about system structure; ``vec_db.save_player`` names a module-owned
+    object and does. The distinction has to be made per file — resolving against
+    every symbol in the repository lets a local named ``player`` collide with an
+    unrelated module-level ``player`` elsewhere and pollute the diagram.
+    """
+
+    receivers: dict[str, set[str]] = {}
+    for symbol in symbols:
+        if str(symbol["kind"]) not in {"module_variable", "class"}:
+            continue
+        receivers.setdefault(str(symbol["path"]), set()).add(
+            str(symbol["qualified_name"]).rsplit(".", 1)[-1]
+        )
+    for edge in edges:
+        if str(edge["relationship"]) != "imports":
+            continue
+        target = str(edge["target_ref"]).lstrip(".")
+        if target:
+            receivers.setdefault(str(edge["source_path"]), set()).add(
+                target.rsplit(".", 1)[-1]
+            )
+    return {path: frozenset(names) for path, names in receivers.items()}
+
+
+def _route_sequences(
+    claims: tuple[dict[str, Any], ...],
+    symbols: tuple[dict[str, Any], ...],
+    edges: tuple[dict[str, Any], ...],
+    evidence_by_id: dict[str, dict[str, Any]],
+    limit: int,
+) -> tuple[Diagram, ...]:
+    name, title = "route_sequence", "Route interaction sequence"
+    symbol_by_name = {str(item["qualified_name"]): item for item in symbols}
+    receivers_by_file = _receivers_by_file(symbols, edges)
+
+    calls_by_source: dict[str, list[tuple[int, str]]] = {}
+    for edge in edges:
+        if str(edge["relationship"]) != "calls":
+            continue
+        source_id = edge.get("source_symbol_id")
+        if source_id is None:
+            continue
+        record = evidence_by_id.get(str(edge.get("evidence_id") or ""))
+        line = int(record["start_line"]) if record and record["start_line"] else 0
+        calls_by_source.setdefault(str(source_id), []).append(
+            (line, str(edge["target_ref"]))
+        )
+
+    candidates: list[tuple[str, str, list[tuple[str, str]]]] = []
+    for claim in claims:
+        if str(claim["category"]) != "http_route":
+            continue
+        match = _ROUTE_CLAIM.match(str(claim["claim"]))
+        if match is None:
+            continue
+        handler = symbol_by_name.get(match.group("handler"))
+        if handler is None:
+            continue
+        # Decorator calls sit above the `def` line; they register the route
+        # rather than participate in handling it.
+        body_start = int(handler["start_line"])
+        receivers = receivers_by_file.get(str(handler["path"]), frozenset())
+        steps: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for line, target in sorted(calls_by_source.get(str(handler["symbol_id"]), [])):
+            if line < body_start or "." not in target:
+                continue
+            receiver, _, method = target.rpartition(".")
+            receiver = receiver.rsplit(".", 1)[-1]
+            if receiver not in receivers:
+                continue
+            step = (receiver, method)
+            if step in seen:
+                continue
+            seen.add(step)
+            steps.append(step)
+        if steps:
+            candidates.append(
+                (f"{match.group('method')} {match.group('path')}", match.group("handler"), steps)
+            )
+
+    if not candidates:
+        return (
+            _omitted(
+                name,
+                title,
+                "No route handler recorded a call that resolves to a module-level "
+                "collaborator, so no interaction could be drawn without guessing.",
+            ),
+        )
+
+    candidates.sort(key=lambda item: (-len(item[2]), item[0]))
+    diagrams: list[Diagram] = []
+    for route, handler_name, steps in candidates[:limit]:
+        shown = steps[:MAX_DIAGRAM_EDGES]
+        participants = sorted({receiver for receiver, _ in shown})
+        lines = ["sequenceDiagram", "    participant Client"]
+        short_handler = handler_name.rsplit(".", 1)[-1]
+        handler_id = _node_id(short_handler)
+        lines.append(f"    participant {handler_id} as {short_handler}")
+        for participant in participants:
+            lines.append(f"    participant {_node_id(participant)} as {participant}")
+        lines.append(f"    Client->>{handler_id}: {route}")
+        for receiver, method in shown:
+            lines.append(f"    {handler_id}->>{_node_id(receiver)}: {method}()")
+        diagrams.append(
+            Diagram(
+                name=f"{name}:{route}",
+                title=f"{title} — {route}",
+                mermaid="\n".join(lines),
+                node_count=len(participants) + 2,
+                edge_count=len(shown) + 1,
+                truncated=len(steps) > len(shown),
+            )
+        )
+    return tuple(diagrams)
+
+
+def _persistence_erd(claims: tuple[dict[str, Any], ...]) -> Diagram:
+    name, title = "persistence_erd", "Durable storage entities and access"
+    creators = re.compile(r"^(?P<symbol>\S+) creates \S+ table (?P<table>\w+)\.$")
+    writers = re.compile(r"^(?P<symbol>\S+) serializes \S+ into \S+ table (?P<table>\w+)\.$")
+
+    tables: dict[str, dict[str, set[str]]] = {}
+    for claim in claims:
+        text = str(claim["claim"])
+        for pattern, role in ((creators, "creates"), (writers, "writes")):
+            match = pattern.match(text)
+            if match is None:
+                continue
+            entry = tables.setdefault(
+                match.group("table"), {"creates": set(), "writes": set()}
+            )
+            entry[role].add(match.group("symbol").rsplit(".", 1)[-1])
+
+    if not tables:
+        return _omitted(
+            name, title, "No claim records a durable table for this snapshot."
+        )
+
+    lines = ["flowchart LR"]
+    accessors: set[str] = set()
+    edge_count = 0
+    for table in sorted(tables):
+        table_id = f"t_{_node_id(table)}"
+        lines.append(f'    {table_id}[("{table}")]')
+    for table in sorted(tables):
+        for role in ("creates", "writes"):
+            for accessor in sorted(tables[table][role]):
+                accessor_id = f"a_{_node_id(accessor)}"
+                if accessor not in accessors:
+                    accessors.add(accessor)
+                    lines.append(f'    {accessor_id}["{accessor}"]')
+                lines.append(f"    {accessor_id} -->|{role}| t_{_node_id(table)}")
+                edge_count += 1
+
+    return Diagram(
+        name=name,
+        title=title,
+        mermaid="\n".join(lines),
+        node_count=len(tables) + len(accessors),
+        edge_count=edge_count,
+        truncated=False,
+    )
+
+
+def build_diagrams(
     name: str,
     *,
     files: tuple[dict[str, Any], ...],
     claims: tuple[dict[str, Any], ...],
     symbols: tuple[dict[str, Any], ...],
     edges: tuple[dict[str, Any], ...],
-) -> Diagram:
-    """Render one named diagram from pinned snapshot records."""
+    evidence_by_id: dict[str, dict[str, Any]],
+    route_sequence_limit: int = 6,
+) -> tuple[Diagram, ...]:
+    """Render every diagram a named generator produces for this snapshot."""
 
     if name == "module_dependency":
-        return _module_dependency(symbols, edges)
+        return (_module_dependency(symbols, edges),)
     if name == "route_surface":
-        return _route_surface(claims)
+        return (_route_surface(claims),)
     if name == "concentration":
-        return _concentration(files)
-    return _omitted(name, name, f"No generator is registered for diagram '{name}'.")
+        return (_concentration(files),)
+    if name == "persistence_erd":
+        return (_persistence_erd(claims),)
+    if name == "route_sequence":
+        return _route_sequences(
+            claims, symbols, edges, evidence_by_id, route_sequence_limit
+        )
+    return (
+        _omitted(name, name, f"No generator is registered for diagram '{name}'."),
+    )

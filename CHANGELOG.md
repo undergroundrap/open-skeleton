@@ -12,6 +12,8 @@ All notable changes will be documented here. This project follows Semantic Versi
   integration, security posture, verification, and enterprise delivery concerns
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
+- per-route Mermaid sequence diagrams built from handler-scoped call edges,
+  and a persistence entity diagram built from durable-table claims
 - implemented-capability catalog clustered from route prefixes and package
   structure, with a traceability matrix and a verification-gap report
 - `references_route_path` edges from Python route-path string literals, so

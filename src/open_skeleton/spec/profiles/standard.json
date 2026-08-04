@@ -109,7 +109,8 @@
             "limit": 10
           },
           "diagrams": [
-            "route_surface"
+            "route_surface",
+            "route_sequence"
           ],
           "cross_references": [
             "surface.interface-drift",
@@ -386,6 +387,9 @@
           },
           "cross_references": [
             "state.process-local"
+          ],
+          "diagrams": [
+            "persistence_erd"
           ]
         },
         {

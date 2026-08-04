@@ -186,11 +186,40 @@ Diagrams are generated only from structured records — edges, symbols, and coun
 file facts. When the underlying data is absent, the generator emits a stated reason
 rather than an invented picture. Truncation is always reported.
 
-| Generator | Source |
-|---|---|
-| `module_dependency` | `imports` edges resolved to internal module symbols |
-| `route_surface` | Verified `http_route` claims, grouped by path prefix |
-| `concentration` | File line counts from the snapshot |
+| Generator | Source | Output |
+|---|---|---|
+| `module_dependency` | `imports` edges resolved to internal module symbols | one flowchart |
+| `route_surface` | Verified `http_route` claims grouped by path prefix | one flowchart |
+| `concentration` | File line counts from the snapshot | one flowchart |
+| `persistence_erd` | `storage_schema` and `storage_serialization` claims | one entity graph |
+| `route_sequence` | Call edges scoped to each route handler symbol | one sequence diagram per route |
+
+### Sequence diagrams
+
+`route_sequence` emits one Mermaid sequence diagram per route, ordered by
+interaction depth. Messages come from `calls` edges whose source symbol is the
+route handler, sorted by the line number on their evidence receipt.
+
+Two filters decide what appears, and both matter:
+
+- **Decorator calls are excluded.** A call recorded above the handler's `def`
+  line registers the route rather than participating in serving it.
+- **Participants are resolved per file.** A call target such as `result.get`
+  names a local value; `vec_db.save_player` names a module-owned object. Only
+  module-level variables, classes, and imports **declared in the handler's own
+  file** qualify. Resolving against every symbol in the repository lets a local
+  named `player` collide with an unrelated module-level `player` elsewhere and
+  fill the diagram with noise.
+
+Repeated calls to the same collaborator method are drawn once.
+
+### What is deliberately not generated
+
+**State transition diagrams are not produced.** Recovering a state machine from
+an implementation requires deciding which values constitute states and which
+assignments constitute transitions — an inference this project has no evidence
+for. A drawn state machine would look authoritative while being a guess, so the
+generator does not exist rather than existing and being unreliable.
 
 ## What this deliberately does not do
 

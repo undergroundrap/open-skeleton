@@ -12,7 +12,7 @@ from typing import Any
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import utc_now
 from open_skeleton.spec.capabilities import Capability, build_capabilities
-from open_skeleton.spec.diagrams import Diagram, build_diagram
+from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.panels import Panel, PanelContext, build_panel
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
 from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
@@ -290,8 +290,16 @@ def build_spec(
             for item in constraint_claims
         )
         diagrams = tuple(
-            build_diagram(name, files=files, claims=claims, symbols=symbols, edges=edges)
+            diagram
             for name in section.diagrams
+            for diagram in build_diagrams(
+                name,
+                files=files,
+                claims=claims,
+                symbols=symbols,
+                edges=edges,
+                evidence_by_id=evidence_by_id,
+            )
         )
         panels = tuple(build_panel(name, panel_context) for name in section.panels)
 
