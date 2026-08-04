@@ -16,6 +16,10 @@ All notable changes will be documented here. This project follows Semantic Versi
   and a persistence entity diagram built from durable-table claims
 - implemented-capability catalog clustered from route prefixes and package
   structure, with a traceability matrix and a verification-gap report
+- Rust lexical analyzer: `unsafe` surface, panicking call sites, `#[test]`
+  census, items and imports, with nested block comments, hashed raw strings
+  and lifetimes handled explicitly
+- spec sections 6.6 Memory-Safety Escape Hatches and 7.4 Panicking Call Sites
 - `references_route_path` edges from Python route-path string literals, so
   traceability can follow HTTP exercise rather than only direct calls
 - `dependency_name` and `import_target` probe kinds for library-level detection

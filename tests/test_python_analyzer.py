@@ -194,9 +194,16 @@ def scale(player):
             (root / "app.py").write_text("value = 1\n", encoding="utf-8")
             events: list[tuple[str, int, int]] = []
 
-            analyze_snapshot(scan_repository(root), on_event=lambda *event: events.append(event))
+            result = analyze_snapshot(
+                scan_repository(root), on_event=lambda *event: events.append(event)
+            )
 
-            self.assertEqual(len(events), 4)
+            # One event per registered adapter, asserted against the adapters
+            # that actually reported coverage rather than a hardcoded count, so
+            # adding an analyzer does not require editing this expectation.
+            reporting_analyzers = {item.analyzer for item in result.coverage}
+            self.assertEqual(len(events), len(reporting_analyzers))
+            self.assertEqual({name for name, _, _ in events}, reporting_analyzers)
             self.assertTrue(events[0][0].startswith("python-ast/"))
             self.assertTrue(all(elapsed >= 0 for _, elapsed, _ in events))
 

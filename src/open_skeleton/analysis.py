@@ -15,6 +15,7 @@ from pathlib import Path
 from open_skeleton.analyzers.hum_semantic_index import HumSemanticIndexAnalyzer
 from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
 from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
+from open_skeleton.analyzers.rust_lexical import RustLexicalAnalyzer
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
@@ -478,6 +479,7 @@ def analyze_snapshot(
     analyzers = (
         PythonAstAnalyzer(),
         TypeScriptLexicalAnalyzer(),
+        RustLexicalAnalyzer(),
         ProjectMetadataAnalyzer(),
         HumSemanticIndexAnalyzer(hum_index),
     )

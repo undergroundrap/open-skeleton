@@ -846,6 +846,28 @@
               ]
             }
           ]
+        },
+        {
+          "id": "security.memory-safety",
+          "number": "6.6",
+          "title": "Memory-Safety Escape Hatches",
+          "concern": "Code that opts out of the language's safety guarantees.",
+          "probes": [
+            {
+              "name": "Unsafe surface",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "unsafe_surface"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "unsafe_surface"
+            ],
+            "limit": 15
+          },
+          "framing": "A census of `unsafe` tokens in source. It counts where guarantees are delegated to the author; it does not evaluate whether each use is sound, and it does not see into dependencies."
         }
       ]
     },
@@ -926,6 +948,31 @@
             ],
             "limit": 20
           }
+        },
+        {
+          "id": "verification.panic-surface",
+          "number": "7.4",
+          "title": "Panicking Call Sites",
+          "concern": "Calls that abort the thread instead of returning an error.",
+          "probes": [
+            {
+              "name": "Panic sites",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "panic_site"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "panic_site"
+            ],
+            "limit": 15
+          },
+          "framing": "Recorded lexically, so a site behind a `cfg` gate that never compiles for a given target is still counted. Fallback forms such as `unwrap_or` are excluded because they supply a value rather than aborting.",
+          "cross_references": [
+            "integration.failure"
+          ]
         }
       ]
     },

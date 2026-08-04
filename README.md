@@ -19,6 +19,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Bounded traversal with symlink, secret, binary, generated-output, malformed-encoding, and file-size controls
 - Deterministic SHA-256 file and snapshot identities
 - Python AST symbols, imports, calls, FastAPI routes, typed parameters, state mutation, SQLite/JSON persistence, CORS, tests, process exits, and selected failure behavior
+- Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, and imports
 - Comment-safe TypeScript/JavaScript lexical facts for symbols, imports, fetch calls, endpoint literals, React hooks, browser storage, and tests
 - Project-manifest and Markdown reconciliation for dependencies, API tables, runtime instructions, Tailwind claims, tests, and CI
 - Native `hum.semantic_graph.v0` ingestion without implicitly executing the Hum compiler
