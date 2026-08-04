@@ -35,13 +35,17 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 
 ## Quick start
 
-The fastest path needs no pre-existing Python — [uv](https://docs.astral.sh/uv/)
-fetches an interpreter and installs the tool in one step:
+Open Skeleton is not published to PyPI yet, so install it from source.
+[uv](https://docs.astral.sh/uv/) is the shortest path because it fetches a
+matching interpreter itself:
 
 ```powershell
-uv tool install open-skeleton
+uv tool install git+https://github.com/undergroundrap/open-skeleton
 open-skeleton analyze C:\path\to\repository
 ```
+
+Once a release is published, `uv tool install open-skeleton` will work without
+the URL.
 
 Otherwise Python 3.12 or newer is required. The deterministic path has no
 third-party runtime dependencies, so there is nothing else to resolve.
