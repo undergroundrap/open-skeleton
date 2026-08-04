@@ -10,7 +10,6 @@ from unittest import TestCase, skipUnless
 
 from open_skeleton.mcp_server import OpenSkeletonService, create_mcp_server
 
-
 MCP_INSTALLED = importlib.util.find_spec("mcp") is not None
 
 

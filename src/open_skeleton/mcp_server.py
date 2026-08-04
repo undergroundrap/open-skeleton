@@ -177,7 +177,7 @@ class OpenSkeletonService:
         }
 
 
-def create_mcp_server(service: OpenSkeletonService):
+def create_mcp_server(service: OpenSkeletonService) -> Any:
     """Create an official-SDK MCP server; the SDK is an optional dependency."""
 
     try:

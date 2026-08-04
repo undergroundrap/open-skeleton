@@ -10,13 +10,14 @@ from collections import Counter
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast, get_args
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from open_skeleton.mcp_server import OpenSkeletonService
 
-
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+ClaimStatus = Literal["verified", "inferred", "conflict", "unknown", "stale"]
+CLAIM_STATUSES: frozenset[str] = frozenset(get_args(ClaimStatus))
 
 
 def _dashboard_html(nonce: str) -> str:
@@ -119,7 +120,14 @@ def create_dashboard_server(
                     self._send_json(status)
                     return
                 if parsed.path == "/api/claims":
-                    status_filter = query.get("status", [None])[0]
+                    requested_status = query.get("status", [None])[0]
+                    # Reject an unknown status rather than passing it through to
+                    # SQL, so a bad query string cannot silently return everything.
+                    status_filter: ClaimStatus | None = (
+                        cast(ClaimStatus, requested_status)
+                        if requested_status in CLAIM_STATUSES
+                        else None
+                    )
                     category = query.get("category", [None])[0]
                     limit = int(query.get("limit", ["500"])[0])
                     self._send_json(

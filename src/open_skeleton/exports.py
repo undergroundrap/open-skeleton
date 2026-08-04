@@ -52,12 +52,12 @@ def export_jsonl(snapshot: Snapshot, path: Path) -> None:
                 },
                 sort_keys=True,
             ) + "\n"
-        for item in snapshot.exclusions:
+        for exclusion in snapshot.exclusions:
             yield json.dumps(
                 {
                     "record_type": "exclusion",
                     "snapshot_id": snapshot.snapshot_id,
-                    **item.to_dict(),
+                    **exclusion.to_dict(),
                 },
                 sort_keys=True,
             ) + "\n"
@@ -103,9 +103,9 @@ def export_markdown(snapshot: Snapshot, path: Path) -> None:
             yield "No entries were excluded.\n"
         else:
             yield "| Path | Reason |\n|---|---|\n"
-            for item in snapshot.exclusions:
-                escaped_path = item.path.replace("|", "\\|")
-                yield f"| `{escaped_path}` | `{item.reason}` |\n"
+            for exclusion in snapshot.exclusions:
+                escaped_path = exclusion.path.replace("|", "\\|")
+                yield f"| `{escaped_path}` | `{exclusion.reason}` |\n"
 
         yield "\n## Trust boundary\n\n"
         yield (
@@ -125,21 +125,21 @@ def export_analysis_jsonl(result: AnalysisResult, path: Path) -> None:
             yield json.dumps(
                 {"record_type": "coverage", **item.to_dict()}, sort_keys=True
             ) + "\n"
-        for item in result.symbols:
+        for symbol in result.symbols:
             yield json.dumps(
-                {"record_type": "symbol", **item.to_dict()}, sort_keys=True
+                {"record_type": "symbol", **symbol.to_dict()}, sort_keys=True
             ) + "\n"
-        for item in result.edges:
+        for edge in result.edges:
             yield json.dumps(
-                {"record_type": "edge", **item.to_dict()}, sort_keys=True
+                {"record_type": "edge", **edge.to_dict()}, sort_keys=True
             ) + "\n"
-        for item in result.evidence:
+        for receipt in result.evidence:
             yield json.dumps(
-                {"record_type": "evidence", **item.to_dict()}, sort_keys=True
+                {"record_type": "evidence", **receipt.to_dict()}, sort_keys=True
             ) + "\n"
-        for item in result.claims:
+        for claim in result.claims:
             yield json.dumps(
-                {"record_type": "claim", **item.to_dict()}, sort_keys=True
+                {"record_type": "claim", **claim.to_dict()}, sort_keys=True
             ) + "\n"
 
     _atomic_write(path, records())

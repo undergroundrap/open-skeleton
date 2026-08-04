@@ -21,7 +21,6 @@ from open_skeleton.models import (
     utc_now,
 )
 
-
 ANALYZER_NAME = "typescript-lexical"
 ANALYZER_VERSION = "typescript-lexical/v1"
 ELIGIBLE_LANGUAGES = frozenset(

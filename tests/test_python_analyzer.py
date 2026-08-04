@@ -12,7 +12,6 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 
-
 PYTHON_FIXTURE = '''\
 import os
 import sqlite3

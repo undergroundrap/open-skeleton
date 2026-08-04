@@ -14,7 +14,6 @@ from pathlib import Path
 from open_skeleton.models import ExclusionRecord, FileRecord, ScanEvent, Snapshot, utc_now
 from open_skeleton.policy import POLICY_VERSION, ScanPolicy, classify_language, classify_role
 
-
 EventCallback = Callable[[ScanEvent], None]
 _CHUNK_SIZE = 64 * 1024
 
@@ -85,8 +84,19 @@ def scan_repository(
     exclusions: list[ExclusionRecord] = []
     events: list[ScanEvent] = []
 
-    def emit(stage: str, message: str, **kwargs: object) -> None:
-        event = ScanEvent(stage=stage, message=message, **kwargs)
+    def emit(
+        stage: str,
+        message: str,
+        *,
+        path: str | None = None,
+        processed_files: int | None = None,
+    ) -> None:
+        event = ScanEvent(
+            stage=stage,
+            message=message,
+            path=path,
+            processed_files=processed_files,
+        )
         events.append(event)
         if on_event is not None:
             on_event(event)

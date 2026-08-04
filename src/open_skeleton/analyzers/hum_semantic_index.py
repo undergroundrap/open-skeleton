@@ -22,7 +22,6 @@ from open_skeleton.models import (
     utc_now,
 )
 
-
 ANALYZER_NAME = "hum-semantic-index"
 ANALYZER_VERSION = "hum-semantic-index/v1"
 SUPPORTED_SCHEMA = "hum.semantic_graph.v0"
@@ -285,7 +284,8 @@ class HumSemanticIndexAnalyzer:
                     )
                 )
 
-        summary = document.get("summary") if isinstance(document.get("summary"), dict) else {}
+        raw_summary = document.get("summary")
+        summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}
         text = (
             f"The supplied {SUPPORTED_SCHEMA} index reports {summary.get('items', 0)} items, "
             f"{summary.get('tasks', 0)} tasks, {summary.get('tests', 0)} tests, and "

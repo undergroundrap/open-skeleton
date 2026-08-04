@@ -9,7 +9,6 @@ from unittest import TestCase
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer, _tokens
 from open_skeleton.scanner import scan_repository
 
-
 SOURCE = '''\
 import React, { useEffect, useState } from "react";
 

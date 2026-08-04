@@ -18,7 +18,6 @@ from open_skeleton.exports import export_analysis_jsonl, export_analysis_markdow
 from open_skeleton.models import AnalysisResult, ClaimRecord, EvidenceRecord, Snapshot, utc_now
 from open_skeleton.scanner import scan_repository
 
-
 BENCHMARK_SCHEMA = "open-skeleton.benchmark.v1"
 OUTCOME_CREDIT = {"hit": 1.0, "partial": 0.5, "incorrect": 0.0, "miss": 0.0}
 
@@ -112,10 +111,16 @@ def _score_open_skeleton(
         if match is not None:
             matched_claim_ids.add(match.claim_id)
             receipts = [
-                evidence_by_id.get(item)
-                for item in (*match.supporting_evidence, *match.contradicting_evidence)
+                receipt
+                for receipt in (
+                    evidence_by_id.get(item)
+                    for item in (
+                        *match.supporting_evidence,
+                        *match.contradicting_evidence,
+                    )
+                )
+                if receipt is not None
             ]
-            receipts = [item for item in receipts if item is not None]
             current = bool(receipts) and all(
                 _receipt_is_current(item, snapshot=snapshot, files_by_path=files_by_path)
                 for item in receipts
