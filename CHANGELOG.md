@@ -8,7 +8,7 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 - `open-skeleton spec`: outline-driven long-form specifications projected from the
   claim ledger, with user-editable JSON profiles and no model in the path
-- 50-section standard profile covering functional surface, state ownership,
+- 53-section standard profile covering functional surface, state ownership,
   integration, security posture, verification, and enterprise delivery concerns
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing

@@ -19,8 +19,7 @@ makes the outline unauditable, unversionable, and identical for every repository
 Here the outline is a JSON document with a validated schema, so a team can encode
 its own review checklist and diff it like code.
 
-The packaged outline is `src/open_skeleton/spec/profiles/standard.json`. Its nine
-top-level sections follow conventional specification taxonomy — the
+The packaged outline is `src/open_skeleton/spec/profiles/standard.json`. Its nine top-level sections follow conventional specification taxonomy — the
 ISO/IEC/IEEE 29148 requirements structure, C4 architectural levels, and a standard
 operational-readiness checklist. Supply your own with `--profile`.
 

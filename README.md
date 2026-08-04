@@ -127,9 +127,9 @@ The included gold set pins `SINGLE-PLAYER-AI-MUD` commit `93ebd51cb4083d2307564c
 | Open Skeleton | 100.0% | 100.0% | 100.0% | 100.0% |
 | Supplied commercial baseline | 89.4% | 89.4% | 95.5% | 75.0% |
 
-The release-candidate run reached its first finding in 691 ms and completed in 1.247 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. Open Skeleton's concise report was about 4,100 words versus approximately 180,800 words for the baseline.
+Open Skeleton completed in about 1.2 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. The generated specification is 53 sections and roughly 9,700 words, against approximately 180,800 words for the baseline.
 
-These numbers describe one author-reviewed fixture, not universal product superiority. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
+**These numbers describe one author-reviewed fixture, not universal product superiority**, and the comparison is deliberately narrow. It measures whether the material findings of a long-form specification can be reproduced deterministically and cited verifiably. It does not measure breadth: the baseline artifact also contains a requirements catalog, process and state-machine diagrams, architectural decision records, and user-interface analysis that Open Skeleton does not attempt. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
 ## Hum language support
 
