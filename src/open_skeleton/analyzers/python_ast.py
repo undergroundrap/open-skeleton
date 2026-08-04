@@ -24,7 +24,6 @@ from open_skeleton.models import (
     utc_now,
 )
 
-
 ANALYZER_NAME = "python-ast"
 ANALYZER_VERSION = "python-ast/v2"
 HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "options", "head"})
@@ -533,8 +532,19 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 evidence_kind="http_route",
             )
             self.route_evidence.append(route_evidence.evidence_id)
-            signature_nodes: list[ast.AST] = [*node.decorator_list, *node.args.defaults]
-            signature_nodes.extend(default for default in node.args.kw_defaults if default)
+            # Only functions carry a signature; a decorated class exposes no
+            # parameters to inspect for auth dependencies or type annotations.
+            arguments = (
+                node.args
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else None
+            )
+            signature_nodes: list[ast.AST] = [*node.decorator_list]
+            if arguments is not None:
+                signature_nodes.extend(arguments.defaults)
+                signature_nodes.extend(
+                    default for default in arguments.kw_defaults if default
+                )
             has_auth_control = any(
                 isinstance(candidate, ast.Call)
                 and (_expr_name(candidate.func) or "").split(".")[-1]
@@ -544,15 +554,19 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             )
             if has_auth_control:
                 self.route_auth_control_evidence.append(route_evidence.evidence_id)
-            typed_parameters = [
-                argument
-                for argument in (
-                    *node.args.posonlyargs,
-                    *node.args.args,
-                    *node.args.kwonlyargs,
-                )
-                if argument.annotation is not None
-            ]
+            typed_parameters = (
+                [
+                    argument
+                    for argument in (
+                        *arguments.posonlyargs,
+                        *arguments.args,
+                        *arguments.kwonlyargs,
+                    )
+                    if argument.annotation is not None
+                ]
+                if arguments is not None
+                else []
+            )
             if typed_parameters:
                 signature_evidence = self._evidence(
                     start_line=node.lineno,
@@ -1136,6 +1150,43 @@ class PythonAstAnalyzer:
                         alternative_hypotheses=(
                             "Authentication or authorization may be implemented inside handlers, "
                             "middleware, a proxy, or an external network boundary.",
+                        ),
+                    )
+                )
+            else:
+                control_text = (
+                    f"{len(route_auth_control_evidence)} of the {len(route_evidence)} "
+                    "detected FastAPI route signatures declare a Depends or Security "
+                    "dependency; the census does not evaluate what those dependencies "
+                    "enforce."
+                )
+                claims.append(
+                    ClaimRecord(
+                        claim_id=stable_id(
+                            "claim",
+                            (
+                                snapshot.snapshot_id,
+                                "auth_control",
+                                control_text,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        claim=control_text,
+                        category="auth_control",
+                        status="verified",
+                        confidence=1.0,
+                        importance="high",
+                        produced_by=ANALYZER_VERSION,
+                        created_at=created_at,
+                        verified_at=created_at,
+                        supporting_evidence=tuple(sorted(set(route_auth_control_evidence))),
+                        invalidation_keys=tuple(
+                            sorted({f"file:{item.path}" for item in eligible})
+                        ),
+                        alternative_hypotheses=(
+                            "A declared dependency may perform validation, rate limiting, or "
+                            "another concern rather than authentication.",
                         ),
                     )
                 )

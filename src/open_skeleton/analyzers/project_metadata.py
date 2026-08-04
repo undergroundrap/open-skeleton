@@ -8,7 +8,9 @@ import hashlib
 import json
 import re
 import time
+import tomllib
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
@@ -22,7 +24,6 @@ from open_skeleton.models import (
     utc_now,
 )
 
-
 ANALYZER_NAME = "project-metadata"
 ANALYZER_VERSION = "project-metadata/v1"
 TAILWIND_PATTERN = re.compile(r"\btailwind(?:\s+css)?\b", re.IGNORECASE)
@@ -32,6 +33,56 @@ DOCUMENTED_ROUTE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 NEGATION_PATTERN = re.compile(r"\b(?:no|not|without|doesn['’]?t)\b", re.IGNORECASE)
+
+
+def _normalize_requirement(value: object) -> str | None:
+    """Reduce a PEP 508 requirement string to its normalized distribution name."""
+
+    if not isinstance(value, str):
+        return None
+    match = REQUIREMENT_PATTERN.match(value)
+    if not match:
+        return None
+    return match.group(1).casefold().replace("_", "-")
+
+
+def _pyproject_name(document: dict[str, Any]) -> str | None:
+    project = document.get("project")
+    if isinstance(project, dict) and isinstance(project.get("name"), str):
+        return str(project["name"])
+    return None
+
+
+def _pyproject_dependencies(document: dict[str, Any]) -> dict[str, set[str]]:
+    """Collect PEP 621 runtime and optional dependency names.
+
+    Only the standard `[project]` table is read. Tool-specific tables such as
+    Poetry's are deliberately out of scope until they have their own tests, so
+    an unsupported layout reports zero rather than a partial guess.
+    """
+
+    runtime: set[str] = set()
+    optional: set[str] = set()
+    project = document.get("project")
+    if not isinstance(project, dict):
+        return {"runtime": runtime, "optional": optional}
+
+    declared = project.get("dependencies")
+    if isinstance(declared, list):
+        runtime.update(
+            name for name in map(_normalize_requirement, declared) if name is not None
+        )
+
+    extras = project.get("optional-dependencies")
+    if isinstance(extras, dict):
+        for group in extras.values():
+            if isinstance(group, list):
+                optional.update(
+                    name
+                    for name in map(_normalize_requirement, group)
+                    if name is not None
+                )
+    return {"runtime": runtime, "optional": optional - runtime}
 
 
 class ProjectMetadataAnalyzer:
@@ -50,7 +101,8 @@ class ProjectMetadataAnalyzer:
             item
             for item in snapshot.files
             if item.language == "Markdown"
-            or Path(item.path).name.casefold() in {"package.json", "requirements.txt"}
+            or Path(item.path).name.casefold()
+            in {"package.json", "requirements.txt", "pyproject.toml"}
         ]
         analyzed_files = 0
         file_sources: dict[str, str] = {}
@@ -187,6 +239,106 @@ class ProjectMetadataAnalyzer:
                         )
                     )
                 package_names.update(declared)
+                analyzed_files += 1
+                continue
+            if manifest_name == "pyproject.toml":
+                try:
+                    project = tomllib.loads(file_sources[file_record.path])
+                except tomllib.TOMLDecodeError as exc:
+                    failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+                    continue
+                declared_python = _pyproject_dependencies(project)
+                manifest_evidence = receipt(
+                    file_record.path,
+                    1,
+                    max(1, file_record.line_count),
+                    "project_manifest",
+                    file_record.path,
+                )
+                manifest_receipts.append(manifest_evidence.evidence_id)
+                symbol_id = stable_id(
+                    "symbol",
+                    (
+                        snapshot.snapshot_id,
+                        file_record.path,
+                        "project_manifest",
+                        ANALYZER_VERSION,
+                    ),
+                )
+                symbols.append(
+                    SymbolRecord(
+                        symbol_id=symbol_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        path=file_record.path,
+                        qualified_name=file_record.path,
+                        kind="project_manifest",
+                        start_line=1,
+                        end_line=max(1, file_record.line_count),
+                        language=file_record.language,
+                        analyzer=ANALYZER_VERSION,
+                        metadata={
+                            "project_name": _pyproject_name(project),
+                            "runtime_dependencies": len(declared_python["runtime"]),
+                            "optional_dependencies": len(declared_python["optional"]),
+                        },
+                    )
+                )
+                for dependency in sorted(
+                    {*declared_python["runtime"], *declared_python["optional"]}
+                ):
+                    edges.append(
+                        EdgeRecord(
+                            edge_id=stable_id(
+                                "edge",
+                                (
+                                    snapshot.snapshot_id,
+                                    symbol_id,
+                                    "declares_dependency",
+                                    dependency,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            source_symbol_id=symbol_id,
+                            source_path=file_record.path,
+                            relationship="declares_dependency",
+                            target_ref=dependency,
+                            target_symbol_id=None,
+                            evidence_id=manifest_evidence.evidence_id,
+                            analyzer=ANALYZER_VERSION,
+                        )
+                    )
+                package_names.update(declared_python["runtime"])
+                package_names.update(declared_python["optional"])
+                inventory_text = (
+                    f"{file_record.path} declares "
+                    f"{len(declared_python['runtime'])} runtime and "
+                    f"{len(declared_python['optional'])} optional dependencies."
+                )
+                claims.append(
+                    ClaimRecord(
+                        claim_id=stable_id(
+                            "claim",
+                            (
+                                snapshot.snapshot_id,
+                                "dependency_inventory",
+                                inventory_text,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        claim=inventory_text,
+                        category="dependency_inventory",
+                        status="verified",
+                        confidence=1.0,
+                        importance="medium",
+                        produced_by=ANALYZER_VERSION,
+                        created_at=created_at,
+                        verified_at=created_at,
+                        supporting_evidence=(manifest_evidence.evidence_id,),
+                        invalidation_keys=(f"file:{file_record.path}",),
+                    )
+                )
                 analyzed_files += 1
                 continue
             if manifest_name != "package.json":

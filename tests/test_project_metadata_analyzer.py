@@ -8,6 +8,7 @@ from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
+from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
 
 
@@ -123,3 +124,55 @@ The app runs fully without LM Studio.
 
             self.assertIn("api_documentation_drift", categories)
             self.assertIn("dependency_drift", categories)
+
+
+class PyprojectManifestTests(TestCase):
+    MANIFEST = """\
+[project]
+name = "sample-project"
+dependencies = ["httpx>=0.27", "pydantic[email]==2.*"]
+
+[project.optional-dependencies]
+dev = ["pip-audit>=2.8", "ruff"]
+mcp = ["mcp>=2,<3"]
+"""
+
+    def _analyze(self, manifest: str) -> AnalysisResult:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pyproject.toml").write_text(manifest, encoding="utf-8")
+            snapshot = scan_repository(root)
+            return ProjectMetadataAnalyzer().analyze(snapshot)
+
+    def test_pep621_runtime_and_optional_dependencies_become_edges(self) -> None:
+        result = self._analyze(self.MANIFEST)
+        declared = {
+            edge.target_ref
+            for edge in result.edges
+            if edge.relationship == "declares_dependency"
+        }
+        self.assertEqual(declared, {"httpx", "pydantic", "pip-audit", "ruff", "mcp"})
+
+    def test_inventory_claim_separates_runtime_from_optional(self) -> None:
+        result = self._analyze(self.MANIFEST)
+        claim = next(
+            item for item in result.claims if item.category == "dependency_inventory"
+        )
+        self.assertIn("2 runtime", claim.claim)
+        self.assertIn("3 optional", claim.claim)
+        self.assertEqual(claim.status, "verified")
+
+    def test_malformed_manifest_is_recorded_as_a_failure_not_a_guess(self) -> None:
+        result = self._analyze("[project\nname = broken")
+        self.assertEqual(
+            [edge for edge in result.edges if edge.relationship == "declares_dependency"],
+            [],
+        )
+        self.assertTrue(any(item.failures for item in result.coverage))
+
+    def test_unsupported_tool_table_reports_zero_rather_than_partial(self) -> None:
+        result = self._analyze('[tool.poetry.dependencies]\nrequests = "^2.0"\n')
+        declared = [
+            edge for edge in result.edges if edge.relationship == "declares_dependency"
+        ]
+        self.assertEqual(declared, [])
