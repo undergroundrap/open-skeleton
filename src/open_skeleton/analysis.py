@@ -468,7 +468,7 @@ AnalysisEventCallback = Callable[[str, int, int], None]
 def analyze_snapshot(
     snapshot: Snapshot,
     *,
-    hum_index: Path | None = None,
+    hum_index: Sequence[Path] | Path | None = None,
     on_event: AnalysisEventCallback | None = None,
 ) -> AnalysisResult:
     """Run deterministic semantic adapters and merge their immutable outputs."""

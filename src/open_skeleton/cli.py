@@ -95,7 +95,12 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--hum-index",
         type=Path,
-        help="Pre-generated hum.semantic_graph.v0 JSON. The target compiler is never run implicitly.",
+        action="append",
+        help=(
+            "Pre-generated hum.semantic_graph.v0 JSON; the target compiler is never run "
+            "implicitly. `hum graph` accepts multiple paths and merges them. Repeat this "
+            "flag to combine sharded indexes."
+        ),
     )
 
     status = subparsers.add_parser("status", help="Show the latest stored snapshot.")

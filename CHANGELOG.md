@@ -20,6 +20,8 @@ All notable changes will be documented here. This project follows Semantic Versi
   census, items and imports, with nested block comments, hashed raw strings
   and lifetimes handled explicitly
 - spec sections 6.6 Memory-Safety Escape Hatches and 7.4 Panicking Call Sites
+- `--hum-index` is repeatable, so whole-repo Hum coverage can be sharded across
+  several indexes; each keeps its own hashed receipt
 - `references_route_path` edges from Python route-path string literals, so
   traceability can follow HTTP exercise rather than only direct calls
 - `dependency_name` and `import_target` probe kinds for library-level detection

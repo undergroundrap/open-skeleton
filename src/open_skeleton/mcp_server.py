@@ -29,13 +29,19 @@ class OpenSkeletonService:
         root: Path,
         state_dir: Path | None = None,
         *,
-        hum_index: Path | None = None,
+        hum_index: Sequence[Path] | Path | None = None,
     ) -> None:
         self.root = root.expanduser().resolve(strict=True)
         if not self.root.is_dir():
             raise ValueError(f"Repository root is not a directory: {self.root}")
         self.state_dir = resolve_state_dir(self.root, state_dir)
-        self.hum_index = hum_index.expanduser().resolve() if hum_index else None
+        if hum_index is None:
+            supplied: tuple[Path, ...] = ()
+        elif isinstance(hum_index, Path):
+            supplied = (hum_index,)
+        else:
+            supplied = tuple(hum_index)
+        self.hum_index = tuple(item.expanduser().resolve() for item in supplied)
         self.ledger = EvidenceLedger(self.state_dir / "evidence.sqlite3")
 
     def _latest_snapshot_id(self) -> str:

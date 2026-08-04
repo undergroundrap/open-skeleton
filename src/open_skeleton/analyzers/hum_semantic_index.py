@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -62,8 +63,22 @@ class HumSemanticIndexAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
 
-    def __init__(self, index_path: Path | None = None) -> None:
-        self.index_path = index_path.expanduser().resolve() if index_path else None
+    def __init__(self, index_paths: Sequence[Path] | Path | None = None) -> None:
+        """Accept one index or several.
+
+        `hum graph` merges multiple sources into a single document, so one index
+        is the common case. Several are accepted because generating a whole-repo
+        index can be sharded — by crate, or to stay inside a command-line length
+        limit — and a partial index is worse than a split one.
+        """
+
+        if index_paths is None:
+            supplied: tuple[Path, ...] = ()
+        elif isinstance(index_paths, Path):
+            supplied = (index_paths,)
+        else:
+            supplied = tuple(index_paths)
+        self.index_paths = tuple(item.expanduser().resolve() for item in supplied)
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
@@ -87,11 +102,12 @@ class HumSemanticIndexAnalyzer:
                     unsupported_files=0,
                 ),
             )
-        if self.index_path is None:
+        if not self.index_paths:
             limitation = (
                 f"{len(eligible)} Hum files require a pre-generated {SUPPORTED_SCHEMA} index; "
-                "Open Skeleton did not execute the target compiler. Supply --hum-index with "
-                "output from `hum graph <paths...>`."
+                "Open Skeleton did not execute the target compiler. Generate one covering "
+                "every Hum file — `hum graph` accepts multiple paths and merges them — then "
+                "supply it with --hum-index. Repeat --hum-index to combine sharded indexes."
             )
             return self._result(
                 snapshot,
@@ -117,17 +133,24 @@ class HumSemanticIndexAnalyzer:
         evidence: list[EvidenceRecord] = []
         claims: list[ClaimRecord] = []
         failures: list[str] = []
-        try:
-            payload = self.index_path.read_bytes()
-            document = json.loads(payload)
-            if not isinstance(document, dict):
-                raise ValueError("native index must be a JSON object")
-            if document.get("schema") != SUPPORTED_SCHEMA:
-                raise ValueError(
-                    f"unsupported schema {document.get('schema')!r}; expected {SUPPORTED_SCHEMA}"
-                )
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            failures.append(f"{self.index_path}: {exc.__class__.__name__}: {exc}")
+        documents: list[tuple[Path, str, dict[str, Any]]] = []
+        for index_path in self.index_paths:
+            try:
+                payload = index_path.read_bytes()
+                document = json.loads(payload)
+                if not isinstance(document, dict):
+                    raise ValueError("native index must be a JSON object")
+                if document.get("schema") != SUPPORTED_SCHEMA:
+                    raise ValueError(
+                        f"unsupported schema {document.get('schema')!r}; "
+                        f"expected {SUPPORTED_SCHEMA}"
+                    )
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                failures.append(f"{index_path}: {exc.__class__.__name__}: {exc}")
+                continue
+            documents.append((index_path, hashlib.sha256(payload).hexdigest(), document))
+
+        if not documents:
             return self._result(
                 snapshot,
                 created_at,
@@ -147,35 +170,46 @@ class HumSemanticIndexAnalyzer:
                 ),
             )
 
-        index_hash = hashlib.sha256(payload).hexdigest()
-        index_evidence = EvidenceRecord(
-            evidence_id=stable_id(
-                "evidence",
-                (snapshot.snapshot_id, str(self.index_path), index_hash, ANALYZER_VERSION),
-            ),
-            snapshot_id=snapshot.snapshot_id,
-            path=f"@hum-index:{self.index_path}",
-            start_line=None,
-            end_line=None,
-            symbol=SUPPORTED_SCHEMA,
-            evidence_kind="native_semantic_index",
-            excerpt_sha256=index_hash,
-            analyzer=ANALYZER_VERSION,
-            created_at=created_at,
-        )
-        evidence.append(index_evidence)
+        # Each supplied index keeps its own receipt and hash, so a claim can be
+        # traced back to the exact index that produced it.
+        index_receipts: list[EvidenceRecord] = []
+        merged_files: list[tuple[str, dict[str, Any]]] = []
+        for index_path, digest, document in documents:
+            index_receipt = EvidenceRecord(
+                evidence_id=stable_id(
+                    "evidence",
+                    (snapshot.snapshot_id, str(index_path), digest, ANALYZER_VERSION),
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                path=f"@hum-index:{index_path}",
+                start_line=None,
+                end_line=None,
+                symbol=SUPPORTED_SCHEMA,
+                evidence_kind="native_semantic_index",
+                excerpt_sha256=digest,
+                analyzer=ANALYZER_VERSION,
+                created_at=created_at,
+            )
+            evidence.append(index_receipt)
+            index_receipts.append(index_receipt)
+            graph_files = document.get("files")
+            if not isinstance(graph_files, list):
+                failures.append(f"{index_path}: field `files` must be an array")
+                continue
+            merged_files.extend((digest, item) for item in graph_files)
+
+        index_evidence = index_receipts[0]
+        index_hash = documents[0][1]
         files_by_path = {item.path: item for item in eligible}
         analyzed_paths: set[str] = set()
 
-        graph_files = document.get("files")
-        if not isinstance(graph_files, list):
-            graph_files = []
-            failures.append("native index field `files` must be an array")
-        for graph_file in graph_files:
+        for index_hash, graph_file in merged_files:
             if not isinstance(graph_file, dict) or not isinstance(graph_file.get("path"), str):
                 failures.append("native index contains a file entry without a string path")
                 continue
             path = _normalize_graph_path(snapshot.root, graph_file["path"])
+            if path in analyzed_paths:
+                continue
             if path is None or path not in files_by_path:
                 failures.append(
                     f"native index path is outside or absent from snapshot: {graph_file['path']}"
