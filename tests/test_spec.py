@@ -388,3 +388,35 @@ class PanelTests(TestCase):
             markdown = render_spec_markdown(document)
             self.assertIn("Composition by language", markdown)
             self.assertIn("Excluded entries by reason", markdown)
+
+
+class ClaimYieldTests(TestCase):
+    def test_yield_is_reported_beside_coverage(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            coverage = ledger.analysis_coverage(
+                str(ledger.latest_snapshot()["snapshot_id"])  # type: ignore[index]
+            )
+            self.assertTrue(coverage)
+            for record in coverage:
+                self.assertIn("yield_ratio", record)
+                self.assertLessEqual(record["claimed_files"], record["analyzed_files"])
+                self.assertGreaterEqual(record["yield_ratio"], 0.0)
+                self.assertLessEqual(record["yield_ratio"], 1.0)
+
+    def test_spec_coverage_table_distinguishes_reach_from_findings(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            markdown = render_spec_markdown(build_spec(ledger, load_profile()))
+            self.assertIn("| Coverage | Yield |", markdown)
+            self.assertIn("yield column is what distinguishes", markdown.replace("\n", " "))

@@ -57,7 +57,7 @@ class LedgerAndExportTests(TestCase):
                 schema_version = connection.execute(
                     "SELECT value FROM metadata WHERE key = 'schema_version'"
                 ).fetchone()
-            self.assertEqual(schema_version, ("3",))
+            self.assertEqual(schema_version, ("4",))
 
     def test_repeated_save_is_idempotent(self) -> None:
         with TemporaryDirectory() as temporary:

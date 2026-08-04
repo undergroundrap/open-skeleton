@@ -489,14 +489,26 @@ def render_spec_markdown(document: SpecDocument) -> str:
     lines.append("## Analyzer coverage\n\n")
     if document.coverage:
         lines.append(
-            "| Analyzer | Language | Eligible | Analyzed | Coverage |\n|---|---|---:|---:|---:|\n"
+            "| Analyzer | Language | Eligible | Analyzed | Coverage | Yield |\n"
+            "|---|---|---:|---:|---:|---:|\n"
         )
         for item in document.coverage:
+            eligible = int(item["eligible_files"])
+            analyzed = int(item["analyzed_files"])
+            # With nothing eligible, neither ratio means anything; a printed
+            # percentage would invent precision the run does not have.
+            coverage = f"{float(item['coverage_ratio']):.1%}" if eligible else "n/a"
+            claim_yield = f"{float(item.get('yield_ratio', 0.0)):.1%}" if analyzed else "n/a"
             lines.append(
                 f"| `{item['analyzer']}` | {item['language']} | "
-                f"{int(item['eligible_files']):,} | {int(item['analyzed_files']):,} | "
-                f"{float(item['coverage_ratio']):.1%} |\n"
+                f"{eligible:,} | {analyzed:,} | {coverage} | {claim_yield} |\n"
             )
+        lines.append(
+            "\n_Coverage is the share of eligible files that parsed. Yield is the "
+            "share of parsed files that produced at least one claim. A section may "
+            "report full coverage and still rest on a thin analysis; the yield "
+            "column is what distinguishes the two._\n"
+        )
     else:
         lines.append("No analyzer coverage was recorded for this snapshot.\n")
 

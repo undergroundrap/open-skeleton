@@ -15,7 +15,7 @@ from typing import Any
 from open_skeleton.ids import stable_id
 from open_skeleton.models import AnalysisResult, Snapshot, utc_now
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 class EvidenceLedger:
@@ -227,6 +227,7 @@ class EvidenceLedger:
                     analyzed_files INTEGER NOT NULL CHECK (analyzed_files >= 0),
                     failed_files INTEGER NOT NULL CHECK (failed_files >= 0),
                     unsupported_files INTEGER NOT NULL CHECK (unsupported_files >= 0),
+                    claimed_files INTEGER NOT NULL DEFAULT 0 CHECK (claimed_files >= 0),
                     failures_json TEXT NOT NULL,
                     PRIMARY KEY (run_id, analyzer, language)
                 );
@@ -710,8 +711,8 @@ class EvidenceLedger:
                 """
                 INSERT INTO analysis_coverage(
                     run_id, analyzer, language, eligible_files, analyzed_files,
-                    failed_files, unsupported_files, failures_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    failed_files, unsupported_files, claimed_files, failures_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     (
@@ -722,6 +723,7 @@ class EvidenceLedger:
                         item.analyzed_files,
                         item.failed_files,
                         item.unsupported_files,
+                        item.claimed_files,
                         json.dumps(item.failures, ensure_ascii=False),
                     )
                     for item in result.coverage
@@ -781,7 +783,7 @@ class EvidenceLedger:
             rows = connection.execute(
                 """
                 SELECT analyzer, language, eligible_files, analyzed_files, failed_files,
-                       unsupported_files, failures_json
+                       unsupported_files, claimed_files, failures_json
                 FROM analysis_coverage
                 WHERE run_id = ?
                 ORDER BY analyzer, language
@@ -793,7 +795,9 @@ class EvidenceLedger:
             item = dict(row)
             item["failures"] = json.loads(item.pop("failures_json"))
             eligible = int(item["eligible_files"])
-            item["coverage_ratio"] = int(item["analyzed_files"]) / eligible if eligible else 1.0
+            analyzed = int(item["analyzed_files"])
+            item["coverage_ratio"] = analyzed / eligible if eligible else 1.0
+            item["yield_ratio"] = int(item["claimed_files"]) / analyzed if analyzed else 0.0
             results.append(item)
         return results
 

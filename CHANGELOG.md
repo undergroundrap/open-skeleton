@@ -35,6 +35,10 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Changed
 
+- analyzer coverage now reports a claim-yield column beside it. Coverage means
+  "the file parsed"; yield means "the file produced a finding". Reporting only
+  the first overstated how much an analyzer understood
+- ledger schema 4 stores per-analyzer claimed-file counts
 - `ruff format` is now authoritative for layout, and CI enforces it
 - ruff runs a broad rule set (bugbear, bandit, pathlib, naming, simplify,
   performance and more) instead of the previous six-rule selection

@@ -8,7 +8,8 @@ import hashlib
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from open_skeleton.analyzers.hum_semantic_index import HumSemanticIndexAnalyzer
@@ -19,6 +20,7 @@ from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
+    CoverageRecord,
     EdgeRecord,
     EvidenceRecord,
     Snapshot,
@@ -427,6 +429,38 @@ def _append_dependency_conflicts(
         )
 
 
+def _attribute_claim_yield(
+    results: Sequence[AnalysisResult],
+) -> tuple[CoverageRecord, ...]:
+    """Count, per analyzer, how many parsed files actually produced a claim.
+
+    Coverage alone answers "did the file parse", which overstates how much an
+    analyzer understood. A claim is attributed to every real file its supporting
+    receipts point at; repository-wide census receipts (path ``.``) name no file
+    and are excluded, so a single "no CI workflow exists" claim cannot make a
+    whole language look productive.
+    """
+
+    attributed: list[CoverageRecord] = []
+    for result in results:
+        receipts = {item.evidence_id: item.path for item in result.evidence}
+        claimed_paths = {
+            path
+            for claim in result.claims
+            for evidence_id in (*claim.supporting_evidence, *claim.contradicting_evidence)
+            for path in (receipts.get(evidence_id),)
+            if path is not None and path not in {".", ""} and not path.startswith("@")
+        }
+        for record in result.coverage:
+            attributed.append(
+                replace(
+                    record,
+                    claimed_files=min(len(claimed_paths), record.analyzed_files),
+                )
+            )
+    return tuple(attributed)
+
+
 AnalysisEventCallback = Callable[[str, int, int], None]
 
 
@@ -461,7 +495,7 @@ def analyze_snapshot(
     edges = tuple(item for result in results for item in result.edges)
     evidence = tuple(item for result in results for item in result.evidence)
     claims = [item for result in results for item in result.claims]
-    coverage = tuple(item for result in results for item in result.coverage)
+    coverage = _attribute_claim_yield(results)
 
     evidence = _append_orphan_candidates(
         snapshot,

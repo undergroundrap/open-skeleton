@@ -173,14 +173,35 @@ class CoverageRecord:
     failed_files: int
     unsupported_files: int
     failures: tuple[str, ...] = ()
+    claimed_files: int = 0
 
     @property
     def coverage_ratio(self) -> float:
+        """Share of eligible files the analyzer successfully parsed.
+
+        This measures reach, not understanding. A file that parses cleanly and
+        produces nothing still counts here — see :attr:`yield_ratio`.
+        """
+
         return self.analyzed_files / self.eligible_files if self.eligible_files else 1.0
+
+    @property
+    def yield_ratio(self) -> float:
+        """Share of parsed files that produced at least one claim.
+
+        Reported alongside coverage because the two diverge in exactly the case
+        a reader most needs to know about: an analyzer whose grammar handles a
+        language but whose claim vocabulary has nothing to say about this kind
+        of program. High coverage with low yield means "we read it all and
+        found little", which is a different statement from "we analyzed it".
+        """
+
+        return self.claimed_files / self.analyzed_files if self.analyzed_files else 0.0
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["coverage_ratio"] = self.coverage_ratio
+        result["yield_ratio"] = self.yield_ratio
         return result
 
 

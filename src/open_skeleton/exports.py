@@ -181,14 +181,24 @@ def export_analysis_markdown(
         yield f"- Atomic claims: {len(result.claims):,}\n\n"
 
         yield "## Analysis coverage\n\n"
-        yield "| Analyzer | Language | Eligible | Analyzed | Failed | Coverage |\n"
-        yield "|---|---|---:|---:|---:|---:|\n"
+        yield "| Analyzer | Language | Eligible | Analyzed | Failed | Coverage | Yield |\n"
+        yield "|---|---|---:|---:|---:|---:|---:|\n"
         for item in result.coverage:
+            # With nothing eligible, neither ratio means anything; a printed
+            # percentage would invent precision the run does not have.
+            coverage = f"{item.coverage_ratio:.1%}" if item.eligible_files else "n/a"
+            claim_yield = f"{item.yield_ratio:.1%}" if item.analyzed_files else "n/a"
             yield (
                 f"| `{item.analyzer}` | {item.language} | {item.eligible_files:,} | "
                 f"{item.analyzed_files:,} | {item.failed_files:,} | "
-                f"{item.coverage_ratio:.1%} |\n"
+                f"{coverage} | {claim_yield} |\n"
             )
+        yield (
+            "\n_Coverage is the share of eligible files that parsed. Yield is the "
+            "share of parsed files that produced at least one claim. High coverage "
+            "with low yield means the analyzer read the files but had little to say "
+            "about them._\n"
+        )
         for item in result.coverage:
             if item.failures:
                 yield f"\nFailures for `{item.analyzer}`:\n\n"
