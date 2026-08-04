@@ -32,7 +32,9 @@ DOCUMENTED_ROUTE_PATTERN = re.compile(
     r"\|\s*`?(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)`?\s*\|\s*`(/[^`|\s]*)`",
     re.IGNORECASE,
 )
-NEGATION_PATTERN = re.compile(r"\b(?:no|not|without|doesn['’]?t)\b", re.IGNORECASE)
+# The curly apostrophe is deliberate: documentation commonly writes "doesn't"
+# with U+2019 rather than an ASCII quote.
+NEGATION_PATTERN = re.compile(r"\b(?:no|not|without|doesn['’]?t)\b", re.IGNORECASE)  # noqa: RUF001
 
 
 def _normalize_requirement(value: object) -> str | None:
@@ -69,18 +71,14 @@ def _pyproject_dependencies(document: dict[str, Any]) -> dict[str, set[str]]:
 
     declared = project.get("dependencies")
     if isinstance(declared, list):
-        runtime.update(
-            name for name in map(_normalize_requirement, declared) if name is not None
-        )
+        runtime.update(name for name in map(_normalize_requirement, declared) if name is not None)
 
     extras = project.get("optional-dependencies")
     if isinstance(extras, dict):
         for group in extras.values():
             if isinstance(group, list):
                 optional.update(
-                    name
-                    for name in map(_normalize_requirement, group)
-                    if name is not None
+                    name for name in map(_normalize_requirement, group) if name is not None
                 )
     return {"runtime": runtime, "optional": optional - runtime}
 
@@ -181,7 +179,12 @@ class ProjectMetadataAnalyzer:
                 manifest_receipts.append(manifest_evidence.evidence_id)
                 symbol_id = stable_id(
                     "symbol",
-                    (snapshot.snapshot_id, file_record.path, "requirements_manifest", ANALYZER_VERSION),
+                    (
+                        snapshot.snapshot_id,
+                        file_record.path,
+                        "requirements_manifest",
+                        ANALYZER_VERSION,
+                    ),
                 )
                 symbols.append(
                     SymbolRecord(
@@ -447,7 +450,12 @@ class ProjectMetadataAnalyzer:
                 ClaimRecord(
                     claim_id=stable_id(
                         "claim",
-                        (snapshot.snapshot_id, "dependency_inventory", claim_text, ANALYZER_VERSION),
+                        (
+                            snapshot.snapshot_id,
+                            "dependency_inventory",
+                            claim_text,
+                            ANALYZER_VERSION,
+                        ),
                     ),
                     snapshot_id=snapshot.snapshot_id,
                     claim=claim_text,
@@ -628,7 +636,8 @@ class ProjectMetadataAnalyzer:
             claims.append(
                 ClaimRecord(
                     claim_id=stable_id(
-                        "claim", (snapshot.snapshot_id, "documentation_drift", text, ANALYZER_VERSION)
+                        "claim",
+                        (snapshot.snapshot_id, "documentation_drift", text, ANALYZER_VERSION),
                     ),
                     snapshot_id=snapshot.snapshot_id,
                     claim=text,
@@ -644,13 +653,14 @@ class ProjectMetadataAnalyzer:
                     ),
                     invalidation_keys=tuple(
                         sorted(
-                            {f"file:{item.path}" for item in snapshot.files}
-                            | {"snapshot:file-set"}
+                            {f"file:{item.path}" for item in snapshot.files} | {"snapshot:file-set"}
                         )
                     ),
                     alternative_hypotheses=(
-                        "Tailwind may be injected outside the repository or only used by an "
-                        "untracked build environment.",
+                        (
+                            "Tailwind may be injected outside the repository or only used by an "
+                            "untracked build environment."
+                        ),
                     ),
                 )
             )

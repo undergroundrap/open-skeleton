@@ -35,8 +35,7 @@ _VERDICT_SENTENCE = {
         "the absence can be re-checked rather than trusted."
     ),
     "structural": (
-        "This section organizes the subsections below and makes no presence claim "
-        "of its own."
+        "This section organizes the subsections below and makes no presence claim of its own."
     ),
 }
 
@@ -175,9 +174,7 @@ def _select(
     if selector is None:
         return [], 0
     eligible = [
-        claim
-        for claim in claims
-        if selector.accepts(claim) and claim["claim_id"] not in used
+        claim for claim in claims if selector.accepts(claim) and claim["claim_id"] not in used
     ]
     return eligible[: selector.limit], max(0, len(eligible) - selector.limit)
 
@@ -186,12 +183,8 @@ def _citations(
     claim: dict[str, Any], evidence_by_id: dict[str, dict[str, Any]]
 ) -> tuple[Citation, ...]:
     citations: list[Citation] = []
-    pairs = [
-        (evidence_id, "supports")
-        for evidence_id in claim.get("supporting_evidence", ())
-    ] + [
-        (evidence_id, "contradicts")
-        for evidence_id in claim.get("contradicting_evidence", ())
+    pairs = [(evidence_id, "supports") for evidence_id in claim.get("supporting_evidence", ())] + [
+        (evidence_id, "contradicts") for evidence_id in claim.get("contradicting_evidence", ())
     ]
     for evidence_id, relationship in pairs:
         record = evidence_by_id.get(evidence_id)
@@ -230,9 +223,7 @@ def build_spec(
     claims = tuple(ledger.list_claims(resolved_id, limit=5_000))
     symbols = tuple(ledger.list_symbols(resolved_id, limit=5_000))
     edges = tuple(ledger.list_edges(resolved_id))
-    evidence_by_id = {
-        str(item["evidence_id"]): item for item in ledger.list_evidence(resolved_id)
-    }
+    evidence_by_id = {str(item["evidence_id"]): item for item in ledger.list_evidence(resolved_id)}
     corpus = LedgerCorpus(
         snapshot_id=resolved_id,
         files=files,
@@ -328,12 +319,7 @@ def build_spec(
     for section in profile.sections:
         render_node(section, 0)
 
-    cited = sum(
-        1
-        for item in rendered
-        for claim in item.findings
-        if claim.citations
-    )
+    cited = sum(1 for item in rendered for claim in item.findings if claim.citations)
     return SpecDocument(
         schema=SPEC_SCHEMA_VERSION,
         snapshot_id=resolved_id,
@@ -364,9 +350,7 @@ def _claim_table(claims: tuple[RenderedClaim, ...]) -> Iterable[str]:
         if claim.citations:
             # Contradicting receipts are what a reader most needs to see, so they
             # survive truncation ahead of the supporting majority.
-            ordered = sorted(
-                claim.citations, key=lambda item: item.relationship != "contradicts"
-            )
+            ordered = sorted(claim.citations, key=lambda item: item.relationship != "contradicts")
             shown = ordered[:MAX_RENDERED_CITATIONS]
             receipts = "<br/>".join(
                 f"`{_escape(item.location)}`"
@@ -376,22 +360,17 @@ def _claim_table(claims: tuple[RenderedClaim, ...]) -> Iterable[str]:
             )
             remaining = len(ordered) - len(shown)
             if remaining:
-                receipts += (
-                    f"<br/>_+{remaining:,} further receipt(s); see the JSON projection._"
-                )
+                receipts += f"<br/>_+{remaining:,} further receipt(s); see the JSON projection._"
         else:
             receipts = "_none recorded_"
         yield (
-            f"| {_escape(claim.claim)} | `{claim.status}` | "
-            f"{claim.confidence:.2f} | {receipts} |\n"
+            f"| {_escape(claim.claim)} | `{claim.status}` | {claim.confidence:.2f} | {receipts} |\n"
         )
 
 
 def render_spec_markdown(document: SpecDocument) -> str:
     lines: list[str] = []
-    section_titles = {
-        item.section_id: f"§{item.number} {item.title}" for item in document.sections
-    }
+    section_titles = {item.section_id: f"§{item.number} {item.title}" for item in document.sections}
 
     lines.append(f"# {document.profile_title}\n\n")
     lines.append(f"- Snapshot: `{document.snapshot_id}`\n")
@@ -418,9 +397,7 @@ def render_spec_markdown(document: SpecDocument) -> str:
     lines.append("## Contents\n\n")
     for section in document.sections:
         indent = "  " * section.depth
-        lines.append(
-            f"{indent}- §{section.number} {section.title} — `{section.verdict}`\n"
-        )
+        lines.append(f"{indent}- §{section.number} {section.title} — `{section.verdict}`\n")
     lines.append("\n")
 
     for section in document.sections:
@@ -465,16 +442,11 @@ def render_spec_markdown(document: SpecDocument) -> str:
                 lines.append("| " + " | ".join(panel.columns) + " |\n")
                 lines.append(
                     "|"
-                    + "|".join(
-                        "---:" if item == "right" else "---"
-                        for item in panel.alignments
-                    )
+                    + "|".join("---:" if item == "right" else "---" for item in panel.alignments)
                     + "|\n"
                 )
                 for row in panel.rows:
-                    lines.append(
-                        "| " + " | ".join(_escape(cell) for cell in row) + " |\n"
-                    )
+                    lines.append("| " + " | ".join(_escape(cell) for cell in row) + " |\n")
                 lines.append("\n")
             if panel.note:
                 lines.append(f"_{panel.note}_\n\n")
@@ -491,17 +463,13 @@ def render_spec_markdown(document: SpecDocument) -> str:
             lines.append("\n")
 
         if section.verdict == "absent" and section.constraints:
-            lines.append(
-                "**Observed constraints relevant to adopting this concern**\n\n"
-            )
+            lines.append("**Observed constraints relevant to adopting this concern**\n\n")
             lines.extend(_claim_table(section.constraints))
             lines.append("\n")
 
         for diagram in section.diagrams:
             if diagram.mermaid is None:
-                lines.append(
-                    f"_Diagram `{diagram.name}` omitted: {diagram.omitted_reason}_\n\n"
-                )
+                lines.append(f"_Diagram `{diagram.name}` omitted: {diagram.omitted_reason}_\n\n")
                 continue
             lines.append(f"**{diagram.title}**\n\n")
             lines.append(f"```mermaid\n{diagram.mermaid}\n```\n\n")

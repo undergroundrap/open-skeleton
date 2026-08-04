@@ -24,9 +24,7 @@ class CliTests(TestCase):
             scan_stdout = StringIO()
             scan_stderr = StringIO()
             with redirect_stdout(scan_stdout), redirect_stderr(scan_stderr):
-                scan_result = main(
-                    ["scan", str(root), "--state-dir", str(state), "--json"]
-                )
+                scan_result = main(["scan", str(root), "--state-dir", str(state), "--json"])
             self.assertEqual(scan_result, 0)
             summary = json.loads(scan_stdout.getvalue())
             self.assertEqual(summary["file_count"], 5)
@@ -34,9 +32,7 @@ class CliTests(TestCase):
 
             status_stdout = StringIO()
             with redirect_stdout(status_stdout):
-                status_result = main(
-                    ["status", str(root), "--state-dir", str(state), "--json"]
-                )
+                status_result = main(["status", str(root), "--state-dir", str(state), "--json"])
             self.assertEqual(status_result, 0)
             status = json.loads(status_stdout.getvalue())
             self.assertEqual(status["snapshot_id"], summary["snapshot_id"])
@@ -110,9 +106,7 @@ class CliTests(TestCase):
 
             spec_stdout = StringIO()
             with redirect_stdout(spec_stdout):
-                result = main(
-                    ["spec", str(root), "--state-dir", str(state), "--verify", "--json"]
-                )
+                result = main(["spec", str(root), "--state-dir", str(state), "--verify", "--json"])
             self.assertEqual(result, 0)
             summary = json.loads(spec_stdout.getvalue())
 
@@ -139,7 +133,5 @@ class CliTests(TestCase):
             )
 
             with redirect_stdout(StringIO()):
-                result = main(
-                    ["spec", str(root), "--state-dir", str(state), "--verify", "--json"]
-                )
+                result = main(["spec", str(root), "--state-dir", str(state), "--verify", "--json"])
             self.assertEqual(result, 1)

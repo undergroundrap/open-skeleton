@@ -118,7 +118,8 @@ def _is_main_guard(node: ast.If) -> bool:
     left = _expr_name(test.left)
     right = _literal_string(test.comparators[0])
     return (left, right) == ("__name__", "__main__") or (
-        _literal_string(test.left), _expr_name(test.comparators[0])
+        _literal_string(test.left),
+        _expr_name(test.comparators[0]),
     ) == ("__main__", "__name__")
 
 
@@ -126,9 +127,7 @@ def _module_mutable_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for statement in tree.body:
         if isinstance(statement, ast.Assign) and _is_mutable_initializer(statement.value):
-            names.update(
-                name for target in statement.targets for name in _assigned_names(target)
-            )
+            names.update(name for target in statement.targets for name in _assigned_names(target))
         elif isinstance(statement, ast.AnnAssign) and _is_mutable_initializer(statement.value):
             names.update(_assigned_names(statement.target))
     return names
@@ -142,32 +141,34 @@ class _DirectBindingCollector(ast.NodeVisitor):
         self.global_names: set[str] = set()
         self.nonlocal_names: set[str] = set()
 
-    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+    def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, (ast.Store, ast.Del)):
             self.bound.add(node.id)
 
-    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+    def visit_Import(self, node: ast.Import) -> None:
         self.bound.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         self.bound.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
 
-    def visit_Global(self, node: ast.Global) -> None:  # noqa: N802
+    def visit_Global(self, node: ast.Global) -> None:
         self.global_names.update(node.names)
 
-    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:  # noqa: N802
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
         self.nonlocal_names.update(node.names)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.bound.add(node.name)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self.bound.add(node.name)
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.bound.add(node.name)
 
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: ARG002
+        # A lambda opens its own scope, so its bindings are not the enclosing
+        # function's. Deliberately not visited.
         return
 
 
@@ -175,11 +176,7 @@ def _function_bindings(
     node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
 ) -> tuple[set[str], set[str]]:
     collector = _DirectBindingCollector()
-    arguments = (
-        list(node.args.posonlyargs)
-        + list(node.args.args)
-        + list(node.args.kwonlyargs)
-    )
+    arguments = list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
     if node.args.vararg:
         arguments.append(node.args.vararg)
     if node.args.kwarg:
@@ -219,9 +216,7 @@ class _ModuleMutationCollector(ast.NodeVisitor):
         if isinstance(candidate, ast.Name) and self._is_module_reference(candidate.id):
             self.mutations[candidate.id].append(evidence_node)
 
-    def _visit_function(
-        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
-    ) -> None:
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> None:
         bound, declared_global = _function_bindings(node)
         self.scope_bindings.append(bound)
         self.scope_globals.append(declared_global)
@@ -231,36 +226,36 @@ class _ModuleMutationCollector(ast.NodeVisitor):
         self.scope_globals.pop()
         self.scope_bindings.pop()
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+    def visit_Lambda(self, node: ast.Lambda) -> None:
         self._visit_function(node)
 
-    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+    def visit_Assign(self, node: ast.Assign) -> None:
         for target in node.targets:
             if not isinstance(target, ast.Name):
                 self._record_target(target, node)
         self.generic_visit(node.value)
 
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if not isinstance(node.target, ast.Name):
             self._record_target(node.target, node)
         if node.value:
             self.visit(node.value)
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self._record_target(node.target, node)
         self.visit(node.value)
 
-    def visit_Delete(self, node: ast.Delete) -> None:  # noqa: N802
+    def visit_Delete(self, node: ast.Delete) -> None:
         for target in node.targets:
             self._record_target(target, node)
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Attribute) and node.func.attr in MUTATING_METHODS:
             self._record_target(node.func.value, node)
         self.generic_visit(node)
@@ -487,13 +482,17 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     "method": method.upper(),
                     "path": path or "<dynamic>",
                     "start_line": getattr(decorator, "lineno", None),
-                    "end_line": getattr(decorator, "end_lineno", getattr(decorator, "lineno", None)),
+                    "end_line": getattr(
+                        decorator, "end_lineno", getattr(decorator, "lineno", None)
+                    ),
                     "owner": _expr_name(decorator.func.value),
                 }
             )
         return routes
 
-    def _visit_definition(self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+    def _visit_definition(
+        self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> None:
         qualified = f"{self.current_qualified_name}.{node.name}"
         kind = (
             "class"
@@ -537,20 +536,15 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             # Only functions carry a signature; a decorated class exposes no
             # parameters to inspect for auth dependencies or type annotations.
             arguments = (
-                node.args
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                else None
+                node.args if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
             )
             signature_nodes: list[ast.AST] = [*node.decorator_list]
             if arguments is not None:
                 signature_nodes.extend(arguments.defaults)
-                signature_nodes.extend(
-                    default for default in arguments.kw_defaults if default
-                )
+                signature_nodes.extend(default for default in arguments.kw_defaults if default)
             has_auth_control = any(
                 isinstance(candidate, ast.Call)
-                and (_expr_name(candidate.func) or "").split(".")[-1]
-                in {"Depends", "Security"}
+                and (_expr_name(candidate.func) or "").split(".")[-1] in {"Depends", "Security"}
                 for signature_node in signature_nodes
                 for candidate in ast.walk(signature_node)
             )
@@ -599,16 +593,16 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.scope_ids.pop()
         self.scope_names.pop()
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._visit_definition(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_definition(node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_definition(node)
 
-    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+    def visit_Import(self, node: ast.Import) -> None:
         evidence = self._evidence(
             start_line=node.lineno,
             end_line=node.end_lineno or node.lineno,
@@ -622,7 +616,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 evidence_id=evidence.evidence_id,
             )
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         evidence = self._evidence(
             start_line=node.lineno,
             end_line=node.end_lineno or node.lineno,
@@ -685,9 +679,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 mutation_evidence = tuple(
                     self._evidence(
                         start_line=getattr(mutation, "lineno", None),
-                        end_line=getattr(
-                            mutation, "end_lineno", getattr(mutation, "lineno", None)
-                        ),
+                        end_line=getattr(mutation, "end_lineno", getattr(mutation, "lineno", None)),
                         symbol=qualified,
                         evidence_kind="mutation",
                     ).evidence_id
@@ -710,15 +702,15 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     ),
                 )
 
-    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+    def visit_Assign(self, node: ast.Assign) -> None:
         self._module_assignment(node)
         self.generic_visit(node)
 
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self._module_assignment(node)
         self.generic_visit(node)
 
-    def visit_If(self, node: ast.If) -> None:  # noqa: N802
+    def visit_If(self, node: ast.If) -> None:
         if len(self.scope_names) == 1 and _is_main_guard(node):
             evidence = self._evidence(
                 start_line=node.lineno,
@@ -781,7 +773,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 )
         self.generic_visit(node)
 
-    def visit_BinOp(self, node: ast.BinOp) -> None:  # noqa: N802
+    def visit_BinOp(self, node: ast.BinOp) -> None:
         if isinstance(node.op, ast.Pow):
             base = _literal_number(node.left)
             if base is None and isinstance(node.left, ast.Name):
@@ -807,7 +799,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 )
         self.generic_visit(node)
 
-    def visit_Try(self, node: ast.Try) -> None:  # noqa: N802
+    def visit_Try(self, node: ast.Try) -> None:
         call_names = {
             _expr_name(candidate.func) or ""
             for statement in node.body
@@ -816,9 +808,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         }
         has_ai_call = any(
             "ai_client" in name.casefold()
-            or name.casefold().endswith(
-                ("generate_content", "generate_json", "stream_content")
-            )
+            or name.casefold().endswith(("generate_content", "generate_json", "stream_content"))
             for name in call_names
         )
         fallback_labels: set[str] = set()
@@ -859,7 +849,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             )
         self.generic_visit(node)
 
-    def visit_Constant(self, node: ast.Constant) -> None:  # noqa: N802
+    def visit_Constant(self, node: ast.Constant) -> None:
         # Route-path literals are how a client or harness names an endpoint it
         # never imports. Recording them lets traceability follow HTTP exercise,
         # not only direct calls.
@@ -880,7 +870,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             evidence_id=evidence.evidence_id,
         )
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         call_name = _expr_name(node.func)
         if call_name:
             evidence = self._evidence(
@@ -922,7 +912,11 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 self._claim(
                     text=(
                         f"{self.current_qualified_name} opens a SQLite connection"
-                        + (f" to {location}." if location else " using a dynamically resolved location.")
+                        + (
+                            f" to {location}."
+                            if location
+                            else " using a dynamically resolved location."
+                        )
                     ),
                     category="storage",
                     status="verified",
@@ -931,7 +925,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     supporting=(evidence.evidence_id,),
                 )
 
-            if normalized.endswith(".execute") or normalized.endswith(".executescript"):
+            if normalized.endswith((".execute", ".executescript")):
                 sql = _literal_string(node.args[0]) if node.args else None
                 if sql:
                     for match in CREATE_TABLE_PATTERN.finditer(sql):
@@ -974,7 +968,11 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 wildcard_origins = isinstance(origins, (ast.List, ast.Tuple, ast.Set)) and any(
                     _literal_string(item) == "*" for item in origins.elts
                 )
-                if middleware and middleware.split(".")[-1] == "CORSMiddleware" and wildcard_origins:
+                if (
+                    middleware
+                    and middleware.split(".")[-1] == "CORSMiddleware"
+                    and wildcard_origins
+                ):
                     self._claim(
                         text=(
                             f"{self.current_qualified_name} configures CORSMiddleware with a "
@@ -1026,9 +1024,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     importance="medium",
                     supporting=supporting,
                     invalidation_keys=(f"file:{self.path}",),
-                    alternatives=(
-                        "The script may be an operational CLI with no testing purpose.",
-                    ),
+                    alternatives=("The script may be an operational CLI with no testing purpose.",),
                 )
 
 
@@ -1099,9 +1095,7 @@ class PythonAstAnalyzer:
                     created_at=created_at,
                     verified_at=created_at,
                     supporting_evidence=tuple(sorted(set(route_evidence))),
-                    invalidation_keys=tuple(
-                        sorted({f"file:{item.path}" for item in eligible})
-                    ),
+                    invalidation_keys=tuple(sorted({f"file:{item.path}" for item in eligible})),
                 )
             )
 
@@ -1131,12 +1125,12 @@ class PythonAstAnalyzer:
                         produced_by=ANALYZER_VERSION,
                         created_at=created_at,
                         supporting_evidence=tuple(sorted(set(typed_route_evidence))),
-                        invalidation_keys=tuple(
-                            sorted({f"file:{item.path}" for item in eligible})
-                        ),
+                        invalidation_keys=tuple(sorted({f"file:{item.path}" for item in eligible})),
                         alternative_hypotheses=(
-                            "Application or deployment middleware may transform framework-generated "
-                            "validation responses.",
+                            (
+                                "Application or deployment middleware may transform framework-generated "
+                                "validation responses."
+                            ),
                         ),
                     )
                 )
@@ -1167,12 +1161,12 @@ class PythonAstAnalyzer:
                         created_at=created_at,
                         verified_at=created_at,
                         supporting_evidence=tuple(sorted(set(route_evidence))),
-                        invalidation_keys=tuple(
-                            sorted({f"file:{item.path}" for item in eligible})
-                        ),
+                        invalidation_keys=tuple(sorted({f"file:{item.path}" for item in eligible})),
                         alternative_hypotheses=(
-                            "Authentication or authorization may be implemented inside handlers, "
-                            "middleware, a proxy, or an external network boundary.",
+                            (
+                                "Authentication or authorization may be implemented inside handlers, "
+                                "middleware, a proxy, or an external network boundary."
+                            ),
                         ),
                     )
                 )
@@ -1204,12 +1198,12 @@ class PythonAstAnalyzer:
                         created_at=created_at,
                         verified_at=created_at,
                         supporting_evidence=tuple(sorted(set(route_auth_control_evidence))),
-                        invalidation_keys=tuple(
-                            sorted({f"file:{item.path}" for item in eligible})
-                        ),
+                        invalidation_keys=tuple(sorted({f"file:{item.path}" for item in eligible})),
                         alternative_hypotheses=(
-                            "A declared dependency may perform validation, rate limiting, or "
-                            "another concern rather than authentication.",
+                            (
+                                "A declared dependency may perform validation, rate limiting, or "
+                                "another concern rather than authentication."
+                            ),
                         ),
                     )
                 )
@@ -1229,9 +1223,19 @@ class PythonAstAnalyzer:
             analyzer_version=ANALYZER_VERSION,
             created_at=created_at,
             duration_ms=duration_ms,
-            symbols=tuple(sorted(symbols, key=lambda item: (item.path, item.start_line, item.qualified_name))),
-            edges=tuple(sorted(edges, key=lambda item: (item.source_path, item.relationship, item.target_ref))),
-            evidence=tuple(sorted(evidence, key=lambda item: (item.path, item.start_line or 0, item.evidence_id))),
+            symbols=tuple(
+                sorted(symbols, key=lambda item: (item.path, item.start_line, item.qualified_name))
+            ),
+            edges=tuple(
+                sorted(
+                    edges, key=lambda item: (item.source_path, item.relationship, item.target_ref)
+                )
+            ),
+            evidence=tuple(
+                sorted(
+                    evidence, key=lambda item: (item.path, item.start_line or 0, item.evidence_id)
+                )
+            ),
             claims=tuple(sorted(claims, key=lambda item: (item.category, item.claim))),
             coverage=(coverage,),
         )

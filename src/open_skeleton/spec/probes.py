@@ -71,39 +71,24 @@ def _match_path_glob(corpus: LedgerCorpus, terms: tuple[str, ...]) -> list[str]:
     return matches
 
 
-def _match_file_field(
-    corpus: LedgerCorpus, terms: tuple[str, ...], field: str
-) -> list[str]:
+def _match_file_field(corpus: LedgerCorpus, terms: tuple[str, ...], field: str) -> list[str]:
     wanted = {term.casefold() for term in terms}
-    return [
-        str(item["path"])
-        for item in corpus.files
-        if str(item[field]).casefold() in wanted
-    ]
+    return [str(item["path"]) for item in corpus.files if str(item[field]).casefold() in wanted]
 
 
 def _match_claim_category(corpus: LedgerCorpus, terms: tuple[str, ...]) -> list[str]:
     wanted = set(terms)
-    return [
-        str(item["claim_id"])
-        for item in corpus.claims
-        if str(item["category"]) in wanted
-    ]
+    return [str(item["claim_id"]) for item in corpus.claims if str(item["category"]) in wanted]
 
 
-def _match_sourced_claim_category(
-    corpus: LedgerCorpus, terms: tuple[str, ...]
-) -> list[str]:
+def _match_sourced_claim_category(corpus: LedgerCorpus, terms: tuple[str, ...]) -> list[str]:
     wanted = set(terms)
     sourced = corpus.sourced_evidence_ids()
     return [
         str(item["claim_id"])
         for item in corpus.claims
         if str(item["category"]) in wanted
-        and any(
-            evidence_id in sourced
-            for evidence_id in item.get("supporting_evidence", ())
-        )
+        and any(evidence_id in sourced for evidence_id in item.get("supporting_evidence", ()))
     ]
 
 
@@ -157,9 +142,7 @@ def _match_edge_target(
             folded.split(".", 1)[0],
         }
         if any(
-            fnmatch.fnmatch(candidate, pattern)
-            for candidate in candidates
-            for pattern in patterns
+            fnmatch.fnmatch(candidate, pattern) for candidate in candidates for pattern in patterns
         ):
             matches.append(target)
     return matches

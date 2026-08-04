@@ -57,9 +57,7 @@ class OpenSkeletonService:
                 "status": "not_analyzed",
             }
         latest["analysis"] = self.ledger.latest_analysis(str(latest["snapshot_id"]))
-        latest["stale_claim_count"] = len(
-            self.ledger.stale_claims(str(latest["snapshot_id"]))
-        )
+        latest["stale_claim_count"] = len(self.ledger.stale_claims(str(latest["snapshot_id"])))
         return latest
 
     def list_claims(
@@ -107,9 +105,7 @@ class OpenSkeletonService:
     def get_symbol_neighbors(self, symbol_id: str, limit: int = 200) -> dict[str, Any]:
         """Return inbound and outbound relationships for one symbol."""
 
-        return self.ledger.symbol_neighbors(
-            self._latest_snapshot_id(), symbol_id, limit=limit
-        )
+        return self.ledger.symbol_neighbors(self._latest_snapshot_id(), symbol_id, limit=limit)
 
     def build_context_pack(
         self, query: str, max_chars: int = 20_000, max_claims: int = 12
@@ -162,9 +158,7 @@ class OpenSkeletonService:
         difference: dict[str, Any] | None = None
         if previous and previous != snapshot.snapshot_id:
             difference = self.ledger.diff_snapshots(previous, snapshot.snapshot_id)
-            stale_count = len(
-                self.ledger.project_stale_claims(previous, snapshot.snapshot_id)
-            )
+            stale_count = len(self.ledger.project_stale_claims(previous, snapshot.snapshot_id))
         return {
             **result.summary(),
             "run_id": run_id,
@@ -181,8 +175,10 @@ def create_mcp_server(service: OpenSkeletonService) -> Any:
     """Create an official-SDK MCP server; the SDK is an optional dependency."""
 
     try:
-        from mcp.server import MCPServer
-        from mcp.types import ToolAnnotations
+        # Imported at call time because the SDK is an optional extra; a
+        # top-level import would break the CLI when it is not installed.
+        from mcp.server import MCPServer  # noqa: PLC0415
+        from mcp.types import ToolAnnotations  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover - exercised in minimal installs.
         raise RuntimeError(
             "MCP support is not installed. Install Open Skeleton with the `mcp` extra."
@@ -198,16 +194,10 @@ def create_mcp_server(service: OpenSkeletonService) -> Any:
     )
 
     server.tool(title="Project status", annotations=read_only)(service.project_status)
-    server.tool(title="List evidence-backed claims", annotations=read_only)(
-        service.list_claims
-    )
-    server.tool(title="Get analysis coverage", annotations=read_only)(
-        service.analysis_coverage
-    )
+    server.tool(title="List evidence-backed claims", annotations=read_only)(service.list_claims)
+    server.tool(title="Get analysis coverage", annotations=read_only)(service.analysis_coverage)
     server.tool(title="Search claims", annotations=read_only)(service.search_claims)
-    server.tool(title="Get verified evidence excerpt", annotations=read_only)(
-        service.get_evidence
-    )
+    server.tool(title="Get verified evidence excerpt", annotations=read_only)(service.get_evidence)
     server.tool(title="List semantic symbols", annotations=read_only)(service.list_symbols)
     server.tool(title="Get symbol relationships", annotations=read_only)(
         service.get_symbol_neighbors

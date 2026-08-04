@@ -5,7 +5,7 @@
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.spec.diagrams import build_diagrams
+from open_skeleton.spec.diagrams import Diagram, build_diagrams
 
 
 def _claim(category: str, text: str) -> dict[str, Any]:
@@ -38,9 +38,7 @@ class RouteSequenceTests(TestCase):
             "start_line": 5,
         },
     )
-    CLAIMS = (
-        _claim("http_route", "POST /action/attack/{id} is handled by backend.main.attack."),
-    )
+    CLAIMS = (_claim("http_route", "POST /action/attack/{id} is handled by backend.main.attack."),)
     EVIDENCE = {
         "e_deco": {"start_line": 99},
         "e_db": {"start_line": 105},
@@ -81,7 +79,7 @@ class RouteSequenceTests(TestCase):
             },
         )
 
-    def _build(self) -> tuple:
+    def _build(self) -> tuple[Diagram, ...]:
         return build_diagrams(
             "route_sequence",
             files=(),
@@ -148,7 +146,10 @@ class RouteSequenceTests(TestCase):
 class PersistenceErdTests(TestCase):
     CLAIMS = (
         _claim("storage_schema", "app.db.DBManager._init_tables creates SQLite table players."),
-        _claim("storage_serialization", "app.db.DBManager.save_player serializes JSON into SQLite table players."),
+        _claim(
+            "storage_serialization",
+            "app.db.DBManager.save_player serializes JSON into SQLite table players.",
+        ),
     )
 
     def test_tables_and_accessors_are_drawn_from_claims(self) -> None:

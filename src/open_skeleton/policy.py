@@ -208,4 +208,3 @@ def classify_role(path: Path) -> str:
     if suffix in LANGUAGES_BY_SUFFIX:
         return "source"
     return "unknown"
-

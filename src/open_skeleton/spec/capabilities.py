@@ -25,9 +25,7 @@ from typing import Any
 MIN_CLUSTER_MEMBERS = 1
 MAX_CAPABILITIES = 60
 
-_ROUTE_CLAIM = re.compile(
-    r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>.+)\.$"
-)
+_ROUTE_CLAIM = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>.+)\.$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,9 +90,7 @@ def verifying_paths(
     conventional suite.
     """
 
-    paths = {
-        str(item["path"]) for item in files if str(item["role"]) == "test"
-    }
+    paths = {str(item["path"]) for item in files if str(item["role"]) == "test"}
     for claim in claims:
         if str(claim["category"]) != "operator_harness":
             continue
@@ -118,9 +114,7 @@ def _route_clusters(
         if match is None:
             continue
         path = match.group("path")
-        segments = [
-            part for part in path.split("/") if part and not part.startswith("{")
-        ]
+        segments = [part for part in path.split("/") if part and not part.startswith("{")]
         label = segments[0] if segments else "root"
         bucket = clusters[label]
         bucket["routes"].add(f"{match.group('method')} {path}")
@@ -142,9 +136,7 @@ def _module_clusters(
     cluster named after its build container.
     """
 
-    source_paths = {
-        str(item["path"]) for item in files if str(item["role"]) == "source"
-    }
+    source_paths = {str(item["path"]) for item in files if str(item["role"]) == "source"}
     clusters: dict[str, dict[str, set[str]]] = defaultdict(
         lambda: {"routes": set(), "symbols": set(), "claims": set(), "evidence": set()}
     )
@@ -196,9 +188,7 @@ def build_capabilities(
         if relationship == "calls":
             callee = _short_name(target)
             defined_in = {
-                path
-                for name, path in symbol_paths.items()
-                if _short_name(name) == callee
+                path for name, path in symbol_paths.items() if _short_name(name) == callee
             }
             if defined_in and defined_in <= {source}:
                 continue
@@ -212,20 +202,14 @@ def build_capabilities(
     ]
     ordered.sort(key=lambda item: (item[1] != "route-group", item[0]))
 
-    populated = [
-        item for item in ordered if len(item[2]["symbols"]) >= MIN_CLUSTER_MEMBERS
-    ]
+    populated = [item for item in ordered if len(item[2]["symbols"]) >= MIN_CLUSTER_MEMBERS]
 
     capabilities: list[Capability] = []
     # Identifiers are assigned after filtering so the catalog never shows a gap.
-    for index, (label, kind, bucket) in enumerate(
-        populated[:MAX_CAPABILITIES], start=1
-    ):
+    for index, (label, kind, bucket) in enumerate(populated[:MAX_CAPABILITIES], start=1):
         members = sorted(bucket["symbols"])
         paths = sorted({symbol_paths[name] for name in members if name in symbol_paths})
-        route_paths = {
-            entry.split(" ", 1)[1] for entry in bucket["routes"] if " " in entry
-        }
+        route_paths = {entry.split(" ", 1)[1] for entry in bucket["routes"] if " " in entry}
         references = sorted(
             {
                 f"{source} calls {_short_name(name)}"

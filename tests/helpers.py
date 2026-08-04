@@ -33,4 +33,3 @@ def create_sample_repository(root: Path) -> None:
     )
     (root / ".env").write_text("FAKE_TEST_TOKEN=not-a-secret\n", encoding="utf-8")
     (root / "payload.dat").write_bytes(b"text-prefix\x00binary-tail")
-

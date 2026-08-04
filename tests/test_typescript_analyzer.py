@@ -9,7 +9,7 @@ from unittest import TestCase
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer, _tokens
 from open_skeleton.scanner import scan_repository
 
-SOURCE = '''\
+SOURCE = """\
 import React, { useEffect, useState } from "react";
 
 export default function App() {
@@ -22,16 +22,14 @@ export default function App() {
 }
 // fetch("http://localhost:8000/commented")
 const label = "fetch(http://localhost:8000/not-a-call)";
-'''
+"""
 
 
 class TypeScriptAnalyzerTests(TestCase):
     def test_tokenizer_ignores_comments_and_does_not_treat_strings_as_calls(self) -> None:
         tokens = _tokens(SOURCE)
         fetch_calls = sum(
-            token.value == "fetch"
-            and index + 1 < len(tokens)
-            and tokens[index + 1].value == "("
+            token.value == "fetch" and index + 1 < len(tokens) and tokens[index + 1].value == "("
             for index, token in enumerate(tokens)
         )
         self.assertEqual(fetch_calls, 1)

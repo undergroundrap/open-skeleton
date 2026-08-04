@@ -111,7 +111,9 @@ def _parser() -> argparse.ArgumentParser:
     claims.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
     claims.add_argument("--state-dir", type=Path, help="State directory.")
     claims.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
-    claims.add_argument("--status", choices=["verified", "inferred", "conflict", "unknown", "stale"])
+    claims.add_argument(
+        "--status", choices=["verified", "inferred", "conflict", "unknown", "stale"]
+    )
     claims.add_argument("--category")
     claims.add_argument("--limit", type=int, default=200)
     claims.add_argument("--json", action="store_true", help="Print complete claim objects as JSON.")
@@ -295,9 +297,7 @@ def _analyze(args: argparse.Namespace) -> int:
     ledger_path = state_dir / "evidence.sqlite3"
     ledger = EvidenceLedger(ledger_path)
     previous_snapshots = ledger.snapshots_for_root(root, limit=1)
-    previous_snapshot_id = (
-        str(previous_snapshots[0]["snapshot_id"]) if previous_snapshots else None
-    )
+    previous_snapshot_id = str(previous_snapshots[0]["snapshot_id"]) if previous_snapshots else None
     ledger.save_snapshot(snapshot)
     run_id = ledger.save_analysis(result)
     stale_claims: list[dict[str, object]] = []
@@ -362,8 +362,7 @@ def _claims(args: argparse.Namespace) -> int:
     else:
         for claim in results:
             print(
-                f"[{claim['importance']}/{claim['status']}] "
-                f"{claim['category']}: {claim['claim']}"
+                f"[{claim['importance']}/{claim['status']}] {claim['category']}: {claim['claim']}"
             )
         print(f"\n{len(results):,} claims")
     return 0
@@ -400,11 +399,7 @@ def _diff(args: argparse.Namespace) -> int:
     previous = args.from_snapshot
     if previous is None:
         previous = next(
-            (
-                str(item["snapshot_id"])
-                for item in history
-                if str(item["snapshot_id"]) != current
-            ),
+            (str(item["snapshot_id"]) for item in history if str(item["snapshot_id"]) != current),
             None,
         )
     if previous is None or current is None:
@@ -507,9 +502,7 @@ def _spec(args: argparse.Namespace) -> int:
     for section in document.sections:
         verdicts[section.verdict] = verdicts.get(section.verdict, 0) + 1
 
-    exercised = sum(
-        1 for item in document.capabilities if item.verification == "exercised"
-    )
+    exercised = sum(1 for item in document.capabilities if item.verification == "exercised")
     summary: dict[str, object] = {
         "snapshot_id": document.snapshot_id,
         "profile": document.profile_id,

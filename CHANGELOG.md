@@ -33,6 +33,13 @@ All notable changes will be documented here. This project follows Semantic Versi
 - pinned comparative benchmark and synthetic performance harness
 - Windows/Linux CI, package build, lint, type, dependency-audit, and protocol gates
 
+### Changed
+
+- `ruff format` is now authoritative for layout, and CI enforces it
+- ruff runs a broad rule set (bugbear, bandit, pathlib, naming, simplify,
+  performance and more) instead of the previous six-rule selection
+- mypy runs in strict mode over both `src` and `tests`
+
 ### Fixed
 
 - presence probes no longer count a claim that asserts a counted absence, which

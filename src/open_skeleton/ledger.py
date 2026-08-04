@@ -335,10 +335,7 @@ class EvidenceLedger:
             )
             connection.executemany(
                 "INSERT INTO exclusions(snapshot_id, path, reason) VALUES (?, ?, ?)",
-                (
-                    (snapshot.snapshot_id, item.path, item.reason)
-                    for item in snapshot.exclusions
-                ),
+                ((snapshot.snapshot_id, item.path, item.reason) for item in snapshot.exclusions),
             )
 
             connection.execute("DELETE FROM events WHERE snapshot_id = ?", (snapshot.snapshot_id,))
@@ -541,7 +538,7 @@ class EvidenceLedger:
                 WHERE snapshot_id = ?
                 GROUP BY {column}
                 ORDER BY count DESC, label ASC
-                """,  # noqa: S608 - column is allowlisted above.
+                """,
                 (snapshot_id,),
             ).fetchall()
         return [(str(row["label"]), int(row["count"])) for row in rows]
@@ -652,7 +649,9 @@ class EvidenceLedger:
             )
 
             for claim in result.claims:
-                connection.execute("DELETE FROM claim_evidence WHERE claim_id = ?", (claim.claim_id,))
+                connection.execute(
+                    "DELETE FROM claim_evidence WHERE claim_id = ?", (claim.claim_id,)
+                )
                 connection.executemany(
                     """
                     INSERT INTO claim_evidence(claim_id, evidence_id, relationship)
@@ -794,9 +793,7 @@ class EvidenceLedger:
             item = dict(row)
             item["failures"] = json.loads(item.pop("failures_json"))
             eligible = int(item["eligible_files"])
-            item["coverage_ratio"] = (
-                int(item["analyzed_files"]) / eligible if eligible else 1.0
-            )
+            item["coverage_ratio"] = int(item["analyzed_files"]) / eligible if eligible else 1.0
             results.append(item)
         return results
 
@@ -825,7 +822,7 @@ class EvidenceLedger:
                 SELECT claim_id, snapshot_id, claim, category, status, confidence,
                        importance, produced_by, created_at, verified_at
                 FROM claims
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY
                     CASE importance
                         WHEN 'critical' THEN 0 WHEN 'high' THEN 1
@@ -847,9 +844,7 @@ class EvidenceLedger:
                     (result["claim_id"],),
                 ).fetchall()
                 result["supporting_evidence"] = [
-                    row["evidence_id"]
-                    for row in evidence_rows
-                    if row["relationship"] == "supports"
+                    row["evidence_id"] for row in evidence_rows if row["relationship"] == "supports"
                 ]
                 result["contradicting_evidence"] = [
                     row["evidence_id"]
@@ -905,7 +900,7 @@ class EvidenceLedger:
                 SELECT edge_id, source_symbol_id, source_path, relationship, target_ref,
                        target_symbol_id, evidence_id, analyzer
                 FROM edges
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY relationship, source_path, target_ref
                 LIMIT ?
                 """,
@@ -1025,7 +1020,7 @@ class EvidenceLedger:
                 SELECT symbol_id, snapshot_id, path, qualified_name, kind, start_line,
                        end_line, language, analyzer, metadata_json
                 FROM symbols
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY qualified_name, path, start_line
                 LIMIT ?
                 """,
@@ -1081,7 +1076,9 @@ class EvidenceLedger:
         if max_claims < 1 or max_claims > 100:
             raise ValueError("Context pack max_claims must be between 1 and 100")
         claims = self.search_claims(snapshot_id, query, limit=max_claims)
-        full_claims = {item["claim_id"]: item for item in self.list_claims(snapshot_id, limit=5_000)}
+        full_claims = {
+            item["claim_id"]: item for item in self.list_claims(snapshot_id, limit=5_000)
+        }
         selected: list[dict[str, Any]] = []
         receipts: list[dict[str, Any]] = []
         used_chars = 0

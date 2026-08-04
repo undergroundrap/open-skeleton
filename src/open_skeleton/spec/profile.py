@@ -159,8 +159,7 @@ def _parse_probe(payload: dict[str, Any], context: str) -> SpecProbe:
     kind = str(_require(payload, "kind", context))
     if kind not in PROBE_KINDS:
         raise ProfileError(
-            f"{context}: unsupported probe kind '{kind}'; "
-            f"expected one of {sorted(PROBE_KINDS)}"
+            f"{context}: unsupported probe kind '{kind}'; expected one of {sorted(PROBE_KINDS)}"
         )
     terms = _string_tuple(_require(payload, "terms", context), context)
     if not terms:
@@ -175,9 +174,7 @@ def _parse_selector(payload: Any, context: str) -> SpecSelector | None:
         raise ProfileError(f"{context}: selector must be an object")
     min_importance = str(payload.get("min_importance", "low"))
     if min_importance not in _IMPORTANCE_ORDER:
-        raise ProfileError(
-            f"{context}: min_importance must be one of {sorted(_IMPORTANCE_ORDER)}"
-        )
+        raise ProfileError(f"{context}: min_importance must be one of {sorted(_IMPORTANCE_ORDER)}")
     limit = int(payload.get("limit", 40))
     if limit < 1 or limit > 500:
         raise ProfileError(f"{context}: selector limit must be between 1 and 500")
@@ -196,10 +193,7 @@ def _parse_section(payload: dict[str, Any], context: str, seen: set[str]) -> Spe
     seen.add(section_id)
     node_context = f"section '{section_id}'"
 
-    probes = tuple(
-        _parse_probe(item, node_context)
-        for item in payload.get("probes", [])
-    )
+    probes = tuple(_parse_probe(item, node_context) for item in payload.get("probes", []))
     degenerate_below = int(payload.get("degenerate_below", 0))
     if degenerate_below < 0:
         raise ProfileError(f"{node_context}: degenerate_below must not be negative")
@@ -213,8 +207,7 @@ def _parse_section(payload: dict[str, Any], context: str, seen: set[str]) -> Spe
             )
 
     children = tuple(
-        _parse_section(item, node_context, seen)
-        for item in payload.get("children", [])
+        _parse_section(item, node_context, seen) for item in payload.get("children", [])
     )
 
     return SpecSection(

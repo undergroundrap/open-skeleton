@@ -109,12 +109,8 @@ The app runs fully without LM Studio.
                 "@app.get('/ready')\ndef ready():\n    return {}\n",
                 encoding="utf-8",
             )
-            (root / "scripts" / "smoke.py").write_text(
-                "import requests\n", encoding="utf-8"
-            )
-            (root / "backend" / "requirements.txt").write_text(
-                "fastapi\n", encoding="utf-8"
-            )
+            (root / "scripts" / "smoke.py").write_text("import requests\n", encoding="utf-8")
+            (root / "backend" / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
             (root / "README.md").write_text(
                 "| `GET` | `/health` | documented |\n", encoding="utf-8"
             )
@@ -147,17 +143,13 @@ mcp = ["mcp>=2,<3"]
     def test_pep621_runtime_and_optional_dependencies_become_edges(self) -> None:
         result = self._analyze(self.MANIFEST)
         declared = {
-            edge.target_ref
-            for edge in result.edges
-            if edge.relationship == "declares_dependency"
+            edge.target_ref for edge in result.edges if edge.relationship == "declares_dependency"
         }
         self.assertEqual(declared, {"httpx", "pydantic", "pip-audit", "ruff", "mcp"})
 
     def test_inventory_claim_separates_runtime_from_optional(self) -> None:
         result = self._analyze(self.MANIFEST)
-        claim = next(
-            item for item in result.claims if item.category == "dependency_inventory"
-        )
+        claim = next(item for item in result.claims if item.category == "dependency_inventory")
         self.assertIn("2 runtime", claim.claim)
         self.assertIn("3 optional", claim.claim)
         self.assertEqual(claim.status, "verified")
@@ -172,7 +164,5 @@ mcp = ["mcp>=2,<3"]
 
     def test_unsupported_tool_table_reports_zero_rather_than_partial(self) -> None:
         result = self._analyze('[tool.poetry.dependencies]\nrequests = "^2.0"\n')
-        declared = [
-            edge for edge in result.edges if edge.relationship == "declares_dependency"
-        ]
+        declared = [edge for edge in result.edges if edge.relationship == "declares_dependency"]
         self.assertEqual(declared, [])

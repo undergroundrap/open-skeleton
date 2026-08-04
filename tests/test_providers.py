@@ -6,7 +6,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from subprocess import CompletedProcess
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -34,10 +36,7 @@ class ProviderTests(TestCase):
             "conflicts": [],
             "unknowns": ["runtime behavior"],
         }
-        program = (
-            "import json,sys; request=json.load(sys.stdin); "
-            f"print(json.dumps({response!r}))"
-        )
+        program = f"import json,sys; request=json.load(sys.stdin); print(json.dumps({response!r}))"
         request = ProviderRequest(
             task="Summarize evidence",
             snapshot_id="snapshot",
@@ -55,9 +54,9 @@ class ProviderTests(TestCase):
     def test_local_command_rejects_unstructured_output(self) -> None:
         request = ProviderRequest(task="Summarize", snapshot_id="snapshot", context_pack={})
         with TemporaryDirectory() as temporary:
-            result = LocalCommandProvider(
-                [sys.executable, "-c", "print('not json')"]
-            ).generate(request, workspace=Path(temporary))
+            result = LocalCommandProvider([sys.executable, "-c", "print('not json')"]).generate(
+                request, workspace=Path(temporary)
+            )
 
         self.assertEqual(result.status, "error")
         self.assertIn("JSONDecodeError", result.error or "")
@@ -65,9 +64,7 @@ class ProviderTests(TestCase):
     def test_local_command_rejects_unknown_claim_references(self) -> None:
         response = {
             "summary": "bad citation",
-            "findings": [
-                {"claim_ids": ["invented"], "narrative": "unsupported", "caveats": []}
-            ],
+            "findings": [{"claim_ids": ["invented"], "narrative": "unsupported", "caveats": []}],
             "conflicts": [],
             "unknowns": [],
         }
@@ -117,7 +114,7 @@ class ProviderTests(TestCase):
             "unknowns": [],
         }
 
-        def complete_codex(command, **kwargs):
+        def complete_codex(command: list[str], **kwargs: Any) -> CompletedProcess[str]:
             output_path = Path(command[command.index("--output-last-message") + 1])
             output_path.write_text(json.dumps(response), encoding="utf-8")
             self.assertIn("--ephemeral", command)
@@ -127,12 +124,11 @@ class ProviderTests(TestCase):
             self.assertIn("Use only the supplied context pack", kwargs["input"])
             return subprocess.CompletedProcess(command, 0, "", "")
 
-        with TemporaryDirectory() as temporary, patch(
-            "open_skeleton.providers.subprocess.run", side_effect=complete_codex
+        with (
+            TemporaryDirectory() as temporary,
+            patch("open_skeleton.providers.subprocess.run", side_effect=complete_codex),
         ):
-            result = CodexCliProvider("codex-test").generate(
-                request, workspace=Path(temporary)
-            )
+            result = CodexCliProvider("codex-test").generate(request, workspace=Path(temporary))
 
         self.assertEqual(result.status, "complete", result.error)
         self.assertEqual(result.output, response)
@@ -152,24 +148,21 @@ class ProviderTests(TestCase):
             "unknowns": [],
         }
 
-        def complete_claude(command, **kwargs):
+        def complete_claude(command: list[str], **kwargs: Any) -> CompletedProcess[str]:
             self.assertEqual(command[command.index("--permission-mode") + 1], "plan")
             denied = command[command.index("--disallowedTools") + 1].split(",")
             self.assertTrue(
-                {"Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch"}.issubset(
-                    denied
-                )
+                {"Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch"}.issubset(denied)
             )
             self.assertIn("Use only the supplied context pack", kwargs["input"])
             envelope = {"is_error": False, "result": json.dumps(response)}
             return subprocess.CompletedProcess(command, 0, json.dumps(envelope), "")
 
-        with TemporaryDirectory() as temporary, patch(
-            "open_skeleton.providers.subprocess.run", side_effect=complete_claude
+        with (
+            TemporaryDirectory() as temporary,
+            patch("open_skeleton.providers.subprocess.run", side_effect=complete_claude),
         ):
-            result = ClaudeCliProvider("claude-test").generate(
-                request, workspace=Path(temporary)
-            )
+            result = ClaudeCliProvider("claude-test").generate(request, workspace=Path(temporary))
 
         self.assertEqual(result.status, "complete", result.error)
         self.assertEqual(result.output, response)

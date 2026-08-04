@@ -36,8 +36,9 @@ def _load_gold(path: Path) -> dict[str, Any]:
 
 def _git_commit(root: Path) -> str | None:
     try:
-        completed = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
+        # Fixed argument vector, no shell, read-only git query.
+        completed = subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), "rev-parse", "HEAD"],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=10,
@@ -85,7 +86,7 @@ def _receipt_is_current(
         lines = source.splitlines(keepends=True)
         excerpt = "".join(lines[receipt.start_line - 1 : receipt.end_line])
         expected = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
-    return receipt.excerpt_sha256 == expected
+    return bool(receipt.excerpt_sha256 == expected)
 
 
 def _score_open_skeleton(
@@ -130,9 +131,7 @@ def _score_open_skeleton(
                 for pattern in expected_paths
                 for item in receipts
             )
-            conflict_receipt = (
-                match.status != "conflict" or bool(match.contradicting_evidence)
-            )
+            conflict_receipt = match.status != "conflict" or bool(match.contradicting_evidence)
             evidence_correct = current and expected_path_found and conflict_receipt
             hit_weight += weight
             if evidence_correct:
@@ -256,7 +255,7 @@ def run_benchmark(
     snapshot = scan_repository(root)
     first_finding_ms: int | None = None
 
-    def progress(_analyzer: str, elapsed_ms: int, claim_count: int) -> None:
+    def progress(_analyzer: str, _elapsed_ms: int, claim_count: int) -> None:
         nonlocal first_finding_ms
         if first_finding_ms is None and claim_count:
             first_finding_ms = round((time.perf_counter() - started) * 1000)
@@ -348,8 +347,16 @@ def _write_markdown_report(result: dict[str, Any], path: Path) -> None:
         ]
     )
     for key, value in current["measurements"].items():
-        lines.append(f"| `{key}` | {value:,} |\n" if isinstance(value, int) else f"| `{key}` | {value} |\n")
-    lines.extend(["\n## Claim results\n\n", "| Gold claim | Area | Outcome | Evidence |\n", "|---|---|---|---|\n"])
+        lines.append(
+            f"| `{key}` | {value:,} |\n" if isinstance(value, int) else f"| `{key}` | {value} |\n"
+        )
+    lines.extend(
+        [
+            "\n## Claim results\n\n",
+            "| Gold claim | Area | Outcome | Evidence |\n",
+            "|---|---|---|---|\n",
+        ]
+    )
     for row in current["claims"]:
         lines.append(
             f"| `{row['id']}` | {row['area']} | {row['outcome']} | "

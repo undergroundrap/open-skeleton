@@ -35,14 +35,18 @@ class LedgerAndExportTests(TestCase):
             assert latest is not None
             self.assertEqual(latest["snapshot_id"], snapshot.snapshot_id)
             self.assertEqual(latest["file_count"], 5)
-            self.assertEqual(ledger.grouped_counts(snapshot.snapshot_id, "language")[0][0], "Python")
+            self.assertEqual(
+                ledger.grouped_counts(snapshot.snapshot_id, "language")[0][0], "Python"
+            )
 
             jsonl_path = state / "inventory.jsonl"
             markdown_path = state / "inventory.md"
             export_jsonl(snapshot, jsonl_path)
             export_markdown(snapshot, markdown_path)
 
-            records = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()]
+            records = [
+                json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()
+            ]
             self.assertEqual(records[0]["record_type"], "snapshot")
             self.assertEqual(sum(record["record_type"] == "file" for record in records), 5)
             markdown = markdown_path.read_text(encoding="utf-8")
@@ -79,9 +83,7 @@ class LedgerAndExportTests(TestCase):
             root = workspace / "repo"
             root.mkdir()
             source = root / "app.py"
-            source.write_text(
-                "from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8"
-            )
+            source.write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
             ledger = EvidenceLedger(workspace / "state" / "evidence.sqlite3")
             previous = scan_repository(root)
             ledger.save_snapshot(previous)

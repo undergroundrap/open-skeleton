@@ -142,11 +142,7 @@ def _validate_claim_references(output: dict[str, Any], request: ProviderRequest)
         for item in request.context_pack.get("claims", [])
         if isinstance(item, dict) and item.get("claim_id")
     }
-    cited = {
-        claim_id
-        for finding in output["findings"]
-        for claim_id in finding["claim_ids"]
-    }
+    cited = {claim_id for finding in output["findings"] for claim_id in finding["claim_ids"]}
     unknown = cited - available
     if unknown:
         raise ValueError(
@@ -185,7 +181,9 @@ class LocalCommandProvider:
         started = time.perf_counter()
         request_hash = _request_hash(request)
         try:
-            completed = subprocess.run(
+            # The command is the user's explicit provider choice, never
+            # repository content, and runs without a shell.
+            completed = subprocess.run(  # noqa: S603
                 self.command,
                 input=json.dumps(request.to_dict(), ensure_ascii=False),
                 text=True,
@@ -259,7 +257,8 @@ class CodexCliProvider:
                 if request.model:
                     command.extend(["--model", request.model])
                 command.append("-")
-                completed = subprocess.run(
+                # Explicit provider choice; no shell, fixed argument vector.
+                completed = subprocess.run(  # noqa: S603
                     command,
                     input=_provider_prompt(request),
                     text=True,
@@ -324,7 +323,9 @@ class ClaudeCliProvider:
         if request.model:
             command.extend(["--model", request.model])
         try:
-            completed = subprocess.run(
+            # The command is the user's explicit provider choice, never
+            # repository content, and runs without a shell.
+            completed = subprocess.run(  # noqa: S603
                 command,
                 input=_provider_prompt(request),
                 text=True,

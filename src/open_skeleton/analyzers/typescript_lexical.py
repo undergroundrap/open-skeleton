@@ -23,9 +23,7 @@ from open_skeleton.models import (
 
 ANALYZER_NAME = "typescript-lexical"
 ANALYZER_VERSION = "typescript-lexical/v1"
-ELIGIBLE_LANGUAGES = frozenset(
-    {"JavaScript", "JavaScript JSX", "TypeScript", "TypeScript JSX"}
-)
+ELIGIBLE_LANGUAGES = frozenset({"JavaScript", "JavaScript JSX", "TypeScript", "TypeScript JSX"})
 DECLARATION_KEYWORDS = frozenset({"class", "function", "interface", "type", "enum"})
 REACT_HOOKS = frozenset(
     {"useCallback", "useContext", "useEffect", "useMemo", "useReducer", "useRef", "useState"}
@@ -105,9 +103,7 @@ def _tokens(source: str) -> list[Token]:
             continue
         if character.isalpha() or character in {"_", "$"}:
             start = index
-            while index < length and (
-                source[index].isalnum() or source[index] in {"_", "$"}
-            ):
+            while index < length and (source[index].isalnum() or source[index] in {"_", "$"}):
                 index += 1
             result.append(Token("identifier", source[start:index], line, line))
             continue
@@ -206,9 +202,9 @@ class TypeScriptLexicalAnalyzer:
                 symbol=symbol,
                 evidence_kind=kind,
                 excerpt_sha256=hashlib.sha256(
-                    "".join(
-                        source_lines_by_path.get(path, [])[start_line - 1 : end_line]
-                    ).encode("utf-8")
+                    "".join(source_lines_by_path.get(path, [])[start_line - 1 : end_line]).encode(
+                        "utf-8"
+                    )
                 ).hexdigest()
                 if path in source_lines_by_path
                 else file_sha256,

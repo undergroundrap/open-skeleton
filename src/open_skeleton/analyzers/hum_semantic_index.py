@@ -177,7 +177,9 @@ class HumSemanticIndexAnalyzer:
                 continue
             path = _normalize_graph_path(snapshot.root, graph_file["path"])
             if path is None or path not in files_by_path:
-                failures.append(f"native index path is outside or absent from snapshot: {graph_file['path']}")
+                failures.append(
+                    f"native index path is outside or absent from snapshot: {graph_file['path']}"
+                )
                 continue
             file_record = files_by_path[path]
             source_path = snapshot.root / Path(path)
@@ -295,7 +297,13 @@ class HumSemanticIndexAnalyzer:
             ClaimRecord(
                 claim_id=stable_id(
                     "claim",
-                    (snapshot.snapshot_id, "hum_native_summary", text, index_hash, ANALYZER_VERSION),
+                    (
+                        snapshot.snapshot_id,
+                        "hum_native_summary",
+                        text,
+                        index_hash,
+                        ANALYZER_VERSION,
+                    ),
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 claim=text,
@@ -309,8 +317,10 @@ class HumSemanticIndexAnalyzer:
                 supporting_evidence=(index_evidence.evidence_id,),
                 invalidation_keys=(f"hum:index:{index_hash}",),
                 alternative_hypotheses=(
-                    "The index is content-pinned but hum.semantic_graph.v0 does not embed source "
-                    "file hashes, so freshness is the caller's responsibility.",
+                    (
+                        "The index is content-pinned but hum.semantic_graph.v0 does not embed source "
+                        "file hashes, so freshness is the caller's responsibility."
+                    ),
                 ),
             )
         )

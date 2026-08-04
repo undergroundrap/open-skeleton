@@ -224,8 +224,7 @@ def _traceability_matrix(capabilities: tuple[Capability, ...]) -> Panel:
 def _verification_gaps(capabilities: tuple[Capability, ...]) -> Panel:
     gaps = [item for item in capabilities if not item.exercised_by]
     rows = tuple(
-        (item.capability_id, item.label, item.kind, _truncate(item.paths))
-        for item in gaps
+        (item.capability_id, item.label, item.kind, _truncate(item.paths)) for item in gaps
     )
     covered = len(capabilities) - len(gaps)
     total = len(capabilities) or 1

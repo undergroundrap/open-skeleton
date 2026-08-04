@@ -19,8 +19,10 @@ from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
+    EdgeRecord,
     EvidenceRecord,
     Snapshot,
+    SymbolRecord,
     utc_now,
 )
 
@@ -32,11 +34,11 @@ def _append_orphan_candidates(
     snapshot: Snapshot,
     *,
     created_at: str,
-    symbols: tuple,
-    edges: tuple,
-    evidence: tuple,
+    symbols: tuple[SymbolRecord, ...],
+    edges: tuple[EdgeRecord, ...],
+    evidence: tuple[EvidenceRecord, ...],
     claims: list[ClaimRecord],
-) -> tuple:
+) -> tuple[EvidenceRecord, ...]:
     """Add conservative static orphan candidates using the resolved import census."""
 
     python_modules = [
@@ -72,7 +74,9 @@ def _append_orphan_candidates(
         )
 
     imported_modules = {
-        module.qualified_name for module in python_modules if module_is_imported(module.qualified_name)
+        module.qualified_name
+        for module in python_modules
+        if module_is_imported(module.qualified_name)
     }
     census = EvidenceRecord(
         evidence_id=stable_id(
@@ -137,8 +141,10 @@ def _append_orphan_candidates(
                     "python:import-graph",
                 ),
                 alternative_hypotheses=(
-                    "The module may be loaded dynamically, invoked directly, imported by an "
-                    "external consumer, or retained intentionally as a reference.",
+                    (
+                        "The module may be loaded dynamically, invoked directly, imported by an "
+                        "external consumer, or retained intentionally as a reference."
+                    ),
                 ),
             )
         )
@@ -237,12 +243,12 @@ def _append_mathematical_conflicts(
             created_at=created_at,
             supporting_evidence=supporting,
             contradicting_evidence=tuple(item.evidence_id for item in comment_receipts),
-            invalidation_keys=tuple(
-                sorted({f"file:{item.path}" for item in comment_receipts})
-            ),
+            invalidation_keys=tuple(sorted({f"file:{item.path}" for item in comment_receipts})),
             alternative_hypotheses=(
-                "A finite ascension cap or another faster-growing mechanic could bound the "
-                "advantage, but neither follows from the compared exponentials alone.",
+                (
+                    "A finite ascension cap or another faster-growing mechanic could bound the "
+                    "advantage, but neither follows from the compared exponentials alone."
+                ),
             ),
         )
     )
@@ -298,7 +304,7 @@ def _append_testing_census(
             ),
         )
     )
-    return evidence + (census,)
+    return (*evidence, census)
 
 
 def _append_route_documentation_conflicts(
@@ -307,9 +313,7 @@ def _append_route_documentation_conflicts(
     created_at: str,
     claims: list[ClaimRecord],
 ) -> None:
-    source = next(
-        (item for item in claims if item.category == "http_route_inventory"), None
-    )
+    source = next((item for item in claims if item.category == "http_route_inventory"), None)
     documented = next(
         (item for item in claims if item.category == "documented_http_route_inventory"),
         None,
@@ -318,7 +322,11 @@ def _append_route_documentation_conflicts(
         return
     source_count = re.search(r"declares (\d+) HTTP route", source.claim)
     documented_count = re.search(r"document (\d+) distinct HTTP", documented.claim)
-    if not source_count or not documented_count or source_count.group(1) == documented_count.group(1):
+    if (
+        not source_count
+        or not documented_count
+        or source_count.group(1) == documented_count.group(1)
+    ):
         return
     source_value = int(source_count.group(1))
     documented_value = int(documented_count.group(1))
@@ -352,7 +360,7 @@ def _append_dependency_conflicts(
     snapshot: Snapshot,
     *,
     created_at: str,
-    edges: tuple,
+    edges: tuple[EdgeRecord, ...],
     evidence: tuple[EvidenceRecord, ...],
     claims: list[ClaimRecord],
 ) -> None:
@@ -410,8 +418,10 @@ def _append_dependency_conflicts(
                 contradicting_evidence=requirements_evidence,
                 invalidation_keys=("snapshot:file-set", "python:import-graph"),
                 alternative_hypotheses=(
-                    "The dependency may be installed manually, transitively, or by an untracked "
-                    "environment definition.",
+                    (
+                        "The dependency may be installed manually, transitively, or by an untracked "
+                        "environment definition."
+                    ),
                 ),
             )
         )
@@ -535,7 +545,9 @@ def analyze_snapshot(
         analyzer_version=PIPELINE_VERSION,
         created_at=created_at,
         duration_ms=round((time.perf_counter() - started) * 1000),
-        symbols=tuple(sorted(symbols, key=lambda item: (item.path, item.start_line, item.symbol_id))),
+        symbols=tuple(
+            sorted(symbols, key=lambda item: (item.path, item.start_line, item.symbol_id))
+        ),
         edges=tuple(sorted(edges, key=lambda item: item.edge_id)),
         evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
         claims=tuple(sorted(claims, key=lambda item: item.claim_id)),

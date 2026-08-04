@@ -130,12 +130,10 @@ def verify_spec(
                     )
                 )
 
-    counts = {status: 0 for status in CITATION_STATUSES}
+    counts = dict.fromkeys(CITATION_STATUSES, 0)
     for check in checks:
         counts[check.status] += 1
-    failures = tuple(
-        check for check in checks if check.status not in {"current", "virtual"}
-    )
+    failures = tuple(check for check in checks if check.status not in {"current", "virtual"})
     return CitationReport(
         snapshot_id=document.snapshot_id,
         total=len(checks),

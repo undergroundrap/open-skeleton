@@ -33,7 +33,7 @@ def _atomic_write(path: Path, chunks: Iterable[str]) -> None:
                 handle.write(chunk)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_name, destination)
+        Path(temporary_name).replace(destination)
         temporary_name = None
     finally:
         if temporary_name is not None:
@@ -44,23 +44,29 @@ def export_jsonl(snapshot: Snapshot, path: Path) -> None:
     def records() -> Iterable[str]:
         yield json.dumps({"record_type": "snapshot", **snapshot.summary()}, sort_keys=True) + "\n"
         for item in snapshot.files:
-            yield json.dumps(
-                {
-                    "record_type": "file",
-                    "snapshot_id": snapshot.snapshot_id,
-                    **item.to_dict(),
-                },
-                sort_keys=True,
-            ) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "record_type": "file",
+                        "snapshot_id": snapshot.snapshot_id,
+                        **item.to_dict(),
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
         for exclusion in snapshot.exclusions:
-            yield json.dumps(
-                {
-                    "record_type": "exclusion",
-                    "snapshot_id": snapshot.snapshot_id,
-                    **exclusion.to_dict(),
-                },
-                sort_keys=True,
-            ) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "record_type": "exclusion",
+                        "snapshot_id": snapshot.snapshot_id,
+                        **exclusion.to_dict(),
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
 
     _atomic_write(path, records())
 
@@ -118,29 +124,19 @@ def export_markdown(snapshot: Snapshot, path: Path) -> None:
 
 def export_analysis_jsonl(result: AnalysisResult, path: Path) -> None:
     def records() -> Iterable[str]:
-        yield json.dumps(
-            {"record_type": "analysis", **result.summary()}, sort_keys=True
-        ) + "\n"
+        yield json.dumps({"record_type": "analysis", **result.summary()}, sort_keys=True) + "\n"
         for item in result.coverage:
-            yield json.dumps(
-                {"record_type": "coverage", **item.to_dict()}, sort_keys=True
-            ) + "\n"
+            yield json.dumps({"record_type": "coverage", **item.to_dict()}, sort_keys=True) + "\n"
         for symbol in result.symbols:
-            yield json.dumps(
-                {"record_type": "symbol", **symbol.to_dict()}, sort_keys=True
-            ) + "\n"
+            yield json.dumps({"record_type": "symbol", **symbol.to_dict()}, sort_keys=True) + "\n"
         for edge in result.edges:
-            yield json.dumps(
-                {"record_type": "edge", **edge.to_dict()}, sort_keys=True
-            ) + "\n"
+            yield json.dumps({"record_type": "edge", **edge.to_dict()}, sort_keys=True) + "\n"
         for receipt in result.evidence:
-            yield json.dumps(
-                {"record_type": "evidence", **receipt.to_dict()}, sort_keys=True
-            ) + "\n"
+            yield (
+                json.dumps({"record_type": "evidence", **receipt.to_dict()}, sort_keys=True) + "\n"
+            )
         for claim in result.claims:
-            yield json.dumps(
-                {"record_type": "claim", **claim.to_dict()}, sort_keys=True
-            ) + "\n"
+            yield json.dumps({"record_type": "claim", **claim.to_dict()}, sort_keys=True) + "\n"
 
     _atomic_write(path, records())
 
@@ -167,7 +163,11 @@ def export_analysis_markdown(
         if evidence.start_line is None:
             return f"`{evidence.path}`"
         end = evidence.end_line or evidence.start_line
-        span = str(evidence.start_line) if end == evidence.start_line else f"{evidence.start_line}-{end}"
+        span = (
+            str(evidence.start_line)
+            if end == evidence.start_line
+            else f"{evidence.start_line}-{end}"
+        )
         return f"`{evidence.path}:{span}`"
 
     def lines() -> Iterable[str]:
@@ -216,9 +216,7 @@ def export_analysis_markdown(
                 labels = ", ".join(evidence_label(item) for item in claim.supporting_evidence)
                 yield f"- Supporting evidence: {labels}\n"
             if claim.contradicting_evidence:
-                labels = ", ".join(
-                    evidence_label(item) for item in claim.contradicting_evidence
-                )
+                labels = ", ".join(evidence_label(item) for item in claim.contradicting_evidence)
                 yield f"- Contradicting evidence: {labels}\n"
             if claim.alternative_hypotheses:
                 yield "- Alternative hypotheses:\n"

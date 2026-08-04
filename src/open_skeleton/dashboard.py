@@ -96,7 +96,7 @@ def create_dashboard_server(
             hostname = host_header.rsplit(":", 1)[0].strip("[]").casefold()
             return hostname in LOOPBACK_HOSTS
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             if not self._host_is_local():
                 self._send_json({"error": "non-loopback Host rejected"}, HTTPStatus.FORBIDDEN)
                 return
@@ -113,9 +113,7 @@ def create_dashboard_server(
                     status = service.project_status()
                     claims = service.list_claims(limit=5_000) if status.get("analysis") else []
                     status["status_counts"] = dict(Counter(item["status"] for item in claims))
-                    status["category_counts"] = dict(
-                        Counter(item["category"] for item in claims)
-                    )
+                    status["category_counts"] = dict(Counter(item["category"] for item in claims))
                     status["claim_count"] = len(claims)
                     self._send_json(status)
                     return
@@ -154,10 +152,11 @@ def create_dashboard_server(
             except (ValueError, TypeError) as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             self._send_json({"error": "dashboard API is read-only"}, HTTPStatus.METHOD_NOT_ALLOWED)
 
-        def log_message(self, format: str, *args: object) -> None:
+        # Signature fixed by BaseHTTPRequestHandler; silences request logging.
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002, ARG002
             return
 
     server = ThreadingHTTPServer((host, port), Handler)

@@ -33,9 +33,7 @@ class ProfileTests(TestCase):
         sections = profile.walk()
         self.assertGreaterEqual(len(sections), 30)
         self.assertTrue(all(section.number for section in sections))
-        self.assertEqual(
-            len({section.section_id for section in sections}), len(sections)
-        )
+        self.assertEqual(len({section.section_id for section in sections}), len(sections))
 
     def test_duplicate_section_ids_are_rejected(self) -> None:
         payload = {
@@ -163,9 +161,7 @@ class SpecDocumentTests(TestCase):
             )
             self.assertEqual(containerization.verdict, "absent")
             self.assertTrue(containerization.probe_results)
-            self.assertTrue(
-                all(item.match_count == 0 for item in containerization.probe_results)
-            )
+            self.assertTrue(all(item.match_count == 0 for item in containerization.probe_results))
 
             markdown = render_spec_markdown(document)
             self.assertIn("Determination: absent", markdown)
@@ -181,9 +177,7 @@ class SpecDocumentTests(TestCase):
 
             document = build_spec(ledger, load_profile())
             rendered = [
-                claim.claim_id
-                for section in document.sections
-                for claim in section.findings
+                claim.claim_id for section in document.sections for claim in section.findings
             ]
             self.assertEqual(len(rendered), len(set(rendered)))
             self.assertEqual(len(rendered), document.total_claims)
@@ -223,9 +217,7 @@ class SpecDocumentTests(TestCase):
             ledger = _analyzed(root, workspace / "state")
 
             document = build_spec(ledger, load_profile())
-            routes = next(
-                item for item in document.sections if item.section_id == "surface.http"
-            )
+            routes = next(item for item in document.sections if item.section_id == "surface.http")
             diagram = routes.diagrams[0]
             self.assertIsNone(diagram.mermaid)
             self.assertIsNotNone(diagram.omitted_reason)
@@ -270,9 +262,7 @@ class CitationIntegrityTests(TestCase):
             report = verify_spec(document, ledger, root=root)
 
             self.assertLess(report.integrity, 1.0)
-            self.assertTrue(
-                any(item.status == "source-changed" for item in report.failures)
-            )
+            self.assertTrue(any(item.status == "source-changed" for item in report.failures))
 
 
 class DependencyProbeTests(TestCase):
@@ -330,26 +320,40 @@ class DependencyProbeTests(TestCase):
 
 class PanelTests(TestCase):
     FILES = (
-        {"path": "a.py", "language": "Python", "role": "source",
-         "line_count": 100, "size_bytes": 1000, "sha256": "a" * 64},
-        {"path": "b.py", "language": "Python", "role": "source",
-         "line_count": 50, "size_bytes": 500, "sha256": "b" * 64},
-        {"path": "c.md", "language": "Markdown", "role": "documentation",
-         "line_count": 10, "size_bytes": 100, "sha256": "c" * 64},
+        {
+            "path": "a.py",
+            "language": "Python",
+            "role": "source",
+            "line_count": 100,
+            "size_bytes": 1000,
+            "sha256": "a" * 64,
+        },
+        {
+            "path": "b.py",
+            "language": "Python",
+            "role": "source",
+            "line_count": 50,
+            "size_bytes": 500,
+            "sha256": "b" * 64,
+        },
+        {
+            "path": "c.md",
+            "language": "Markdown",
+            "role": "documentation",
+            "line_count": 10,
+            "size_bytes": 100,
+            "sha256": "c" * 64,
+        },
     )
 
     def test_language_census_reports_shares_that_sum_sensibly(self) -> None:
-        panel = build_panel(
-            "language_census", PanelContext(files=self.FILES)
-        )
+        panel = build_panel("language_census", PanelContext(files=self.FILES))
         self.assertEqual(panel.rows[0][0], "Python")
         self.assertEqual(panel.rows[0][1], "2")
         self.assertEqual(panel.rows[0][3], "150")
 
     def test_largest_files_orders_by_line_count(self) -> None:
-        panel = build_panel(
-            "largest_files", PanelContext(files=self.FILES)
-        )
+        panel = build_panel("largest_files", PanelContext(files=self.FILES))
         self.assertEqual([row[0] for row in panel.rows], ["a.py", "b.py", "c.md"])
 
     def test_exclusions_panel_states_that_content_was_never_read(self) -> None:
@@ -377,9 +381,7 @@ class PanelTests(TestCase):
 
             document = build_spec(ledger, load_profile())
             composition = next(
-                item
-                for item in document.sections
-                if item.section_id == "introduction.composition"
+                item for item in document.sections if item.section_id == "introduction.composition"
             )
             self.assertEqual(len(composition.panels), 5)
 

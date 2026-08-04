@@ -16,4 +16,3 @@ def stable_id(namespace: str, values: Iterable[object]) -> str:
         digest.update(str(value).encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()
-

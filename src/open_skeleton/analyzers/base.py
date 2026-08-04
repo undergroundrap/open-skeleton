@@ -15,4 +15,3 @@ class Analyzer(Protocol):
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         """Analyze an immutable snapshot without executing target code."""
-

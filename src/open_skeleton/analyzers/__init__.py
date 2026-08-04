@@ -3,4 +3,3 @@
 # Additional terms: see NOTICE.md for visible attribution requirements.
 
 """Deterministic language and repository analyzers."""
-

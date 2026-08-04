@@ -72,7 +72,7 @@ class RepositoryScannerTests(TestCase):
             blocked.mkdir()
             original_scandir = __import__("os").scandir
 
-            def controlled_scandir(path):
+            def controlled_scandir(path: str | Path) -> object:
                 if Path(path) == blocked:
                     raise PermissionError("fixture")
                 return original_scandir(path)

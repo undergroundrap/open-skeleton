@@ -189,4 +189,3 @@ def scan_repository(
         exclusions=tuple(exclusions),
         events=tuple(events),
     )
-

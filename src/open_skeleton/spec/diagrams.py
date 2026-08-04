@@ -19,9 +19,7 @@ from typing import Any
 MAX_DIAGRAM_NODES = 40
 MAX_DIAGRAM_EDGES = 60
 
-_ROUTE_CLAIM = re.compile(
-    r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>.+)\.$"
-)
+_ROUTE_CLAIM = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>.+)\.$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,15 +135,13 @@ def _route_surface(claims: tuple[dict[str, Any], ...]) -> Diagram:
         match = _ROUTE_CLAIM.match(str(claim["claim"]))
         if match is None:
             continue
-        routes.append(
-            (match.group("method"), match.group("path"), match.group("handler"))
-        )
+        routes.append((match.group("method"), match.group("path"), match.group("handler")))
 
     if not routes:
         return _omitted(name, title, "No verified HTTP route claim exists for this snapshot.")
 
     grouped: dict[str, list[tuple[str, str]]] = {}
-    for method, path, handler in sorted(dict.fromkeys(routes)):
+    for method, path, _handler in sorted(dict.fromkeys(routes)):
         segments = [part for part in path.split("/") if part and not part.startswith("{")]
         prefix = f"/{segments[0]}" if segments else "/"
         grouped.setdefault(prefix, []).append((method, path))
@@ -220,9 +216,7 @@ def _receivers_by_file(
             continue
         target = str(edge["target_ref"]).lstrip(".")
         if target:
-            receivers.setdefault(str(edge["source_path"]), set()).add(
-                target.rsplit(".", 1)[-1]
-            )
+            receivers.setdefault(str(edge["source_path"]), set()).add(target.rsplit(".", 1)[-1])
     return {path: frozenset(names) for path, names in receivers.items()}
 
 
@@ -246,9 +240,7 @@ def _route_sequences(
             continue
         record = evidence_by_id.get(str(edge.get("evidence_id") or ""))
         line = int(record["start_line"]) if record and record["start_line"] else 0
-        calls_by_source.setdefault(str(source_id), []).append(
-            (line, str(edge["target_ref"]))
-        )
+        calls_by_source.setdefault(str(source_id), []).append((line, str(edge["target_ref"])))
 
     candidates: list[tuple[str, str, list[tuple[str, str]]]] = []
     for claim in claims:
@@ -332,15 +324,11 @@ def _persistence_erd(claims: tuple[dict[str, Any], ...]) -> Diagram:
             match = pattern.match(text)
             if match is None:
                 continue
-            entry = tables.setdefault(
-                match.group("table"), {"creates": set(), "writes": set()}
-            )
+            entry = tables.setdefault(match.group("table"), {"creates": set(), "writes": set()})
             entry[role].add(match.group("symbol").rsplit(".", 1)[-1])
 
     if not tables:
-        return _omitted(
-            name, title, "No claim records a durable table for this snapshot."
-        )
+        return _omitted(name, title, "No claim records a durable table for this snapshot.")
 
     lines = ["flowchart LR"]
     accessors: set[str] = set()
@@ -389,9 +377,5 @@ def build_diagrams(
     if name == "persistence_erd":
         return (_persistence_erd(claims),)
     if name == "route_sequence":
-        return _route_sequences(
-            claims, symbols, edges, evidence_by_id, route_sequence_limit
-        )
-    return (
-        _omitted(name, name, f"No generator is registered for diagram '{name}'."),
-    )
+        return _route_sequences(claims, symbols, edges, evidence_by_id, route_sequence_limit)
+    return (_omitted(name, name, f"No generator is registered for diagram '{name}'."),)

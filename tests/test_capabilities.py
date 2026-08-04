@@ -5,10 +5,12 @@
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.spec.capabilities import build_capabilities, verifying_paths
+from open_skeleton.spec.capabilities import Capability, build_capabilities, verifying_paths
 
 
-def _claim(claim_id: str, category: str, text: str, evidence: tuple[str, ...] = ()) -> dict[str, Any]:
+def _claim(
+    claim_id: str, category: str, text: str, evidence: tuple[str, ...] = ()
+) -> dict[str, Any]:
     return {
         "claim_id": claim_id,
         "category": category,
@@ -25,16 +27,43 @@ class CapabilityClusteringTests(TestCase):
         {"path": "scripts/smoke.py", "role": "source"},
     )
     SYMBOLS = (
-        {"qualified_name": "backend.main.attack", "kind": "async_function", "path": "backend/main.py"},
-        {"qualified_name": "backend.main.move", "kind": "async_function", "path": "backend/main.py"},
-        {"qualified_name": "backend.main.get_player", "kind": "async_function", "path": "backend/main.py"},
+        {
+            "qualified_name": "backend.main.attack",
+            "kind": "async_function",
+            "path": "backend/main.py",
+        },
+        {
+            "qualified_name": "backend.main.move",
+            "kind": "async_function",
+            "path": "backend/main.py",
+        },
+        {
+            "qualified_name": "backend.main.get_player",
+            "kind": "async_function",
+            "path": "backend/main.py",
+        },
         {"qualified_name": "backend.util.helper", "kind": "function", "path": "backend/util.py"},
         {"qualified_name": "scripts.smoke.run", "kind": "function", "path": "scripts/smoke.py"},
     )
     CLAIMS = (
-        _claim("r1", "http_route", "POST /action/attack/{player_id} is handled by backend.main.attack.", ("e1",)),
-        _claim("r2", "http_route", "POST /action/move/{player_id} is handled by backend.main.move.", ("e2",)),
-        _claim("r3", "http_route", "GET /player/{player_id} is handled by backend.main.get_player.", ("e3",)),
+        _claim(
+            "r1",
+            "http_route",
+            "POST /action/attack/{player_id} is handled by backend.main.attack.",
+            ("e1",),
+        ),
+        _claim(
+            "r2",
+            "http_route",
+            "POST /action/move/{player_id} is handled by backend.main.move.",
+            ("e2",),
+        ),
+        _claim(
+            "r3",
+            "http_route",
+            "GET /player/{player_id} is handled by backend.main.get_player.",
+            ("e3",),
+        ),
         _claim("h1", "operator_harness", "scripts/smoke.py is an operator harness.", ("e4",)),
     )
     EVIDENCE = {
@@ -44,7 +73,7 @@ class CapabilityClusteringTests(TestCase):
         "e4": {"path": "scripts/smoke.py"},
     }
 
-    def _build(self, edges: tuple[dict[str, Any], ...]):
+    def _build(self, edges: tuple[dict[str, Any], ...]) -> tuple[Capability, ...]:
         return build_capabilities(
             files=self.FILES,
             claims=self.CLAIMS,
@@ -142,10 +171,7 @@ class CapabilityClusteringTests(TestCase):
     def test_route_handlers_are_not_duplicated_into_module_clusters(self) -> None:
         capabilities = self._build(())
         module_symbols = {
-            symbol
-            for item in capabilities
-            if item.kind == "module"
-            for symbol in item.symbols
+            symbol for item in capabilities if item.kind == "module" for symbol in item.symbols
         }
         self.assertNotIn("backend.main.attack", module_symbols)
         self.assertIn("backend.util.helper", module_symbols)
@@ -157,6 +183,4 @@ class CapabilityClusteringTests(TestCase):
     def test_output_is_deterministic(self) -> None:
         first = self._build(())
         second = self._build(())
-        self.assertEqual(
-            [item.to_dict() for item in first], [item.to_dict() for item in second]
-        )
+        self.assertEqual([item.to_dict() for item in first], [item.to_dict() for item in second])

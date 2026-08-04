@@ -60,14 +60,73 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "UP"]
+# Broad by default. This project makes correctness claims about other people's
+# code, so its own defect classes should be caught mechanically rather than in
+# review.
+select = [
+  "A",    # shadowed builtins
+  "ARG",  # unused arguments
+  "B",    # bugbear: likely bugs
+  "BLE",  # blind except
+  "C4",   # comprehension clarity
+  "DTZ",  # naive datetimes
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "G",    # logging format
+  "I",    # import order
+  "INP",  # implicit namespace packages
+  "ISC",  # implicit string concatenation
+  "N",    # naming
+  "PERF", # obvious performance traps
+  "PIE",  # misc lints
+  "PLC", "PLE", "PLW",  # pylint conventions, errors, warnings
+  "PTH",  # pathlib over os.path
+  "RET",  # return consistency
+  "RUF",  # ruff-specific
+  "S",    # bandit security rules
+  "SIM",  # simplification
+  "SLF",  # private member access
+  "T20",  # stray print/pprint
+  "TID",  # tidy imports
+  "UP",   # pyupgrade
+  "W",    # pycodestyle warnings
+]
+ignore = [
+  # The CLI's job is to write to stdout.
+  "T201",
+  # `ruff format` owns line length. What it leaves long is a single
+  # unsplittable token — a URL, a message, or a regex — and breaking those by
+  # hand costs more readability than it buys.
+  "E501",
+  # Report builders append to a `lines` list inside branching loops. Rewriting
+  # those as comprehensions obscures the order the document is assembled in.
+  "PERF401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/open_skeleton/cli.py" = ["T201"]
+# Query builders interpolate clause fragments drawn from a closed set of column
+# names defined in this module. Every caller-supplied value is bound with a `?`
+# placeholder. The diagnostic cannot be suppressed inline because it anchors to
+# the opening line of a triple-quoted string.
+"src/open_skeleton/ledger.py" = ["S608"]
+# Standalone measurement scripts, deliberately not an importable package.
+"benchmarks/**" = ["T201", "S101", "INP001"]
+# The suite is unittest by choice: it ships with the standard library, which
+# keeps the deterministic path dependency-free.
+"tests/**" = [
+  "S101",    # assert is the point of a test
+  "SLF001",  # tests reach into internals deliberately
+  "ARG",     # fake callbacks take arguments they ignore
+  "PLR2004", # fixture literals are clearer inline
+  "RUF012",  # fixture tables are class-level constants by design
+  "S310",    # dashboard tests open a loopback URL they just started
+  "S104",    # a test asserts that binding to all interfaces is rejected
+  "PLC0415", # optional extras are imported inside the test that needs them
+]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src"]
-check_untyped_defs = true
-disallow_incomplete_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
+files = ["src", "tests"]
+strict = true
 ignore_missing_imports = true
