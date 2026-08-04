@@ -15,10 +15,20 @@ Contributions should preserve the evidence-first and local-first invariants in `
 ```powershell
 python -m compileall -q src tests benchmarks
 python -m unittest discover -s tests -v
-ruff check src tests
-mypy src
+ruff format --check src tests benchmarks
+ruff check src tests benchmarks
+mypy
 python benchmarks\scaling\run_scaling.py
 ```
+
+`ruff format` is authoritative for layout, so run it rather than hand-aligning.
+`mypy` runs in strict mode over both `src` and `tests`, so a new function without
+annotations fails. Ruff runs a broad rule set including the bandit security
+checks.
+
+Suppress a rule only with an inline `# noqa: <CODE>` plus a comment saying why,
+or with a per-file entry in `pyproject.toml` carrying the same justification. A
+bare suppression will be sent back.
 
 Run the pinned benchmark before making accuracy or superiority claims. Use scoped Conventional Commits such as `feat(analyzer): detect documented route drift`.
 
