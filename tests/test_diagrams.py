@@ -194,3 +194,107 @@ class UnknownGeneratorTests(TestCase):
         self.assertIsNone(diagram.mermaid)
         assert diagram.omitted_reason is not None
         self.assertIn("No generator is registered", diagram.omitted_reason)
+
+
+class HandlerFlowTests(TestCase):
+    SYMBOLS = (
+        {
+            "symbol_id": "s_attack",
+            "qualified_name": "backend.main.attack",
+            "kind": "async_function",
+            "path": "backend/main.py",
+            "start_line": 100,
+            "metadata": {
+                "control_flow": [
+                    {"kind": "guard", "line": 102, "label": "not player", "depth": 0},
+                    {"kind": "raise", "line": 103, "label": "HTTP 404", "depth": 1},
+                    {"kind": "return", "line": 110, "label": "{'ok': True}", "depth": 0},
+                ]
+            },
+        },
+        {
+            "symbol_id": "s_plain",
+            "qualified_name": "backend.main.ping",
+            "kind": "async_function",
+            "path": "backend/main.py",
+            "start_line": 200,
+            "metadata": {
+                "control_flow": [
+                    {"kind": "return", "line": 201, "label": "{'ok': True}", "depth": 0}
+                ]
+            },
+        },
+    )
+
+    def _build(self, *claims: dict[str, Any]) -> tuple[Diagram, ...]:
+        return build_diagrams(
+            "handler_flow",
+            files=(),
+            claims=claims,
+            symbols=self.SYMBOLS,
+            edges=(),
+            evidence_by_id={},
+        )
+
+    def test_guards_become_decisions_and_raises_become_rejections(self) -> None:
+        diagram = self._build(_claim("http_route", "POST /a is handled by backend.main.attack."))[0]
+        assert diagram.mermaid is not None
+        self.assertIn('{"not player<br/>L102"}', diagram.mermaid)
+        self.assertIn("reject: HTTP 404", diagram.mermaid)
+        self.assertIn("return {'ok': True}", diagram.mermaid)
+
+    def test_every_node_carries_its_line(self) -> None:
+        diagram = self._build(_claim("http_route", "POST /a is handled by backend.main.attack."))[0]
+        assert diagram.mermaid is not None
+        for line in ("L102", "L103", "L110"):
+            self.assertIn(line, diagram.mermaid)
+
+    def test_a_handler_with_no_decision_is_not_drawn(self) -> None:
+        diagrams = self._build(_claim("http_route", "GET /ping is handled by backend.main.ping."))
+        self.assertIsNone(diagrams[0].mermaid)
+        assert diagrams[0].omitted_reason is not None
+        self.assertIn("no decision structure", diagrams[0].omitted_reason)
+
+    def test_quotes_in_a_label_do_not_break_mermaid(self) -> None:
+        symbols = (
+            {
+                "symbol_id": "s",
+                "qualified_name": "m.h",
+                "kind": "function",
+                "path": "m.py",
+                "start_line": 1,
+                "metadata": {
+                    "control_flow": [
+                        {"kind": "guard", "line": 2, "label": 'x == "a|b"', "depth": 0},
+                        {"kind": "return", "line": 3, "label": "1", "depth": 0},
+                    ]
+                },
+            },
+        )
+        diagram = build_diagrams(
+            "handler_flow",
+            files=(),
+            claims=(_claim("http_route", "GET /x is handled by m.h."),),
+            symbols=symbols,
+            edges=(),
+            evidence_by_id={},
+        )[0]
+        assert diagram.mermaid is not None
+        self.assertNotIn('"a|b"', diagram.mermaid)
+        self.assertIn("'a/b'", diagram.mermaid)
+
+    def test_limit_bounds_the_number_of_flows(self) -> None:
+        claims = tuple(
+            _claim("http_route", f"POST /r{index} is handled by backend.main.attack.")
+            for index in range(5)
+        )
+        diagrams = build_diagrams(
+            "handler_flow",
+            files=(),
+            claims=claims,
+            symbols=self.SYMBOLS,
+            edges=(),
+            evidence_by_id={},
+            handler_flow_limit=2,
+        )
+        self.assertEqual(len(diagrams), 2)

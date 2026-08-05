@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
+from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 
@@ -227,3 +228,73 @@ async def describe(ai_client):
             self.assertEqual(claim.status, "verified")
             self.assertIn("None", claim.claim)
             self.assertIn("empty string", claim.claim)
+
+
+class ControlFlowExtractionTests(TestCase):
+    SOURCE = """
+from fastapi import FastAPI, HTTPException
+app = FastAPI()
+
+@app.post("/a/{pid}")
+async def handler(pid: str):
+    if not lookup(pid):
+        raise HTTPException(status_code=404, detail="missing")
+    def helper():
+        if never_reached:
+            return 1
+    for item in items:
+        if item.bad:
+            continue
+    return {"ok": True}
+"""
+
+    def _flow(self, source: str) -> list[dict[str, object]]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.py").write_text(source, encoding="utf-8")
+            result = PythonAstAnalyzer().analyze(scan_repository(root))
+        for symbol in result.symbols:
+            flow = symbol.metadata.get("control_flow")
+            if flow:
+                return list(flow)
+        return []
+
+    def test_guards_raises_and_returns_are_recorded_in_line_order(self) -> None:
+        flow = self._flow(self.SOURCE)
+        kinds = [item["kind"] for item in flow]
+        self.assertEqual(kinds[0], "guard")
+        self.assertEqual(kinds[1], "raise")
+        self.assertEqual(flow[-1]["kind"], "return")
+        self.assertEqual([item["line"] for item in flow], sorted(item["line"] for item in flow))
+
+    def test_a_nested_function_body_is_not_entered(self) -> None:
+        flow = self._flow(self.SOURCE)
+        labels = [item["label"] for item in flow]
+        self.assertNotIn("never_reached", labels)
+
+    def test_http_status_is_extracted_from_a_literal(self) -> None:
+        flow = self._flow(self.SOURCE)
+        raises = [item for item in flow if item["kind"] == "raise"]
+        self.assertEqual(raises[0]["label"], "HTTP 404")
+
+    def test_a_positional_status_argument_is_also_read(self) -> None:
+        flow = self._flow(
+            "from fastapi import FastAPI, HTTPException\n"
+            "app = FastAPI()\n"
+            '@app.get("/x")\n'
+            "def h():\n"
+            "    if bad:\n"
+            "        raise HTTPException(429)\n"
+            "    return 1\n"
+        )
+        raises = [item for item in flow if item["kind"] == "raise"]
+        self.assertEqual(raises[0]["label"], "HTTP 429")
+
+    def test_non_route_functions_record_no_control_flow(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "m.py").write_text(
+                "def plain():\n    if x:\n        return 1\n", encoding="utf-8"
+            )
+            result = PythonAstAnalyzer().analyze(scan_repository(root))
+        self.assertTrue(all("control_flow" not in item.metadata for item in result.symbols))

@@ -123,6 +123,109 @@ def _is_main_guard(node: ast.If) -> bool:
     ) == ("__main__", "__name__")
 
 
+MAX_FLOW_NODES = 24
+MAX_FLOW_LABEL = 68
+
+
+def _flow_label(node: ast.AST) -> str:
+    """Render an expression back to source, bounded, for a diagram label."""
+
+    try:
+        text = ast.unparse(node)
+    except (AttributeError, ValueError):  # pragma: no cover - unparse is stdlib
+        return "<expression>"
+    text = " ".join(text.split())
+    if len(text) > MAX_FLOW_LABEL:
+        text = text[: MAX_FLOW_LABEL - 1] + "…"
+    return text
+
+
+def _raise_summary(node: ast.Raise) -> str | None:
+    """Describe a raise, preferring an HTTP status when one is literal."""
+
+    exception = node.exc
+    if exception is None:
+        return "re-raise"
+    name = (_expr_name(exception) or "").split(".")[-1]
+    if isinstance(exception, ast.Call) and name == "HTTPException":
+        for keyword in exception.keywords:
+            if keyword.arg == "status_code":
+                value = _literal_number(keyword.value)
+                if value is not None:
+                    return f"HTTP {int(value)}"
+        if exception.args:
+            value = _literal_number(exception.args[0])
+            if value is not None:
+                return f"HTTP {int(value)}"
+        return "HTTPException"
+    return name or "raise"
+
+
+def _control_flow(node: ast.AST) -> list[dict[str, Any]]:
+    """Ordered guards, raises, and returns directly inside one function body.
+
+    This is a guard-and-exit trace, not a control-flow graph: it records the
+    decisions and terminations a reader follows to understand when a handler
+    rejects a request. Nested function and class definitions are not entered,
+    because their bodies run under a different call, and loops are recorded as
+    a single node rather than unrolled.
+    """
+
+    events: list[dict[str, Any]] = []
+
+    def walk(statements: list[ast.stmt], depth: int) -> None:
+        if depth > 3:
+            return
+        for statement in statements:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(statement, ast.If):
+                events.append(
+                    {
+                        "kind": "guard",
+                        "line": statement.lineno,
+                        "label": _flow_label(statement.test),
+                        "depth": depth,
+                    }
+                )
+                walk(statement.body, depth + 1)
+                walk(statement.orelse, depth + 1)
+                continue
+            if isinstance(statement, ast.Raise):
+                summary = _raise_summary(statement)
+                if summary:
+                    events.append(
+                        {
+                            "kind": "raise",
+                            "line": statement.lineno,
+                            "label": summary,
+                            "depth": depth,
+                        }
+                    )
+                continue
+            if isinstance(statement, ast.Return):
+                events.append(
+                    {
+                        "kind": "return",
+                        "line": statement.lineno,
+                        "label": (_flow_label(statement.value) if statement.value else "None"),
+                        "depth": depth,
+                    }
+                )
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                nested = getattr(statement, field, None)
+                if isinstance(nested, list):
+                    walk([item for item in nested if isinstance(item, ast.stmt)], depth + 1)
+            for handler in getattr(statement, "handlers", []):
+                walk(handler.body, depth + 1)
+
+    body = getattr(node, "body", [])
+    walk([item for item in body if isinstance(item, ast.stmt)], 0)
+    events.sort(key=lambda item: int(item["line"]))
+    return events[:MAX_FLOW_NODES]
+
+
 def _module_mutable_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for statement in tree.body:
@@ -505,6 +608,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         metadata: dict[str, Any] = {}
         if routes:
             metadata["routes"] = routes
+            metadata["control_flow"] = _control_flow(node)
         symbol = self._symbol(
             qualified_name=qualified,
             kind=kind,

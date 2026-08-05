@@ -235,6 +235,18 @@ Two filters decide what appears, and both matter:
 
 Repeated calls to the same collaborator method are drawn once.
 
+### Handler guard and exit flows
+
+`handler_flow` draws the decision structure a reader follows to understand when a
+handler rejects a request: `if` guards as diamonds, `raise` as a rejection with
+its HTTP status when the status is a literal, and each `return` as an exit. Every
+node carries the line it came from.
+
+It is a **guard-and-exit trace, not a control-flow graph**. Nested function and
+class bodies are not entered because they run under a different call, loops
+appear as a single node rather than unrolled, and nesting is bounded. A handler
+with no guard and one exit is skipped: there is no decision to draw.
+
 ### What is deliberately not generated
 
 **State transition diagrams are not produced.** Recovering a state machine from

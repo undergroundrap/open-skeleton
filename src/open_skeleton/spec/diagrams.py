@@ -312,6 +312,92 @@ def _route_sequences(
     return tuple(diagrams)
 
 
+def _mermaid_text(value: str) -> str:
+    """Escape a label for a Mermaid node without changing what it says."""
+
+    return value.replace('"', "'").replace("|", "/").replace("\n", " ")
+
+
+def _handler_flows(
+    claims: tuple[dict[str, Any], ...],
+    symbols: tuple[dict[str, Any], ...],
+    limit: int,
+) -> tuple[Diagram, ...]:
+    name, title = "handler_flow", "Handler guard and exit flow"
+    by_name = {str(item["qualified_name"]): item for item in symbols}
+
+    candidates: list[tuple[str, str, list[dict[str, Any]]]] = []
+    for claim in claims:
+        if str(claim["category"]) != "http_route":
+            continue
+        match = _ROUTE_CLAIM.match(str(claim["claim"]))
+        if match is None:
+            continue
+        symbol = by_name.get(match.group("handler"))
+        if symbol is None:
+            continue
+        flow = symbol.get("metadata", {}).get("control_flow") or []
+        # A handler with no guard and a single exit has no decision to draw.
+        if sum(1 for item in flow if item["kind"] != "return") == 0:
+            continue
+        candidates.append(
+            (f"{match.group('method')} {match.group('path')}", match.group("handler"), flow)
+        )
+
+    if not candidates:
+        return (
+            _omitted(
+                name,
+                title,
+                "No route handler recorded a guard or an early exit, so there is no "
+                "decision structure to draw.",
+            ),
+        )
+
+    candidates.sort(key=lambda item: (-len(item[2]), item[0]))
+    diagrams: list[Diagram] = []
+    for route, _handler, flow in candidates[:limit]:
+        shown = flow[:MAX_DIAGRAM_NODES]
+        lines = ["flowchart TD", f'    entry(["{_mermaid_text(route)}"])']
+        previous = "entry"
+        edges = 0
+        for index, event in enumerate(shown):
+            node = f"n{index}"
+            label = _mermaid_text(f"{event['label']}<br/>L{event['line']}")
+            kind = str(event["kind"])
+            if kind == "guard":
+                lines.append(f'    {node}{{"{label}"}}')
+            elif kind == "raise":
+                lines.append(f'    {node}["reject: {label}"]')
+            else:
+                lines.append(f'    {node}(["return {label}"])')
+            connector = (
+                "-->|yes|"
+                if kind != "guard" and index and (str(shown[index - 1]["kind"]) == "guard")
+                else "-->"
+            )
+            lines.append(f"    {previous} {connector} {node}")
+            edges += 1
+            # A rejection or a return ends this path; the next node continues
+            # from the guard that preceded it rather than from the exit.
+            if kind in {"raise", "return"} and index:
+                previous = f"n{index - 1}" if str(shown[index - 1]["kind"]) == "guard" else node
+            else:
+                previous = node
+
+        diagrams.append(
+            Diagram(
+                name=f"{name}:{route}",
+                title=f"{title} — {route}",
+                mermaid="\n".join(lines),
+                node_count=len(shown) + 1,
+                edge_count=edges,
+                truncated=len(flow) > len(shown),
+            )
+        )
+    return tuple(diagrams)
+
+
 def _persistence_erd(claims: tuple[dict[str, Any], ...]) -> Diagram:
     name, title = "persistence_erd", "Durable storage entities and access"
     creators = re.compile(r"^(?P<symbol>\S+) creates \S+ table (?P<table>\w+)\.$")
@@ -365,6 +451,7 @@ def build_diagrams(
     edges: tuple[dict[str, Any], ...],
     evidence_by_id: dict[str, dict[str, Any]],
     route_sequence_limit: int = 6,
+    handler_flow_limit: int = 12,
 ) -> tuple[Diagram, ...]:
     """Render every diagram a named generator produces for this snapshot."""
 
@@ -376,6 +463,8 @@ def build_diagrams(
         return (_concentration(files),)
     if name == "persistence_erd":
         return (_persistence_erd(claims),)
+    if name == "handler_flow":
+        return _handler_flows(claims, symbols, handler_flow_limit)
     if name == "route_sequence":
         return _route_sequences(claims, symbols, edges, evidence_by_id, route_sequence_limit)
     return (_omitted(name, name, f"No generator is registered for diagram '{name}'."),)

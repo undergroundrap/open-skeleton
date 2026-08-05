@@ -110,7 +110,8 @@
           },
           "diagrams": [
             "route_surface",
-            "route_sequence"
+            "route_sequence",
+            "handler_flow"
           ],
           "cross_references": [
             "surface.interface-drift",
