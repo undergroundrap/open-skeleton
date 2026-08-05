@@ -12,6 +12,10 @@ All notable changes will be documented here. This project follows Semantic Versi
   integration, security posture, verification, and enterprise delivery concerns
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
+- lexical state value domains for JavaScript and TypeScript, bringing the
+  diagram inventory to 83
+- `benchmarks/comparison/run_comparison.py`, which counts both documents on
+  disk rather than asserting a comparison
 - guard-and-exit flowcharts for non-route functions, and a real `erDiagram`
   for durable storage in place of a flowchart approximation
 - observed value-assignment state diagrams, each edge labelled with the real

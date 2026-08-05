@@ -145,6 +145,37 @@ Open Skeleton completed in about 1.2 seconds; the supplied baseline artifact too
 
 **These numbers describe one author-reviewed fixture, not universal product superiority**, and the comparison is deliberately narrow. It measures whether the material findings of a long-form specification can be reproduced deterministically and cited verifiably. It does not measure breadth: the baseline artifact also contains a requirements catalog, process and state-machine diagrams, architectural decision records, and user-interface analysis that Open Skeleton does not attempt. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
+## Head-to-head comparison
+
+`benchmarks/comparison/run_comparison.py` measures this engine against a supplied
+baseline specification of the same repository. Every figure is counted from the
+two documents on disk; the baseline artifact is not redistributed here, so supply
+your own export to reproduce it.
+
+```powershell
+python benchmarks\comparisonun_comparison.py `
+  --repository C:\path	oixture `
+  --baseline C:\path	oaseline	ech_spec.md `
+  --output-dir comparison-output
+```
+
+On `SINGLE-PLAYER-AI-MUD`, against a commercial platform's export of the same
+commit:
+
+| Measure | Open Skeleton | Baseline |
+|---|---:|---:|
+| Generation time | ~2 s | 5 h 47 m |
+| Diagrams | 83 | 82 |
+| References carrying a line number | 320 | 375 |
+| Citations verified against source hashes | 744 | 0 |
+| Citation integrity | 100% | not reported |
+
+The two documents do not attempt the same scope: the baseline carries a
+requirements catalog and interface analysis this engine does not produce, and it
+is roughly nine times longer. The rows that matter are the last two. A reference
+naming only a file cannot be checked; a citation pinned to a content hash is
+re-resolved on every `spec --verify` run.
+
 ## Hum language support
 
 Open Skeleton consumes a versioned semantic graph produced by Hum tooling. Generate
