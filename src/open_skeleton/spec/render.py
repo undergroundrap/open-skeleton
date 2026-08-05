@@ -336,9 +336,22 @@ def build_spec(
         if probe.kind in {"claim_category", "sourced_claim_category"}
         for term in probe.query.split(": ", 1)[-1].split(", ")
     )
+    claim_locations: dict[str, str] = {}
+    for claim in claims:
+        for evidence_id in claim.get("supporting_evidence", ()):
+            record = evidence_by_id.get(evidence_id)
+            if record is None or str(record["path"]) in {".", ""}:
+                continue
+            line = record["start_line"]
+            claim_locations[str(claim["claim_id"])] = (
+                f"{record['path']}:{line}" if line else str(record["path"])
+            )
+            break
     consequences = derive(claims, absent_categories=absent)
     dossiers = build_dossiers(capabilities, claims, evidence_by_id, consequences)
-    panel_context = replace(panel_context, consequences=consequences)
+    panel_context = replace(
+        panel_context, consequences=consequences, claim_locations=claim_locations
+    )
     for index, item in enumerate(rendered):
         if not item.panels:
             continue

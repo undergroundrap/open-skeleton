@@ -34,6 +34,7 @@ class PanelContext:
     capabilities: tuple[Capability, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
+    claim_locations: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,21 +247,31 @@ def _verification_gaps(capabilities: tuple[Capability, ...]) -> Panel:
     )
 
 
-def _consequences(consequences: tuple[Consequence, ...]) -> Panel:
+def _consequences(
+    consequences: tuple[Consequence, ...],
+    locations: dict[str, str],
+) -> Panel:
+    # A consequence a reader cannot locate is worth less than one they can, so
+    # the derivation shows where its claims live rather than only how many.
     rows = tuple(
         (
             item.severity,
             item.statement,
-            ", ".join(f"`{category}`" for category in item.derived_from),
-            f"{len(item.claim_ids):,}",
+            _truncate(
+                tuple(
+                    dict.fromkeys(
+                        locations[claim_id] for claim_id in item.claim_ids if claim_id in locations
+                    )
+                )
+            ),
         )
         for item in consequences
     )
     return Panel(
         name="consequences",
         title="What these findings imply together",
-        columns=("Severity", "Consequence", "Derived from", "Claims"),
-        alignments=("left", "left", "left", "right"),
+        columns=("Severity", "Consequence", "Evidence"),
+        alignments=("left", "left", "left"),
         rows=rows,
         note=(
             "Each row composes claims already established above; no row asserts "
@@ -362,7 +373,7 @@ def build_panel(name: str, context: PanelContext) -> Panel:
     if name == "failure_surface":
         return _failure_surface(context.symbols)
     if name == "consequences":
-        return _consequences(context.consequences)
+        return _consequences(context.consequences, context.claim_locations)
     if name == "verification_gaps":
         return _verification_gaps(context.capabilities)
     return Panel(  # pragma: no cover - profile validation rejects unknown panels

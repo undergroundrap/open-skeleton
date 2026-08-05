@@ -31,7 +31,9 @@ from pathlib import Path
 from typing import Any
 
 WINDOW = 400
-FILE_REFERENCE = re.compile(r"[\w./-]+\.(?:py|tsx|ts|js|jsx|css|md|json|toml|rs)")
+FILE_REFERENCE = re.compile(
+    r"[\w./*-]+\.(?:py|tsx|ts|js|jsx|css|md|json|toml|rs|ya?ml|txt|lock|cfg|ini)"
+)
 
 
 def _score(document: str, question: dict[str, Any]) -> tuple[bool, bool]:
@@ -52,6 +54,7 @@ def _score(document: str, question: dict[str, Any]) -> tuple[bool, bool]:
     if not positions:
         return False, False
 
+    answered = False
     for answer in question["answers"]:
         needle = answer.casefold()
         start = 0
@@ -64,9 +67,13 @@ def _score(document: str, question: dict[str, Any]) -> tuple[bool, bool]:
             # otherwise a stray number anywhere in the document would count.
             if not any(abs(found - anchor) <= WINDOW for anchor in positions):
                 continue
+            answered = True
             window = document[max(0, found - WINDOW) : found + WINDOW]
-            return True, bool(FILE_REFERENCE.search(window))
-    return False, False
+            if FILE_REFERENCE.search(window):
+                # Any cited occurrence settles it; an earlier uncited mention of
+                # the same answer must not mask a later cited one.
+                return True, True
+    return answered, False
 
 
 def main() -> int:

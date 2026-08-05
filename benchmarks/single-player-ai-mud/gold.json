@@ -54,295 +54,796 @@
       "area": "API surface",
       "statement": "The FastAPI application declares exactly 44 HTTP route handlers.",
       "expected_status": "verified",
-      "match": {"category": "http_route_inventory", "statuses": ["verified"], "all_patterns": ["declares 44 HTTP route handlers"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct", "notes": "The export inventories 44 route decorators."}
+      "match": {
+        "category": "http_route_inventory",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "declares 44 HTTP route handlers"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct",
+        "notes": "The export inventories 44 route decorators."
+      }
     },
     {
       "id": "client-fetch-count",
       "area": "Client integration",
       "statement": "The main client contains exactly 55 fetch call sites.",
       "expected_status": "verified",
-      "match": {"category": "http_client_inventory", "statuses": ["verified"], "all_patterns": ["55 fetch call sites"]},
-      "evidence_paths_any": ["frontend/app/page\\.tsx"],
-      "baseline": {"outcome": "hit", "evidence": "correct", "notes": "The export reports all 55 fetch sites."}
+      "match": {
+        "category": "http_client_inventory",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "55 fetch call sites"
+        ]
+      },
+      "evidence_paths_any": [
+        "frontend/app/page\\.tsx"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct",
+        "notes": "The export reports all 55 fetch sites."
+      }
     },
     {
       "id": "hardcoded-origin-count",
       "area": "Client integration",
       "statement": "The client contains 56 string-literal references to http://localhost:8000.",
       "expected_status": "verified",
-      "match": {"category": "hardcoded_endpoint", "statuses": ["verified"], "all_patterns": ["56 string-literal references", "localhost:8000"]},
-      "evidence_paths_any": ["frontend/app/page\\.tsx"],
-      "baseline": {"outcome": "hit", "evidence": "correct", "notes": "The export distinguishes 55 fetch calls plus one sendBeacon literal."}
+      "match": {
+        "category": "hardcoded_endpoint",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "56 string-literal references",
+          "localhost:8000"
+        ]
+      },
+      "evidence_paths_any": [
+        "frontend/app/page\\.tsx"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct",
+        "notes": "The export distinguishes 55 fetch calls plus one sendBeacon literal."
+      }
     },
     {
       "id": "frontend-concentration",
       "area": "Maintainability",
       "statement": "frontend/app/page.tsx is 4,476 lines.",
       "expected_status": "verified",
-      "match": {"category": "concentration", "statuses": ["verified"], "all_patterns": ["frontend/app/page\\.tsx", "4476 lines"]},
-      "evidence_paths_any": ["frontend/app/page\\.tsx"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "concentration",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "frontend/app/page\\.tsx",
+          "4476 lines"
+        ]
+      },
+      "evidence_paths_any": [
+        "frontend/app/page\\.tsx"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "backend-concentration",
       "area": "Maintainability",
       "statement": "backend/main.py is 2,111 lines.",
       "expected_status": "verified",
-      "match": {"category": "concentration", "statuses": ["verified"], "all_patterns": ["backend/main\\.py", "2111 lines"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "concentration",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "backend/main\\.py",
+          "2111 lines"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "css-concentration",
       "area": "Maintainability",
       "statement": "frontend/app/globals.css is 1,836 lines.",
       "expected_status": "verified",
-      "match": {"category": "concentration", "statuses": ["verified"], "all_patterns": ["frontend/app/globals\\.css", "1836 lines"]},
-      "evidence_paths_any": ["frontend/app/globals\\.css"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "concentration",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "frontend/app/globals\\.css",
+          "1836 lines"
+        ]
+      },
+      "evidence_paths_any": [
+        "frontend/app/globals\\.css"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "simulation-concentration",
       "area": "Maintainability",
       "statement": "scripts/sim_run.py is 1,115 lines.",
       "expected_status": "verified",
-      "match": {"category": "concentration", "statuses": ["verified"], "all_patterns": ["scripts/sim_run\\.py", "1115 lines"]},
-      "evidence_paths_any": ["scripts/sim_run\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "concentration",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "scripts/sim_run\\.py",
+          "1115 lines"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/sim_run\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "players-table",
       "area": "Persistence",
       "statement": "SQLite table players is created by DBManager.",
       "expected_status": "verified",
-      "match": {"category": "storage_schema", "statuses": ["verified"], "all_patterns": ["creates SQLite table players"]},
-      "evidence_paths_any": ["backend/app/core/vector_db\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "storage_schema",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "creates SQLite table players"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/app/core/vector_db\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "zones-table",
       "area": "Persistence",
       "statement": "SQLite table zones is created by DBManager.",
       "expected_status": "verified",
-      "match": {"category": "storage_schema", "statuses": ["verified"], "all_patterns": ["creates SQLite table zones"]},
-      "evidence_paths_any": ["backend/app/core/vector_db\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "storage_schema",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "creates SQLite table zones"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/app/core/vector_db\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "players-json-document",
       "area": "Persistence",
       "statement": "Player documents are serialized as JSON into SQLite table players.",
       "expected_status": "verified",
-      "match": {"category": "storage_serialization", "statuses": ["verified"], "all_patterns": ["serializes JSON into SQLite table players"]},
-      "evidence_paths_any": ["backend/app/core/vector_db\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "storage_serialization",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "serializes JSON into SQLite table players"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/app/core/vector_db\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "zones-json-document",
       "area": "Persistence",
       "statement": "Zone documents are serialized as JSON into SQLite table zones.",
       "expected_status": "verified",
-      "match": {"category": "storage_serialization", "statuses": ["verified"], "all_patterns": ["serializes JSON into SQLite table zones"]},
-      "evidence_paths_any": ["backend/app/core/vector_db\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "storage_serialization",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "serializes JSON into SQLite table zones"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/app/core/vector_db\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "dungeon-run-process-state",
       "area": "State ownership",
       "statement": "_dungeon_runs is a mutated module-owned container and therefore a process-local-state candidate.",
       "expected_status": "inferred",
-      "match": {"category": "process_local_state", "statuses": ["inferred"], "all_patterns": ["backend.main._dungeon_runs", "process-local"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "process_local_state",
+        "statuses": [
+          "inferred"
+        ],
+        "all_patterns": [
+          "backend.main._dungeon_runs",
+          "process-local"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "dungeon-pointer-repair",
       "area": "State ownership",
       "statement": "Login clears a durable active-run pointer when its process-local run is absent.",
       "expected_status": "verified",
-      "match": {"category": "state_reconciliation", "statuses": ["verified"], "all_patterns": ["player_login", "active_dungeon_run_id", "absent from _dungeon_runs"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "state_reconciliation",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "player_login",
+          "active_dungeon_run_id",
+          "absent from _dungeon_runs"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "wildcard-cors",
       "area": "Security",
       "statement": "CORSMiddleware accepts wildcard origins.",
       "expected_status": "verified",
-      "match": {"category": "security_boundary", "statuses": ["verified"], "all_patterns": ["CORSMiddleware", "wildcard allow_origins"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "security_boundary",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "CORSMiddleware",
+          "wildcard allow_origins"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "route-signature-auth-census",
       "area": "Security",
       "statement": "None of the 44 route signatures uses FastAPI Depends or Security, without claiming that every possible custom check is absent.",
       "expected_status": "verified",
-      "match": {"category": "auth_control_census", "statuses": ["verified"], "all_patterns": ["None of the 44", "Depends or Security", "does not rule out"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "auth_control_census",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "None of the 44",
+          "Depends or Security",
+          "does not rule out"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "tailwind-documentation-conflict",
       "area": "Documentation drift",
       "statement": "The README claims Tailwind CSS while the repository contains no implementation signal.",
       "expected_status": "conflict",
-      "match": {"category": "documentation_drift", "statuses": ["conflict"], "all_patterns": ["Documentation states", "Tailwind CSS", "no Tailwind dependency"]},
-      "evidence_paths_any": ["README\\.md", "frontend/package\\.json"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "documentation_drift",
+        "statuses": [
+          "conflict"
+        ],
+        "all_patterns": [
+          "Documentation states",
+          "Tailwind CSS",
+          "no Tailwind dependency"
+        ]
+      },
+      "evidence_paths_any": [
+        "README\\.md",
+        "frontend/package\\.json"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "orphan-config-candidate",
       "area": "Configuration",
       "statement": "backend/app/core/config.py has no resolved inbound static import and must be treated only as an orphan candidate.",
       "expected_status": "inferred",
-      "match": {"category": "orphan_candidate", "statuses": ["inferred"], "all_patterns": ["backend/app/core/config\\.py", "no resolved inbound", "not a deletion instruction"]},
-      "evidence_paths_any": ["backend/app/core/config\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "orphan_candidate",
+        "statuses": [
+          "inferred"
+        ],
+        "all_patterns": [
+          "backend/app/core/config\\.py",
+          "no resolved inbound",
+          "not a deletion instruction"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/app/core/config\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "player-exponential",
       "area": "Game mathematics",
       "statement": "force_ascend computes player scaling with base 1.15.",
       "expected_status": "verified",
-      "match": {"category": "exponential_scaling", "statuses": ["verified"], "all_patterns": ["force_ascend", "base 1.15"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "exponential_scaling",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "force_ascend",
+          "base 1.15"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "world-exponential",
       "area": "Game mathematics",
       "statement": "zone travel computes world scaling with base 1.10.",
       "expected_status": "verified",
-      "match": {"category": "exponential_scaling", "statuses": ["verified"], "all_patterns": ["travel_to_zone", "base 1.1"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "exponential_scaling",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "travel_to_zone",
+          "base 1.1"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "simulation-exponential-check",
       "area": "Game mathematics",
       "statement": "The simulation harness computes expected ascension scaling with base 1.15.",
       "expected_status": "verified",
-      "match": {"category": "exponential_scaling", "statuses": ["verified"], "all_patterns": ["scripts.sim_run", "base 1.15"]},
-      "evidence_paths_any": ["scripts/sim_run\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "exponential_scaling",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "scripts.sim_run",
+          "base 1.15"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/sim_run\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "unbounded-relative-scaling-conflict",
       "area": "Game mathematics",
       "statement": "Because (1.15/1.10)^N is unbounded, comments claiming a permanently non-trivial wall conflict with the formulas.",
       "expected_status": "conflict",
-      "match": {"category": "mathematical_conflict", "statuses": ["conflict"], "all_patterns": ["1.15", "1.1", "unbounded", "conflict"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "incorrect", "evidence": "partial", "notes": "The export found both bases but repeated the mathematically false perpetual-wall conclusion."}
+      "match": {
+        "category": "mathematical_conflict",
+        "statuses": [
+          "conflict"
+        ],
+        "all_patterns": [
+          "1.15",
+          "1.1",
+          "unbounded",
+          "conflict"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "incorrect",
+        "evidence": "partial",
+        "notes": "The export found both bases but repeated the mathematically false perpetual-wall conclusion."
+      }
     },
     {
       "id": "boost-operator-candidate",
       "area": "Testing",
       "statement": "scripts/boost_char.py is an operator-harness candidate, not a discovered unit test.",
       "expected_status": "inferred",
-      "match": {"category": "operator_harness", "statuses": ["inferred"], "all_patterns": ["scripts/boost_char\\.py", "operator-harness candidate"]},
-      "evidence_paths_any": ["scripts/boost_char\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "operator_harness",
+        "statuses": [
+          "inferred"
+        ],
+        "all_patterns": [
+          "scripts/boost_char\\.py",
+          "operator-harness candidate"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/boost_char\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "reset-operator-candidate",
       "area": "Testing",
       "statement": "scripts/reset_data.py is an operator-harness candidate, not a discovered unit test.",
       "expected_status": "inferred",
-      "match": {"category": "operator_harness", "statuses": ["inferred"], "all_patterns": ["scripts/reset_data\\.py", "operator-harness candidate"]},
-      "evidence_paths_any": ["scripts/reset_data\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "operator_harness",
+        "statuses": [
+          "inferred"
+        ],
+        "all_patterns": [
+          "scripts/reset_data\\.py",
+          "operator-harness candidate"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/reset_data\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "simulation-operator-candidate",
       "area": "Testing",
       "statement": "scripts/sim_run.py is an operator-harness candidate, not a discovered unit test.",
       "expected_status": "inferred",
-      "match": {"category": "operator_harness", "statuses": ["inferred"], "all_patterns": ["scripts/sim_run\\.py", "operator-harness candidate"]},
-      "evidence_paths_any": ["scripts/sim_run\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "operator_harness",
+        "statuses": [
+          "inferred"
+        ],
+        "all_patterns": [
+          "scripts/sim_run\\.py",
+          "operator-harness candidate"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/sim_run\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "smoke-operator-candidate",
       "area": "Testing",
       "statement": "scripts/smoke_test.py is an operator-harness candidate, not a discovered unit test.",
       "expected_status": "inferred",
-      "match": {"category": "operator_harness", "statuses": ["inferred"], "all_patterns": ["scripts/smoke_test\\.py", "operator-harness candidate"]},
-      "evidence_paths_any": ["scripts/smoke_test\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "operator_harness",
+        "statuses": [
+          "inferred"
+        ],
+        "all_patterns": [
+          "scripts/smoke_test\\.py",
+          "operator-harness candidate"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/smoke_test\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "frontend-test-script-absence",
       "area": "Testing",
       "statement": "frontend/package.json defines no test script.",
       "expected_status": "verified",
-      "match": {"category": "testing_gap", "statuses": ["verified"], "all_patterns": ["frontend/package\\.json", "no package test script"]},
-      "evidence_paths_any": ["frontend/package\\.json"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "testing_gap",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "frontend/package\\.json",
+          "no package test script"
+        ]
+      },
+      "evidence_paths_any": [
+        "frontend/package\\.json"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "conventional-test-file-absence",
       "area": "Testing",
       "statement": "No files match the scanner's conventional test-role rules, while nonstandard operator scripts may still exist.",
       "expected_status": "verified",
-      "match": {"category": "testing_census", "statuses": ["verified"], "all_patterns": ["no files classified as conventional test files", "may still exist"]},
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "testing_census",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "no files classified as conventional test files",
+          "may still exist"
+        ]
+      },
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "ci-workflow-absence",
       "area": "Delivery",
       "statement": "No recognized GitHub Actions workflow exists in the bounded snapshot.",
       "expected_status": "verified",
-      "match": {"category": "delivery_automation", "statuses": ["verified"], "all_patterns": ["no recognized CI workflow", "github/workflows"]},
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "delivery_automation",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "no recognized CI workflow",
+          "github/workflows"
+        ]
+      },
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "readme-route-drift",
       "area": "Documentation drift",
       "statement": "The README documents 38 endpoints while source declares 44.",
       "expected_status": "conflict",
-      "match": {"category": "api_documentation_drift", "statuses": ["conflict"], "all_patterns": ["38", "44", "route"]},
-      "evidence_paths_any": ["README\\.md", "backend/main\\.py"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "api_documentation_drift",
+        "statuses": [
+          "conflict"
+        ],
+        "all_patterns": [
+          "38",
+          "44",
+          "route"
+        ]
+      },
+      "evidence_paths_any": [
+        "README\\.md",
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "requests-dependency-drift",
       "area": "Dependencies",
       "statement": "Operator scripts import requests, which backend/requirements.txt does not declare.",
       "expected_status": "conflict",
-      "match": {"category": "dependency_drift", "statuses": ["conflict"], "all_patterns": ["requests", "requirements manifest"]},
-      "evidence_paths_any": ["scripts/", "backend/requirements\\.txt"],
-      "baseline": {"outcome": "hit", "evidence": "correct"}
+      "match": {
+        "category": "dependency_drift",
+        "statuses": [
+          "conflict"
+        ],
+        "all_patterns": [
+          "requests",
+          "requirements manifest"
+        ]
+      },
+      "evidence_paths_any": [
+        "scripts/",
+        "backend/requirements\\.txt"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct"
+      }
     },
     {
       "id": "optional-inference-topology",
       "area": "Runtime topology",
       "statement": "Next.js and Uvicorn are required runtime processes; LM Studio is optional for gameplay.",
       "expected_status": "verified",
-      "match": {"category": "runtime_topology", "statuses": ["verified", "inferred"], "all_patterns": ["two required", "optional", "LM Studio"]},
-      "evidence_paths_any": ["README\\.md", "backend/app/core/ai_client\\.py"],
-      "baseline": {"outcome": "incorrect", "evidence": "partial", "notes": "The executive table says three local processes even though later sections call LM Studio optional."}
+      "match": {
+        "category": "runtime_topology",
+        "statuses": [
+          "verified",
+          "inferred"
+        ],
+        "all_patterns": [
+          "two required",
+          "optional",
+          "LM Studio"
+        ]
+      },
+      "evidence_paths_any": [
+        "README\\.md",
+        "backend/app/core/ai_client\\.py"
+      ],
+      "baseline": {
+        "outcome": "incorrect",
+        "evidence": "partial",
+        "notes": "The executive table says three local processes even though later sections call LM Studio optional."
+      }
     },
     {
       "id": "partial-ai-fallbacks",
       "area": "AI boundary",
       "statement": "Some model failures return None or empty content rather than a hand-authored deterministic substitute.",
       "expected_status": "verified",
-      "match": {"category": "ai_failure_behavior", "statuses": ["verified", "inferred"], "all_patterns": ["None|empty", "fallback"]},
-      "evidence_paths_any": ["backend/main\\.py", "backend/app/core/simulation\\.py"],
-      "baseline": {"outcome": "partial", "evidence": "correct", "notes": "Detailed sections are accurate, but the executive claim overgeneralizes every fallback."}
+      "match": {
+        "category": "ai_failure_behavior",
+        "statuses": [
+          "verified",
+          "inferred"
+        ],
+        "all_patterns": [
+          "None|empty",
+          "fallback"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py",
+        "backend/app/core/simulation\\.py"
+      ],
+      "baseline": {
+        "outcome": "partial",
+        "evidence": "correct",
+        "notes": "Detailed sections are accurate, but the executive claim overgeneralizes every fallback."
+      }
     },
     {
       "id": "fastapi-query-422",
       "area": "HTTP behavior",
       "statement": "FastAPI may produce framework-generated 422 responses for invalid typed path or query parameters.",
       "expected_status": "inferred",
-      "match": {"category": "http_framework_behavior", "statuses": ["verified", "inferred"], "all_patterns": ["422", "query|path"]},
-      "evidence_paths_any": ["backend/main\\.py"],
-      "baseline": {"outcome": "incorrect", "evidence": "partial", "notes": "One section recognizes 422; an appendix later states that none can occur."}
+      "match": {
+        "category": "http_framework_behavior",
+        "statuses": [
+          "verified",
+          "inferred"
+        ],
+        "all_patterns": [
+          "422",
+          "query|path"
+        ]
+      },
+      "evidence_paths_any": [
+        "backend/main\\.py"
+      ],
+      "baseline": {
+        "outcome": "incorrect",
+        "evidence": "partial",
+        "notes": "One section recognizes 422; an appendix later states that none can occur."
+      }
+    },
+    {
+      "id": "hardcoded-endpoints",
+      "area": "Integration",
+      "statement": "Python source hardcodes the LM Studio inference endpoint and the backend base URL rather than reading them from the environment.",
+      "expected_status": "verified",
+      "match": {
+        "category": "hardcoded_endpoint",
+        "statuses": [
+          "verified"
+        ],
+        "all_patterns": [
+          "hardcodes",
+          "1234"
+        ]
+      },
+      "evidence_paths_any": [
+        "ai_client\\.py",
+        "config\\.py",
+        "boost_char\\.py"
+      ],
+      "baseline": {
+        "outcome": "hit",
+        "evidence": "correct",
+        "notes": "The export states that ai_client.py hardcodes the LM Studio URL http://localhost:1234/v1, so both systems make this finding."
+      }
     }
   ]
 }

@@ -50,6 +50,7 @@ CREATE_TABLE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ROUTE_PATH_LITERAL = re.compile(r"^/[A-Za-z0-9_\-./{}]*$")
+ENDPOINT_LITERAL = re.compile(r"^(?:https?|ws|wss)://[^\s'\"]+$", re.IGNORECASE)
 INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
     re.IGNORECASE,
@@ -483,6 +484,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.test_evidence: list[str] = []
         self.route_evidence: list[str] = []
         self.route_path_literals: set[str] = set()
+        self.endpoint_literals: set[str] = set()
+        self.endpoint_evidence: list[str] = []
         self.route_auth_control_evidence: list[str] = []
         self.typed_route_evidence: list[str] = []
         self.exit_evidence: list[tuple[int | None, str]] = []
@@ -1054,6 +1057,17 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Constant(self, node: ast.Constant) -> None:
+        if isinstance(node.value, str) and ENDPOINT_LITERAL.match(node.value):
+            if node.value not in self.endpoint_literals:
+                self.endpoint_literals.add(node.value)
+                receipt = self._evidence(
+                    start_line=node.lineno,
+                    end_line=node.end_lineno or node.lineno,
+                    symbol=self.current_qualified_name,
+                    evidence_kind="endpoint_literal",
+                )
+                self.endpoint_evidence.append(receipt.evidence_id)
+            return
         # Route-path literals are how a client or harness names an endpoint it
         # never imports. Recording them lets traceability follow HTTP exercise,
         # not only direct calls.
@@ -1270,6 +1284,8 @@ class PythonAstAnalyzer:
         claims: list[ClaimRecord] = []
         failures: list[str] = []
         route_evidence: list[str] = []
+        endpoint_evidence: list[str] = []
+        endpoint_literals: set[str] = set()
         route_auth_control_evidence: list[str] = []
         typed_route_evidence: list[str] = []
         eligible = [item for item in snapshot.files if item.language == "Python"]
@@ -1302,9 +1318,43 @@ class PythonAstAnalyzer:
             evidence.extend(analyzer.evidence)
             claims.extend(analyzer.claims)
             route_evidence.extend(analyzer.route_evidence)
+            endpoint_evidence.extend(analyzer.endpoint_evidence)
+            endpoint_literals.update(analyzer.endpoint_literals)
             route_auth_control_evidence.extend(analyzer.route_auth_control_evidence)
             typed_route_evidence.extend(analyzer.typed_route_evidence)
             analyzed_files += 1
+
+        if endpoint_evidence:
+            listed = ", ".join(sorted(endpoint_literals))
+            endpoint_text = (
+                f"Python source hardcodes {len(endpoint_literals)} distinct network "
+                f"endpoint(s) across {len(endpoint_evidence)} sites: {listed}. No "
+                "environment lookup supplies them at those sites."
+            )
+            claims.append(
+                ClaimRecord(
+                    claim_id=stable_id(
+                        "claim",
+                        (
+                            snapshot.snapshot_id,
+                            "hardcoded_endpoint",
+                            endpoint_text,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    claim=endpoint_text,
+                    category="hardcoded_endpoint",
+                    status="verified",
+                    confidence=1.0,
+                    importance="high",
+                    produced_by=ANALYZER_VERSION,
+                    created_at=created_at,
+                    verified_at=created_at,
+                    supporting_evidence=tuple(sorted(set(endpoint_evidence))),
+                    invalidation_keys=("language:python",),
+                )
+            )
 
         if route_evidence:
             text = f"Python source declares {len(route_evidence)} HTTP route handlers."
