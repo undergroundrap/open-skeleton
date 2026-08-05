@@ -441,6 +441,16 @@
           "cross_references": [
             "stack.dependencies"
           ]
+        },
+        {
+          "id": "stack.imported-names",
+          "number": "3.5",
+          "title": "Imported Names by Module",
+          "concern": "What each dependency actually contributes, name by name.",
+          "framing": "A manifest says a package is a dependency. This says which names come from it, which is the difference between a framework the system is built on and one it borrows a helper from.",
+          "panels": [
+            "imported_names"
+          ]
         }
       ]
     },
@@ -695,6 +705,20 @@
           "cross_references": [
             "state.durable",
             "state.migrations"
+          ]
+        },
+        {
+          "id": "state.declared-models",
+          "number": "4.7",
+          "title": "Declared Model Fields",
+          "concern": "The data contract the code writes down as annotated classes.",
+          "framing": "A repository that persists JSON keeps its schema here and nowhere else: the table holds one blob column and the symbol index holds functions. These are the fields as declared, with the annotation as written.",
+          "panels": [
+            "model_fields"
+          ],
+          "cross_references": [
+            "state.durable",
+            "surface.payload-shapes"
           ]
         }
       ]

@@ -11,7 +11,12 @@ from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
-from open_skeleton.analyzers.python_ast import PythonAstAnalyzer, _payload_shapes
+from open_skeleton.analyzers.python_ast import (
+    PythonAstAnalyzer,
+    _imported_names,
+    _model_fields,
+    _payload_shapes,
+)
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 
@@ -384,3 +389,54 @@ class PayloadShapeTests(TestCase):
 
     def test_a_function_returning_no_dictionary_has_no_shape(self) -> None:
         self.assertEqual(self._shapes("def act():\n    return 5\n"), {})
+
+
+class ModelFieldTests(TestCase):
+    """Where a repository persists JSON, annotated classes are the whole schema."""
+
+    def _models(self, source: str) -> dict[str, Any]:
+        return _model_fields(ast.parse(source))
+
+    def test_annotated_fields_are_recorded_with_their_base(self) -> None:
+        models = self._models(
+            "class Player(BaseModel):\n    gold: int = 0\n    name: str\n",
+        )
+        self.assertEqual(models["Player"]["bases"], ["BaseModel"])
+        names = [item["name"] for item in models["Player"]["fields"]]
+        self.assertEqual(names, ["gold", "name"])
+
+    def test_a_field_without_a_default_is_required_and_one_with_a_default_is_not(self) -> None:
+        fields = {
+            item["name"]: item
+            for item in self._models("class P:\n    a: int\n    b: int = 3\n")["P"]["fields"]
+        }
+        self.assertTrue(fields["a"]["required"])
+        self.assertFalse(fields["b"]["required"])
+        self.assertEqual(fields["b"]["default"], "3")
+
+    def test_the_annotation_is_kept_as_written(self) -> None:
+        models = self._models("class P:\n    ids: List[str] = []\n")
+        self.assertEqual(models["P"]["fields"][0]["annotation"], "List[str]")
+
+    def test_an_unannotated_class_attribute_is_not_a_declared_field(self) -> None:
+        self.assertEqual(self._models("class P:\n    total = 3\n"), {})
+
+
+class ImportedNameTests(TestCase):
+    def _imports(self, source: str) -> dict[str, Any]:
+        return _imported_names(ast.parse(source))
+
+    def test_the_names_a_module_contributes_are_recorded(self) -> None:
+        imports = self._imports("from fastapi import Depends, FastAPI\n")
+        self.assertEqual(imports["fastapi"]["names"], ["Depends", "FastAPI"])
+
+    def test_an_alias_is_recorded_under_the_local_name(self) -> None:
+        imports = self._imports("from numpy import array as arr\n")
+        self.assertEqual(imports["numpy"]["names"], ["arr"])
+
+    def test_a_relative_import_keeps_its_dots_as_the_target(self) -> None:
+        self.assertIn(".core", self._imports("from .core import engine\n"))
+
+    def test_names_from_repeated_imports_of_one_module_are_merged(self) -> None:
+        imports = self._imports("from typing import Any\nfrom typing import Dict\n")
+        self.assertEqual(imports["typing"]["names"], ["Any", "Dict"])

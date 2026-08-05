@@ -434,6 +434,89 @@ def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _model_fields(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Annotated class attributes — the data contract declared outright.
+
+    Where a repository persists JSON, this is the only place its schema is
+    written down: not in the tables, which hold one blob column, and not in the
+    symbol index, which holds functions.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        models = symbol.get("metadata", {}).get("model_fields") or {}
+        for model, entry in sorted(models.items()):
+            bases = ", ".join(str(item) for item in entry.get("bases", ())) or "—"
+            for field_entry in entry["fields"]:
+                rows.append(
+                    (
+                        model,
+                        bases,
+                        str(field_entry["name"]),
+                        f"`{field_entry['annotation']}`",
+                        "required" if field_entry["required"] else "optional",
+                        f"{symbol['path']}:{field_entry['line']}",
+                    )
+                )
+    rows.sort(key=lambda row: (row[5], row[0]))
+    return Panel(
+        name="model_fields",
+        title="Declared model fields",
+        columns=("Model", "Base", "Field", "Annotation", "Requirement", "Declared at"),
+        alignments=("left", "left", "left", "left", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            "Annotations are recorded as written, not resolved: the declared "
+            "type is the contract, and what it evaluates to at import time is "
+            "not knowable without running the code. A field is called required "
+            "when the class body gives it no default, which is what the "
+            "annotation states rather than what a validator may enforce."
+        ),
+    )
+
+
+def _imported_names(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Which names each dependency actually contributes.
+
+    An import edge says `fastapi` is used. It does not say that what is used is
+    `Depends`, and that difference decides whether a dependency is load-bearing
+    or incidental.
+    """
+
+    totals: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        imports = symbol.get("metadata", {}).get("imported_names") or {}
+        for module, entry in imports.items():
+            running = totals.setdefault(module, {"names": set(), "modules": 0})
+            running["names"].update(str(item) for item in entry["names"])
+            running["modules"] = int(running["modules"]) + 1
+    rows = tuple(
+        (
+            module,
+            f"{int(entry['modules']):,}",
+            f"{len(entry['names']):,}",
+            ", ".join(f"`{item}`" for item in sorted(entry["names"])[:10])
+            + (f" +{len(entry['names']) - 10:,} more" if len(entry["names"]) > 10 else ""),
+        )
+        for module, entry in sorted(
+            totals.items(), key=lambda item: (-len(item[1]["names"]), item[0])
+        )
+    )
+    return Panel(
+        name="imported_names",
+        title="Names taken from each imported module",
+        columns=("Module", "Importers", "Names", "Imported names"),
+        alignments=("left", "right", "right", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Counted from import statements, so a name imported but never used "
+            "still appears and a name reached dynamically does not. Aliases are "
+            "recorded under the local name, which is how the importing module "
+            "refers to it."
+        ),
+    )
+
+
 def _payload_shapes(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Field names of the dictionaries functions return.
 
@@ -571,6 +654,10 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _traceability_matrix(context.capabilities)
     if name == "symbol_index":
         return _symbol_index(context.symbols)
+    if name == "model_fields":
+        return _model_fields(context.symbols)
+    if name == "imported_names":
+        return _imported_names(context.symbols)
     if name == "payload_shapes":
         return _payload_shapes(context.symbols)
     if name == "external_api_surface":

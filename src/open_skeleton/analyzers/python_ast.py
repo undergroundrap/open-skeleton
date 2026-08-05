@@ -377,6 +377,81 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _imported_names(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Which names each module contributes, not merely that it was imported.
+
+    An import edge records that `fastapi` is used. It does not record that what
+    is used from it is `Depends`, and the difference decides whether a
+    dependency is load-bearing or incidental: a module importing one helper
+    from a framework is in a different position than one importing its router,
+    its middleware and its exception handlers.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            # A relative import has no module name at level > 0; the dots are
+            # the target, so they are kept rather than dropped.
+            module = "." * node.level + (node.module or "")
+            names = [alias.asname or alias.name for alias in node.names]
+        elif isinstance(node, ast.Import):
+            module = ""
+            names = [alias.asname or alias.name for alias in node.names]
+        else:
+            continue
+        if not module or not names:
+            continue
+        entry = found.setdefault(module, {"names": [], "line": node.lineno})
+        for name in names:
+            if name not in entry["names"]:
+                entry["names"].append(name)
+        entry["line"] = min(int(entry["line"]), node.lineno)
+    for entry in found.values():
+        entry["names"] = sorted(entry["names"])
+    return found
+
+
+def _model_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Annotated class attributes: the data contract a codebase declares outright.
+
+    A Pydantic model, a dataclass or a plain annotated class is where a system
+    writes down the shape of what it stores and returns. Those fields are not
+    functions, so a symbol index skips them, and they are not columns, so an
+    ERD built from SQL skips them too — a repository that persists JSON blobs
+    keeps its entire schema here and nowhere else.
+
+    The annotation is recorded as written rather than resolved, because the
+    declared type is the contract; what it evaluates to at import time is not
+    knowable without running the code.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        fields: list[dict[str, Any]] = []
+        for statement in node.body:
+            if not isinstance(statement, ast.AnnAssign) or not isinstance(
+                statement.target, ast.Name
+            ):
+                continue
+            entry: dict[str, Any] = {
+                "name": statement.target.id,
+                "annotation": ast.unparse(statement.annotation),
+                "line": statement.lineno,
+                "required": statement.value is None,
+            }
+            if statement.value is not None:
+                rendered = ast.unparse(statement.value)
+                # A long default is a value, not a signal; the line locates it.
+                entry["default"] = rendered if len(rendered) <= 60 else "…"
+            fields.append(entry)
+        if fields:
+            bases = [ast.unparse(base) for base in node.bases]
+            found[node.name] = {"fields": fields, "line": node.lineno, "bases": bases}
+    return found
+
+
 def _payload_shapes(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Field names of dictionaries a function returns.
 
@@ -600,6 +675,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.instance_tunables = _instance_tunables(tree)
         self.data_containers = _data_containers(tree)
         self.payload_shapes = _payload_shapes(tree)
+        self.model_fields = _model_fields(tree)
+        self.imported_names = _imported_names(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1330,6 +1407,10 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["data_containers"] = self.data_containers
         if self.payload_shapes:
             payload["payload_shapes"] = self.payload_shapes
+        if self.model_fields:
+            payload["model_fields"] = self.model_fields
+        if self.imported_names:
+            payload["imported_names"] = self.imported_names
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):
