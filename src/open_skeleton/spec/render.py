@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import utc_now
 from open_skeleton.spec.capabilities import Capability, build_capabilities
+from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.panels import Panel, PanelContext, build_panel
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
@@ -147,11 +148,13 @@ class SpecDocument:
     total_claims: int
     cited_claims: int
     capabilities: tuple[Capability, ...] = ()
+    consequences: tuple[Consequence, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
             "capabilities": [item.to_dict() for item in self.capabilities],
+            "consequences": [item.to_dict() for item in self.consequences],
             "snapshot_id": self.snapshot_id,
             "root": self.root,
             "profile_id": self.profile_id,
@@ -240,6 +243,8 @@ def build_spec(
         edges=edges,
         evidence_by_id=evidence_by_id,
     )
+    # Consequences need the absent verdicts, which are only known once every
+    # section has been evaluated, so panels are rebuilt after that pass below.
     panel_context = PanelContext(
         files=files,
         exclusions=exclusions,
@@ -319,6 +324,24 @@ def build_spec(
     for section in profile.sections:
         render_node(section, 0)
 
+    absent = frozenset(
+        term
+        for item in rendered
+        if item.verdict == "absent"
+        for probe in item.probe_results
+        if probe.kind in {"claim_category", "sourced_claim_category"}
+        for term in probe.query.split(": ", 1)[-1].split(", ")
+    )
+    consequences = derive(claims, absent_categories=absent)
+    panel_context = replace(panel_context, consequences=consequences)
+    for index, item in enumerate(rendered):
+        if not item.panels:
+            continue
+        rendered[index] = replace(
+            item,
+            panels=tuple(build_panel(panel.name, panel_context) for panel in item.panels),
+        )
+
     cited = sum(1 for item in rendered for claim in item.findings if claim.citations)
     return SpecDocument(
         schema=SPEC_SCHEMA_VERSION,
@@ -334,6 +357,7 @@ def build_spec(
         total_claims=len(claims),
         cited_claims=cited,
         capabilities=capabilities,
+        consequences=consequences,
     )
 
 

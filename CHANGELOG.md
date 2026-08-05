@@ -12,6 +12,8 @@ All notable changes will be documented here. This project follows Semantic Versi
   integration, security posture, verification, and enterprise delivery concerns
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
+- derived engineering consequences: rules that compose verified claims into
+  what follows from them, each citing every claim it rests on
 - lexical state value domains for JavaScript and TypeScript, bringing the
   diagram inventory to 83
 - `benchmarks/comparison/run_comparison.py`, which counts both documents on

@@ -26,8 +26,18 @@
           "framing": "Every percentage elsewhere in this document is relative to the included set below. Excluded content was never read."
         },
         {
-          "id": "introduction.entry-points",
+          "id": "introduction.consequences",
           "number": "1.2",
+          "title": "What These Findings Imply",
+          "concern": "Engineering consequences that follow from combinations of findings.",
+          "panels": [
+            "consequences"
+          ],
+          "framing": "Each row below composes claims established elsewhere in this document. A consequence is not a new fact and not a recommendation: it states what follows if the cited claims hold, and it holds exactly as far as they do."
+        },
+        {
+          "id": "introduction.entry-points",
+          "number": "1.3",
           "title": "Entry Points",
           "concern": "Executable entry points and application bootstrap.",
           "probes": [
@@ -51,7 +61,7 @@
         },
         {
           "id": "introduction.concentration",
-          "number": "1.3",
+          "number": "1.4",
           "title": "Architectural Concentration",
           "concern": "Where implementation mass accumulates, and the maintenance risk that follows.",
           "probes": [

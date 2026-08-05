@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_skeleton.spec.capabilities import Capability
+from open_skeleton.spec.consequences import Consequence
 
 MAX_PANEL_ROWS = 15
 MAX_CELL_ITEMS = 4
@@ -30,6 +31,7 @@ class PanelContext:
     exclusions: tuple[dict[str, Any], ...] = ()
     snapshot: dict[str, Any] = field(default_factory=dict)
     capabilities: tuple[Capability, ...] = ()
+    consequences: tuple[Consequence, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +244,30 @@ def _verification_gaps(capabilities: tuple[Capability, ...]) -> Panel:
     )
 
 
+def _consequences(consequences: tuple[Consequence, ...]) -> Panel:
+    rows = tuple(
+        (
+            item.severity,
+            item.statement,
+            ", ".join(f"`{category}`" for category in item.derived_from),
+            f"{len(item.claim_ids):,}",
+        )
+        for item in consequences
+    )
+    return Panel(
+        name="consequences",
+        title="What these findings imply together",
+        columns=("Severity", "Consequence", "Derived from", "Claims"),
+        alignments=("left", "left", "left", "right"),
+        rows=rows,
+        note=(
+            "Each row composes claims already established above; no row asserts "
+            "anything the cited claims do not. A consequence follows from the "
+            "combination, so it holds exactly as far as those claims do."
+        ),
+    )
+
+
 def build_panel(name: str, context: PanelContext) -> Panel:
     """Render one named panel from pinned snapshot records."""
 
@@ -261,6 +287,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _capability_catalog(context.capabilities)
     if name == "traceability_matrix":
         return _traceability_matrix(context.capabilities)
+    if name == "consequences":
+        return _consequences(context.consequences)
     if name == "verification_gaps":
         return _verification_gaps(context.capabilities)
     return Panel(  # pragma: no cover - profile validation rejects unknown panels
