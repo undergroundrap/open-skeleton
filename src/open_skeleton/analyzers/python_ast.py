@@ -313,7 +313,7 @@ def _state_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
             "entries": sorted(entry["entries"]),
         }
         for field, entry in fields.items()
-        if len(entry["values"]) >= MIN_STATE_VALUES and entry["entries"]
+        if len(entry["values"]) >= MIN_STATE_VALUES
     }
 
 

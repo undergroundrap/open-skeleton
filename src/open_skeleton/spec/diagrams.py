@@ -404,7 +404,7 @@ def _state_diagrams(symbols: tuple[dict[str, Any], ...], limit: int) -> tuple[Di
     for symbol in symbols:
         fields = symbol.get("metadata", {}).get("state_fields") or {}
         for field, entry in fields.items():
-            if entry.get("entries"):
+            if entry.get("values"):
                 candidates.append((str(symbol["path"]), str(field), entry))
 
     if not candidates:
@@ -417,11 +417,13 @@ def _state_diagrams(symbols: tuple[dict[str, Any], ...], limit: int) -> tuple[Di
             ),
         )
 
-    candidates.sort(key=lambda item: (-len(item[2]["entries"]), item[0], item[1]))
+    candidates.sort(key=lambda item: (-len(item[2]["values"]), item[0], item[1]))
     diagrams: list[Diagram] = []
     for path, field, entry in candidates[:limit]:
         entries = [tuple(item) for item in entry["entries"]][:MAX_DIAGRAM_EDGES]
-        states = sorted({str(item[0]) for item in entries})
+        # Values reached only by comparison still belong to the domain; they are
+        # drawn as states with no inbound edge, which is what the source shows.
+        states = sorted({str(item) for item in entry["values"]})
         lines = ["stateDiagram-v2"]
         for state in states:
             lines.append(f'    state "{_mermaid_text(state)}" as {_node_id(state)}')
