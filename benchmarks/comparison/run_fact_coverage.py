@@ -152,10 +152,14 @@ def main() -> int:
         ),
         f"| Fact family | Baseline asserts | {args.candidate_label} carries | Coverage |\n",
         "|---|---:|---:|---:|\n",
-        f"| Named symbols and paths | {len(symbols):,} | {symbol_hits:,} | "
-        f"{pct(symbol_hits, len(symbols))} |\n",
-        f"| Quantities beside a symbol | {len(quantities):,} | {quantity_hits:,} | "
-        f"{pct(quantity_hits, len(quantities))} |\n",
+        (
+            f"| Named symbols and paths | {len(symbols):,} | {symbol_hits:,} | "
+            f"{pct(symbol_hits, len(symbols))} |\n"
+        ),
+        (
+            f"| Quantities beside a symbol | {len(quantities):,} | {quantity_hits:,} | "
+            f"{pct(quantity_hits, len(quantities))} |\n"
+        ),
         f"| **Total** | **{total:,}** | **{hits:,}** | **{pct(hits, total)}** |\n\n",
     ]
 
