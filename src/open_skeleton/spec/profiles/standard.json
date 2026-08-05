@@ -226,6 +226,17 @@
           "cross_references": [
             "verification.gaps"
           ]
+        },
+        {
+          "id": "surface.dossiers",
+          "number": "2.7",
+          "title": "Capability Dossiers",
+          "concern": "Everything known about one capability, assembled in one place.",
+          "framing": "Each dossier groups records established elsewhere in this document under the capability whose files they touch. It adds no fact; the grouping is the point, because a reader changing one capability should not have to reassemble it from six sections.",
+          "cross_references": [
+            "surface.capability-catalog",
+            "surface.traceability"
+          ]
         }
       ]
     },

@@ -12,6 +12,8 @@ All notable changes will be documented here. This project follows Semantic Versi
   integration, security posture, verification, and enterprise delivery concerns
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
+- per-capability dossiers assembling every record that touches one capability
+  into a single briefing, adding no fact
 - derived engineering consequences: rules that compose verified claims into
   what follows from them, each citing every claim it rests on
 - lexical state value domains for JavaScript and TypeScript, bringing the

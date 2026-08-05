@@ -14,6 +14,7 @@ from open_skeleton.models import utc_now
 from open_skeleton.spec.capabilities import Capability, build_capabilities
 from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
+from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
 from open_skeleton.spec.panels import Panel, PanelContext, build_panel
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
 from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
@@ -149,12 +150,14 @@ class SpecDocument:
     cited_claims: int
     capabilities: tuple[Capability, ...] = ()
     consequences: tuple[Consequence, ...] = ()
+    dossiers: tuple[Dossier, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
             "capabilities": [item.to_dict() for item in self.capabilities],
             "consequences": [item.to_dict() for item in self.consequences],
+            "dossiers": [item.to_dict() for item in self.dossiers],
             "snapshot_id": self.snapshot_id,
             "root": self.root,
             "profile_id": self.profile_id,
@@ -333,6 +336,7 @@ def build_spec(
         for term in probe.query.split(": ", 1)[-1].split(", ")
     )
     consequences = derive(claims, absent_categories=absent)
+    dossiers = build_dossiers(capabilities, claims, evidence_by_id, consequences)
     panel_context = replace(panel_context, consequences=consequences)
     for index, item in enumerate(rendered):
         if not item.panels:
@@ -358,6 +362,7 @@ def build_spec(
         cited_claims=cited,
         capabilities=capabilities,
         consequences=consequences,
+        dossiers=dossiers,
     )
 
 
@@ -570,6 +575,9 @@ def render_spec_markdown(document: SpecDocument) -> str:
                     suffix = " …" if probe.match_count > len(probe.matches) else ""
                     lines.append(f"- {_escape(probe.name)}: {shown}{suffix}\n")
                 lines.append("\n")
+
+        if section.section_id == "surface.dossiers":
+            lines.extend(render_dossiers(document.dossiers))
 
         for panel in section.panels:
             lines.append(f"**{panel.title}**\n\n")
