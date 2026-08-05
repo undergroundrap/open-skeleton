@@ -12,6 +12,27 @@ Contributions should preserve the evidence-first and local-first invariants in `
 
 ## Verification
 
+Install the package first. Several checks — the MCP protocol tests, and the
+type check over code that imports the SDK — behave differently when the
+optional dependencies are absent, and skipping the install makes them silently
+weaker rather than loudly missing:
+
+```powershell
+python -m pip install -e ".[dev,mcp]"
+```
+
+Then run every gate CI runs, locally:
+
+```powershell
+python scripts\gate.py --full
+```
+
+`--full` adds the dependency audit and the distribution build, both of which
+need a network. Without it those two are skipped and the run says so. Add
+`--fix` to apply formatting and lint autofixes instead of only reporting them.
+
+The individual commands, should you want one of them on its own:
+
 ```powershell
 python -m compileall -q src tests benchmarks
 python -m unittest discover -s tests -v
@@ -20,6 +41,10 @@ ruff check src tests benchmarks
 mypy
 python benchmarks\scaling\run_scaling.py
 ```
+
+A local run cannot substitute for the operating-system matrix: CI runs Ubuntu
+and Windows, and a path-separator or line-ending fault will only appear on the
+one you are not using.
 
 `ruff format` is authoritative for layout, so run it rather than hand-aligning.
 `mypy` runs in strict mode over both `src` and `tests`, so a new function without

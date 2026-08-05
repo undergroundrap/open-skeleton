@@ -112,6 +112,9 @@ ignore = [
 "src/open_skeleton/ledger.py" = ["S608"]
 # Standalone measurement scripts, deliberately not an importable package.
 "benchmarks/**" = ["T201", "S101", "INP001"]
+# The local gate runner is invoked by path, not imported, and reports to
+# a terminal, so printing and a non-package layout are the point.
+"scripts/**" = ["T201", "INP001"]
 # The suite is unittest by choice: it ships with the standard library, which
 # keeps the deterministic path dependency-free.
 "tests/**" = [

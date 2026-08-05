@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase, skipUnless
 
 from open_skeleton.mcp_server import OpenSkeletonService, create_mcp_server
@@ -23,7 +24,13 @@ class McpProtocolTests(TestCase):
             server = create_mcp_server(service)
             async with Client(server, raise_exceptions=True) as client:
                 tools = await client.list_tools()
-                listed_tools = tools.tools if hasattr(tools, "tools") else tools
+                # The SDK has returned both a result object wrapping `.tools`
+                # and a bare sequence. The wrapper is a pydantic model, and
+                # iterating one of those yields (field, value) pairs rather
+                # than tools, so the attribute has to be preferred explicitly
+                # instead of falling through to iteration.
+                wrapped = getattr(tools, "tools", None)
+                listed_tools: list[Any] = list(wrapped) if wrapped is not None else list(tools)
                 self.assertTrue(any(tool.name == "project_status" for tool in listed_tools))
                 status = await client.call_tool("project_status", {})
                 self.assertFalse(status.is_error)
