@@ -1,5 +1,9 @@
 # Open Skeleton
 
+[![CI](https://github.com/undergroundrap/open-skeleton/actions/workflows/ci.yml/badge.svg)](https://github.com/undergroundrap/open-skeleton/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+
 Open Skeleton is a local-first, evidence-first codebase-intelligence engine for developers and agents. It turns an untrusted repository into a content-pinned ledger of symbols, relationships, claims, conflicts, coverage, and source receipts before any model is allowed to write a narrative.
 
 It is deliberately not a “paste the whole repository into an LLM” wrapper. The deterministic path has no required third-party runtime dependencies, performs no target-code execution or network access, and does not modify the analyzed repository.
