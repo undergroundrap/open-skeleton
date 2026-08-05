@@ -103,7 +103,7 @@ def _quantities(document: str, window: int = 90) -> set[tuple[str, str]]:
     return found
 
 
-def _coverage(expected: set[Any], document: str, haystack: str) -> tuple[int, list[Any]]:
+def _coverage(expected: set[Any], haystack: str) -> tuple[int, list[Any]]:
     missing: list[Any] = []
     hits = 0
     for item in sorted(expected, key=str):
@@ -135,8 +135,8 @@ def main() -> int:
     symbols = _symbols(baseline)
     quantities = _quantities(baseline)
 
-    symbol_hits, symbol_missing = _coverage(symbols, candidate, haystack)
-    quantity_hits, quantity_missing = _coverage(quantities, candidate, haystack)
+    symbol_hits, symbol_missing = _coverage(symbols, haystack)
+    quantity_hits, quantity_missing = _coverage(quantities, haystack)
 
     total = len(symbols) + len(quantities)
     hits = symbol_hits + quantity_hits
