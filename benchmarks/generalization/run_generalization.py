@@ -23,6 +23,14 @@ Claim yield is a proxy, not a quality measure. A repository can be small,
 simple, or genuinely have little worth saying about it, and a low yield there
 is correct rather than a failure. What the spread cannot explain away is the
 same analyzer finding thirty times more per file in one language than another.
+
+Yield alone also cannot separate a weak analyzer from clean code, and that
+distinction decides what to do next. warmboot yields little partly because
+the Rust analyzer extracts less and partly because the crate has no global
+mutable state to find — one is work and the other is nothing at all. The
+report therefore shows which analyzer covered which files, so a language with
+no analyzer at all is visible as coverage rather than inferred from a low
+score.
 """
 
 from __future__ import annotations
@@ -39,6 +47,12 @@ from typing import Any
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
+
+# Languages some analyzer claims eligibility for. Anything else in a tree is
+# scanned and counted but never read for meaning.
+_ANALYZED_LANGUAGES = frozenset(
+    {"Python", "Rust", "TypeScript", "TypeScript JSX", "JavaScript", "JavaScript JSX", "Hum"}
+)
 
 
 def _measure(root: Path) -> dict[str, Any]:
@@ -58,6 +72,26 @@ def _measure(root: Path) -> dict[str, Any]:
         languages = collections.Counter(str(item.language) for item in snapshot.files)
         categories = collections.Counter(item.category for item in result.claims)
         analyzed = sum(item.analyzed_files for item in result.coverage)
+        by_analyzer = {
+            str(item.analyzer): {
+                "eligible": item.eligible_files,
+                "analyzed": item.analyzed_files,
+                "claims": sum(1 for claim in result.claims if claim.produced_by == item.analyzer),
+            }
+            for item in result.coverage
+        }
+        # A language present in the tree that no analyzer declared eligible is
+        # the clearest possible statement of a missing analyzer, and it is
+        # invisible in a claim count.
+        covered = {
+            str(item.language) for item in snapshot.files if item.language in _ANALYZED_LANGUAGES
+        }
+        unanalyzed = {
+            name: count
+            for name, count in languages.items()
+            if name not in covered
+            and name not in {"Unknown", "Text", "Markdown", "JSON", "YAML", "TOML"}
+        }
         files = len(snapshot.files) or 1
         return {
             "repository": root.name,
@@ -70,6 +104,8 @@ def _measure(root: Path) -> dict[str, Any]:
             "evidence": len(result.evidence),
             "seconds": round(elapsed, 2),
             "languages": dict(languages.most_common(6)),
+            "by_analyzer": by_analyzer,
+            "languages_without_an_analyzer": unanalyzed,
             "categories": dict(categories.most_common()),
         }
     finally:
@@ -111,6 +147,39 @@ def main() -> int:
             f"{row['seconds']:.1f} | {languages} |\n"
         )
     lines.append(f"\n**Spread: {spread:.0f}x** between the highest and lowest yield per file.\n\n")
+
+    # Yield per repository mixes analyzer strength with what the repository
+    # happens to contain. Yield per file an analyzer actually read does not:
+    # it is the same analyzer measured against its own input, so a low number
+    # there is missing extraction rather than clean code.
+    per_analyzer: dict[str, dict[str, int]] = {}
+    for row in rows:
+        for name, stats in row["by_analyzer"].items():
+            entry = per_analyzer.setdefault(name, {"analyzed": 0, "claims": 0})
+            entry["analyzed"] += int(stats["analyzed"])
+            entry["claims"] += int(stats["claims"])
+    active = {name: stats for name, stats in per_analyzer.items() if stats["analyzed"]}
+    if active:
+        lines.append(
+            "## Yield per file each analyzer actually read\n\n"
+            "The table above mixes analyzer strength with what a repository "
+            "happens to contain: warmboot yields little partly because the Rust "
+            "analyzer extracts less and partly because the crate has no global "
+            "mutable state to find. This measures each analyzer against its own "
+            "input, where that confusion cannot arise.\n\n"
+            "| Analyzer | Files read | Claims | Per file |\n|---|---:|---:|---:|\n"
+        )
+        for name, stats in sorted(
+            active.items(), key=lambda item: -item[1]["claims"] / (item[1]["analyzed"] or 1)
+        ):
+            rate = stats["claims"] / stats["analyzed"]
+            lines.append(f"| {name} | {stats['analyzed']:,} | {stats['claims']:,} | {rate:.2f} |\n")
+        rates = [s["claims"] / s["analyzed"] for s in active.values() if s["claims"]]
+        if len(rates) > 1:
+            lines.append(
+                f"\n**Analyzer spread: {max(rates) / min(rates):.0f}x.** This is the "
+                "number that describes the tool rather than the repositories.\n\n"
+            )
 
     universe: collections.Counter[str] = collections.Counter()
     for row in rows:
