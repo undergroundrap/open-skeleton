@@ -153,7 +153,8 @@ two documents on disk; the baseline artifact is not redistributed here, so suppl
 your own export to reproduce it.
 
 ```powershell
-python benchmarks\comparisonun_comparison.py `
+python benchmarks\comparison
+un_comparison.py `
   --repository C:\path	oixture `
   --baseline C:\path	oaseline	ech_spec.md `
   --output-dir comparison-output
