@@ -645,6 +645,13 @@
                 "typeorm",
                 "yoyo-migrations"
               ]
+            },
+            {
+              "name": "In-code schema migration",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "schema_migration"
+              ]
             }
           ],
           "constraints": {

@@ -55,6 +55,14 @@ INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
     re.IGNORECASE,
 )
+# A migration is routinely built with an f-string, so the table and column may
+# be interpolated. `{}` stands for a value the analyzer cannot resolve, and the
+# claim says so rather than inventing a name.
+ALTER_TABLE_PATTERN = re.compile(
+    r"\bALTER\s+TABLE\s+(?P<table>\{\}|[\"`\[]?[A-Za-z_]\w*[\"`\]]?)\s+ADD\s+"
+    r"(?:COLUMN\s+)?(?P<column>\{\}|[\"`\[]?[A-Za-z_]\w*[\"`\]]?)",
+    re.IGNORECASE,
+)
 
 
 def _module_name(path: str) -> str:
@@ -82,6 +90,28 @@ def _expr_name(node: ast.AST | None) -> str | None:
 def _literal_string(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    return None
+
+
+def _sql_shape(node: ast.AST | None) -> str | None:
+    """SQL text with interpolated values replaced by a placeholder.
+
+    Schema statements are commonly assembled with an f-string, which makes them
+    invisible to a literal-only reader. The static skeleton is still enough to
+    tell what kind of statement it is, so it is recovered with `{}` marking
+    each value the analyzer cannot resolve.
+    """
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            else:
+                parts.append("{}")
+        return "".join(parts)
     return None
 
 
@@ -1484,6 +1514,33 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
             if normalized.endswith((".execute", ".executescript")):
                 sql = _literal_string(node.args[0]) if node.args else None
+                # A schema evolved in code rather than in a migrations directory
+                # still evolves. Reporting only directories makes every project
+                # that migrates inline look like one that cannot migrate at all,
+                # and these statements are routinely built with an f-string.
+                shape = _sql_shape(node.args[0]) if node.args else None
+                if shape:
+                    for match in ALTER_TABLE_PATTERN.finditer(shape):
+                        table = match.group("table").strip('"`[]')
+                        column = match.group("column").strip('"`[]')
+                        where = (
+                            "a SQLite table named at runtime"
+                            if table == "{}"
+                            else f"SQLite table {table}"
+                        )
+                        what = "a column named at runtime" if column == "{}" else f"column {column}"
+                        self._claim(
+                            text=(
+                                f"{self.current_qualified_name} alters {where} to "
+                                f"add {what}, migrating the schema in application "
+                                "code rather than through a migration tool."
+                            ),
+                            category="schema_migration",
+                            status="verified",
+                            confidence=1.0,
+                            importance="high",
+                            supporting=(evidence.evidence_id,),
+                        )
                 if sql:
                     for match in CREATE_TABLE_PATTERN.finditer(sql):
                         table = match.group(1)

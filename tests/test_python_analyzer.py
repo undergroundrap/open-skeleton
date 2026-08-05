@@ -528,3 +528,44 @@ class SignatureTests(TestCase):
         self.assertEqual(
             self._sig("def f(items=[]):\n    pass\n")["f"]["parameters"][0]["default"], "[]"
         )
+
+
+class SchemaMigrationTests(TestCase):
+    """A schema evolved in code still evolves, and f-strings are how it is written."""
+
+    def _claims(self, source: str) -> list[Any]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "store.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return [item for item in result.claims if item.category == "schema_migration"]
+
+    def test_a_literal_alter_names_the_table_and_column(self) -> None:
+        claims = self._claims(
+            "import sqlite3\n"
+            "c = sqlite3.connect('x.db')\n"
+            "c.execute('ALTER TABLE players ADD COLUMN gold INTEGER')\n"
+        )
+        self.assertEqual(len(claims), 1)
+        self.assertIn("SQLite table players", claims[0].claim)
+        self.assertIn("column gold", claims[0].claim)
+
+    def test_an_interpolated_alter_says_the_names_are_unknown(self) -> None:
+        # Migrations are routinely built with an f-string. Reporting only
+        # literals made every such project look unable to migrate at all.
+        claims = self._claims(
+            "import sqlite3\n"
+            "c = sqlite3.connect('x.db')\n"
+            "def go(table, column, definition):\n"
+            "    c.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')\n"
+        )
+        self.assertEqual(len(claims), 1)
+        self.assertIn("named at runtime", claims[0].claim)
+
+    def test_a_create_table_is_not_a_migration(self) -> None:
+        claims = self._claims(
+            "import sqlite3\n"
+            "c = sqlite3.connect('x.db')\n"
+            "c.execute('CREATE TABLE IF NOT EXISTS players (id TEXT)')\n"
+        )
+        self.assertEqual(claims, [])
