@@ -1439,6 +1439,29 @@
             "limit": 200
           },
           "framing": "This section exists so that no claim is silently dropped by the outline. A large count here means the profile needs a new section, not that the analysis was incomplete."
+        },
+        {
+          "id": "maintenance.tunables",
+          "number": "9.5",
+          "title": "Numeric Tunables",
+          "concern": "Constants that change behaviour without changing logic.",
+          "panels": [
+            "tunable_index"
+          ],
+          "framing": "These are the values a maintainer adjusts to retune the system. They are otherwise scattered across the source, which is what makes an index of them worth carrying."
+        },
+        {
+          "id": "maintenance.failure-surface",
+          "number": "9.6",
+          "title": "Failure Response Surface",
+          "concern": "Failures a caller can observe from a served route.",
+          "panels": [
+            "failure_surface"
+          ],
+          "cross_references": [
+            "surface.http",
+            "integration.failure"
+          ]
         }
       ]
     }

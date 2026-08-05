@@ -8,6 +8,7 @@ import ast
 import hashlib
 import re
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -486,18 +487,19 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.typed_route_evidence: list[str] = []
         self.exit_evidence: list[tuple[int | None, str]] = []
         self.numeric_constants: dict[str, float] = {}
+        self.constant_lines: dict[str, int] = {}
         mutation_collector = _ModuleMutationCollector(_module_mutable_names(tree))
         mutation_collector.visit(tree)
         self.module_mutations = mutation_collector.mutations
 
         module_end = max(1, file_record.line_count)
-        state_fields = _state_fields(tree)
+        self.state_fields = _state_fields(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
             start_line=1,
             end_line=module_end,
-            metadata=({"state_fields": state_fields} if state_fields else {}),
+            metadata={},
         )
         self.scope_ids.append(module_symbol.symbol_id)
         self._evidence(
@@ -865,6 +867,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             numeric_value = _literal_number(value)
             if numeric_value is not None:
                 self.numeric_constants[name] = numeric_value
+                self.constant_lines.setdefault(name, node.lineno)
             if call_name and call_name.split(".")[-1] == "FastAPI":
                 self._claim(
                     text=f"{qualified} constructs a FastAPI application.",
@@ -1188,7 +1191,32 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
         self.generic_visit(node)
 
+    def _attach_module_metadata(self) -> None:
+        """Move facts gathered during the walk onto the module symbol.
+
+        The module symbol is created before the tree is walked, so anything the
+        walk discovers — tunable constants, observed value domains — has to be
+        attached once the walk is done.
+        """
+
+        tunables = {
+            name: {"value": value, "line": self.constant_lines.get(name, 1)}
+            for name, value in sorted(self.numeric_constants.items())
+        }
+        payload: dict[str, Any] = {}
+        if tunables:
+            payload["tunables"] = tunables
+        if self.state_fields:
+            payload["state_fields"] = self.state_fields
+        if not payload:
+            return
+        for index, symbol in enumerate(self.symbols):
+            if symbol.kind == "module" and symbol.path == self.path:
+                self.symbols[index] = replace(symbol, metadata={**symbol.metadata, **payload})
+                return
+
     def finalize(self) -> None:
+        self._attach_module_metadata()
         if self.test_evidence:
             self._claim(
                 text=f"{self.path} declares {len(self.test_evidence)} test symbols.",

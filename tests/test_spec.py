@@ -423,3 +423,67 @@ class ClaimYieldTests(TestCase):
             markdown = render_spec_markdown(build_spec(ledger, load_profile()))
             self.assertIn("| Coverage | Yield |", markdown)
             self.assertIn("yield column is what distinguishes", markdown.replace("\n", " "))
+
+
+class AppendixPanelTests(TestCase):
+    SYMBOLS = (
+        {
+            "path": "backend/main.py",
+            "kind": "module",
+            "qualified_name": "backend.main",
+            "metadata": {
+                "tunables": {
+                    "BAG_SIZE": {"value": 16.0, "line": 21},
+                    "COOLDOWN": {"value": 1.5, "line": 22},
+                }
+            },
+        },
+        {
+            "path": "backend/main.py",
+            "kind": "async_function",
+            "qualified_name": "backend.main.equip",
+            "metadata": {
+                "routes": [{"method": "POST", "path": "/action/equip"}],
+                "control_flow": [
+                    {"kind": "guard", "line": 100, "label": "not item", "depth": 0},
+                    {"kind": "raise", "line": 101, "label": "HTTP 400", "depth": 1},
+                    {"kind": "return", "line": 110, "label": "ok", "depth": 0},
+                ],
+            },
+        },
+        {
+            "path": "backend/util.py",
+            "kind": "function",
+            "qualified_name": "backend.util.helper",
+            "metadata": {
+                "control_flow": [{"kind": "raise", "line": 5, "label": "HTTP 500", "depth": 0}]
+            },
+        },
+    )
+
+    def test_tunables_render_integers_without_a_trailing_zero(self) -> None:
+        panel = build_panel("tunable_index", PanelContext(symbols=self.SYMBOLS))
+        values = {row[0]: row[1] for row in panel.rows}
+        self.assertEqual(values["BAG_SIZE"], "16")
+        self.assertEqual(values["COOLDOWN"], "1.5")
+
+    def test_every_tunable_carries_a_definition_site(self) -> None:
+        panel = build_panel("tunable_index", PanelContext(symbols=self.SYMBOLS))
+        for row in panel.rows:
+            self.assertRegex(row[2], r"\.py:\d+$")
+
+    def test_the_failure_surface_lists_raises_reachable_from_a_route(self) -> None:
+        panel = build_panel("failure_surface", PanelContext(symbols=self.SYMBOLS))
+        raised = {row[0] for row in panel.rows}
+        self.assertEqual(raised, {"HTTP 400"})
+
+    def test_a_raise_outside_a_route_handler_is_not_a_response(self) -> None:
+        # A helper can raise without that failure being reachable as a response.
+        panel = build_panel("failure_surface", PanelContext(symbols=self.SYMBOLS))
+        self.assertNotIn("HTTP 500", {row[0] for row in panel.rows})
+
+    def test_both_panels_state_what_they_exclude(self) -> None:
+        for name in ("tunable_index", "failure_surface"):
+            panel = build_panel(name, PanelContext(symbols=self.SYMBOLS))
+            assert panel.note is not None
+            self.assertIn("not", panel.note.lower())

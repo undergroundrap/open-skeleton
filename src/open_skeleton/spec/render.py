@@ -253,6 +253,7 @@ def build_spec(
         exclusions=exclusions,
         snapshot=snapshot_row,
         capabilities=capabilities,
+        symbols=symbols,
     )
 
     used: set[str] = set()

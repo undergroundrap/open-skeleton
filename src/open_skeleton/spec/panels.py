@@ -21,6 +21,7 @@ from open_skeleton.spec.consequences import Consequence
 
 MAX_PANEL_ROWS = 15
 MAX_CELL_ITEMS = 4
+MAX_TUNABLES = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,7 @@ class PanelContext:
     snapshot: dict[str, Any] = field(default_factory=dict)
     capabilities: tuple[Capability, ...] = ()
     consequences: tuple[Consequence, ...] = ()
+    symbols: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +270,74 @@ def _consequences(consequences: tuple[Consequence, ...]) -> Panel:
     )
 
 
+def _tunable_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Every module-level numeric constant, with its value and definition line.
+
+    These are the numbers a maintainer changes to alter behaviour without
+    changing logic, and they are otherwise scattered across the source.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        tunables = symbol.get("metadata", {}).get("tunables") or {}
+        for name, entry in sorted(tunables.items()):
+            value = entry["value"]
+            rendered = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+            rows.append((name, rendered, f"{symbol['path']}:{entry['line']}"))
+    rows.sort(key=lambda row: (row[2], row[0]))
+    return Panel(
+        name="tunable_index",
+        title="Numeric tunables",
+        columns=("Constant", "Value", "Defined at"),
+        alignments=("left", "right", "left"),
+        rows=tuple(rows[:MAX_TUNABLES]),
+        note=(
+            "Module-level numeric assignments only. A value computed at import "
+            "time or read from configuration is not a literal and does not appear."
+        ),
+    )
+
+
+def _failure_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Every raise a route handler can reach, grouped by status.
+
+    A caller needs to know which failures a route can produce. That is recorded
+    in each handler's guard trace; this consolidates it into one surface.
+    """
+
+    seen: dict[tuple[str, str, str], None] = {}
+    for symbol in symbols:
+        flow = symbol.get("metadata", {}).get("control_flow") or []
+        routes = symbol.get("metadata", {}).get("routes") or []
+        if not routes:
+            continue
+        surface = ", ".join(
+            f"{item.get('method', '?')} {item.get('path', '?')}" for item in routes[:2]
+        )
+        for event in flow:
+            if event.get("kind") != "raise":
+                continue
+            key = (
+                str(event["label"]),
+                surface,
+                f"{symbol['path']}:{event['line']}",
+            )
+            seen.setdefault(key, None)
+    rows = tuple(sorted(seen, key=lambda row: (row[0], row[2])))
+    return Panel(
+        name="failure_surface",
+        title="Failure responses reachable from a route",
+        columns=("Raised", "Route", "At"),
+        alignments=("left", "left", "left"),
+        rows=rows[: MAX_PANEL_ROWS * 3],
+        note=(
+            "Raises recorded inside route handler bodies. A failure produced by "
+            "framework validation, by middleware, or by a helper the handler "
+            "calls is not counted here."
+        ),
+    )
+
+
 def build_panel(name: str, context: PanelContext) -> Panel:
     """Render one named panel from pinned snapshot records."""
 
@@ -287,6 +357,10 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _capability_catalog(context.capabilities)
     if name == "traceability_matrix":
         return _traceability_matrix(context.capabilities)
+    if name == "tunable_index":
+        return _tunable_index(context.symbols)
+    if name == "failure_surface":
+        return _failure_surface(context.symbols)
     if name == "consequences":
         return _consequences(context.consequences)
     if name == "verification_gaps":

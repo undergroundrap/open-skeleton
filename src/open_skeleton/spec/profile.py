@@ -36,6 +36,8 @@ PANEL_KINDS = frozenset(
         "traceability_matrix",
         "verification_gaps",
         "consequences",
+        "tunable_index",
+        "failure_surface",
     }
 )
 
