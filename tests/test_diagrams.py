@@ -162,7 +162,8 @@ class PersistenceErdTests(TestCase):
             evidence_by_id={},
         )[0]
         assert diagram.mermaid is not None
-        self.assertIn('t_players[("players")]', diagram.mermaid)
+        self.assertTrue(diagram.mermaid.startswith("erDiagram"))
+        self.assertIn("PLAYERS", diagram.mermaid)
         self.assertIn("creates", diagram.mermaid)
         self.assertIn("writes", diagram.mermaid)
         self.assertEqual(diagram.edge_count, 2)
@@ -298,3 +299,101 @@ class HandlerFlowTests(TestCase):
             handler_flow_limit=2,
         )
         self.assertEqual(len(diagrams), 2)
+
+
+class FunctionFlowTests(TestCase):
+    SYMBOLS = (
+        {
+            "symbol_id": "s_route",
+            "qualified_name": "m.handler",
+            "kind": "async_function",
+            "path": "m.py",
+            "start_line": 1,
+            "metadata": {
+                "control_flow": [
+                    {"kind": "guard", "line": 2, "label": "a", "depth": 0},
+                    {"kind": "guard", "line": 3, "label": "b", "depth": 0},
+                    {"kind": "return", "line": 4, "label": "1", "depth": 0},
+                ]
+            },
+        },
+        {
+            "symbol_id": "s_plain",
+            "qualified_name": "m.helper",
+            "kind": "function",
+            "path": "m.py",
+            "start_line": 10,
+            "metadata": {
+                "control_flow": [
+                    {"kind": "guard", "line": 11, "label": "x", "depth": 0},
+                    {"kind": "guard", "line": 12, "label": "y", "depth": 0},
+                    {"kind": "return", "line": 13, "label": "2", "depth": 0},
+                ]
+            },
+        },
+        {
+            "symbol_id": "s_one",
+            "qualified_name": "m.trivial",
+            "kind": "function",
+            "path": "m.py",
+            "start_line": 20,
+            "metadata": {"control_flow": [{"kind": "guard", "line": 21, "label": "z", "depth": 0}]},
+        },
+    )
+    ROUTE = _claim("http_route", "GET /a is handled by m.handler.")
+
+    def _build(self) -> tuple[Diagram, ...]:
+        return build_diagrams(
+            "function_flow",
+            files=(),
+            claims=(self.ROUTE,),
+            symbols=self.SYMBOLS,
+            edges=(),
+            evidence_by_id={},
+        )
+
+    def test_a_route_handler_is_not_drawn_twice(self) -> None:
+        names = {item.name for item in self._build()}
+        self.assertNotIn("function_flow:m.handler", names)
+        self.assertIn("function_flow:m.helper", names)
+
+    def test_a_function_with_one_guard_is_skipped(self) -> None:
+        names = {item.name for item in self._build()}
+        self.assertNotIn("function_flow:m.trivial", names)
+
+    def test_the_flow_renders_guards_and_exits(self) -> None:
+        diagram = self._build()[0]
+        assert diagram.mermaid is not None
+        self.assertIn('{"x<br/>L11"}', diagram.mermaid)
+        self.assertIn("return 2", diagram.mermaid)
+
+    def test_nothing_eligible_is_omitted_with_a_reason(self) -> None:
+        diagrams = build_diagrams(
+            "function_flow",
+            files=(),
+            claims=(),
+            symbols=(),
+            edges=(),
+            evidence_by_id={},
+        )
+        self.assertIsNone(diagrams[0].mermaid)
+        assert diagrams[0].omitted_reason is not None
+        self.assertIn("two or more guards", diagrams[0].omitted_reason)
+
+
+class PersistenceErdSyntaxTests(TestCase):
+    def test_a_real_er_diagram_is_emitted(self) -> None:
+        diagram = build_diagrams(
+            "persistence_erd",
+            files=(),
+            claims=(
+                _claim("storage_schema", "db.DBManager._init_tables creates SQLite table players."),
+            ),
+            symbols=(),
+            edges=(),
+            evidence_by_id={},
+        )[0]
+        assert diagram.mermaid is not None
+        self.assertTrue(diagram.mermaid.startswith("erDiagram"))
+        self.assertIn("PLAYERS", diagram.mermaid)
+        self.assertIn("creates", diagram.mermaid)

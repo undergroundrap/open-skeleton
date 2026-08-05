@@ -12,6 +12,8 @@ All notable changes will be documented here. This project follows Semantic Versi
   integration, security posture, verification, and enterprise delivery concerns
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
+- guard-and-exit flowcharts for non-route functions, and a real `erDiagram`
+  for durable storage in place of a flowchart approximation
 - observed value-assignment state diagrams, each edge labelled with the real
   enclosing condition and its line
 - per-route handler guard-and-exit flowcharts drawn from AST guards, raises and

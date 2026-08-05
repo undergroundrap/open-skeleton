@@ -247,7 +247,8 @@
             }
           ],
           "diagrams": [
-            "module_dependency"
+            "module_dependency",
+            "function_flow"
           ]
         },
         {

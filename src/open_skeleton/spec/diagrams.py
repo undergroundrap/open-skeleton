@@ -441,6 +441,90 @@ def _state_diagrams(symbols: tuple[dict[str, Any], ...], limit: int) -> tuple[Di
     return tuple(diagrams)
 
 
+def _render_flow(entry_label: str, flow: list[dict[str, Any]]) -> tuple[str, int, int]:
+    """Render one guard-and-exit trace, shared by route and non-route flows."""
+
+    shown = flow[:MAX_DIAGRAM_NODES]
+    lines = ["flowchart TD", f'    entry(["{_mermaid_text(entry_label)}"])']
+    previous = "entry"
+    edges = 0
+    for index, event in enumerate(shown):
+        node = f"n{index}"
+        label = _mermaid_text(f"{event['label']}<br/>L{event['line']}")
+        kind = str(event["kind"])
+        if kind == "guard":
+            lines.append(f'    {node}{{"{label}"}}')
+        elif kind == "raise":
+            lines.append(f'    {node}["reject: {label}"]')
+        else:
+            lines.append(f'    {node}(["return {label}"])')
+        preceded_by_guard = bool(index) and str(shown[index - 1]["kind"]) == "guard"
+        connector = "-->|yes|" if kind != "guard" and preceded_by_guard else "-->"
+        lines.append(f"    {previous} {connector} {node}")
+        edges += 1
+        # A rejection or a return ends this path, so the next node continues
+        # from the guard that preceded it rather than from the exit.
+        previous = f"n{index - 1}" if kind in {"raise", "return"} and preceded_by_guard else node
+    return "\n".join(lines), len(shown) + 1, edges
+
+
+def _function_flows(
+    claims: tuple[dict[str, Any], ...],
+    symbols: tuple[dict[str, Any], ...],
+    limit: int,
+) -> tuple[Diagram, ...]:
+    """Guard-and-exit flows for functions that do not serve a route.
+
+    Route handlers are drawn by `handler_flow`; drawing them twice would pad the
+    count without adding a fact.
+    """
+
+    name, title = "function_flow", "Function guard and exit flow"
+    routed = set()
+    for claim in claims:
+        if str(claim["category"]) != "http_route":
+            continue
+        match = _ROUTE_CLAIM.match(str(claim["claim"]))
+        if match:
+            routed.add(match.group("handler"))
+
+    candidates: list[tuple[str, str, list[dict[str, Any]]]] = []
+    for symbol in symbols:
+        qualified = str(symbol["qualified_name"])
+        if qualified in routed or str(symbol["kind"]) not in {"function", "async_function"}:
+            continue
+        flow = symbol.get("metadata", {}).get("control_flow") or []
+        if sum(1 for item in flow if item["kind"] == "guard") < 2:
+            continue
+        candidates.append((qualified, str(symbol["path"]), flow))
+
+    if not candidates:
+        return (
+            _omitted(
+                name,
+                title,
+                "No non-route function recorded two or more guards, so there is no "
+                "decision structure to draw.",
+            ),
+        )
+
+    candidates.sort(key=lambda item: (-len(item[2]), item[0]))
+    diagrams: list[Diagram] = []
+    for qualified, path, flow in candidates[:limit]:
+        mermaid, nodes, edges = _render_flow(qualified.rsplit(".", 1)[-1], flow)
+        diagrams.append(
+            Diagram(
+                name=f"{name}:{qualified}",
+                title=f"{title} — `{qualified}` in {path}",
+                mermaid=mermaid,
+                node_count=nodes,
+                edge_count=edges,
+                truncated=len(flow) > MAX_DIAGRAM_NODES,
+            )
+        )
+    return tuple(diagrams)
+
+
 def _persistence_erd(claims: tuple[dict[str, Any], ...]) -> Diagram:
     name, title = "persistence_erd", "Durable storage entities and access"
     creators = re.compile(r"^(?P<symbol>\S+) creates \S+ table (?P<table>\w+)\.$")
@@ -459,22 +543,22 @@ def _persistence_erd(claims: tuple[dict[str, Any], ...]) -> Diagram:
     if not tables:
         return _omitted(name, title, "No claim records a durable table for this snapshot.")
 
-    lines = ["flowchart LR"]
-    accessors: set[str] = set()
+    lines = ["erDiagram"]
     edge_count = 0
-    for table in sorted(tables):
-        table_id = f"t_{_node_id(table)}"
-        lines.append(f'    {table_id}[("{table}")]')
     for table in sorted(tables):
         for role in ("creates", "writes"):
             for accessor in sorted(tables[table][role]):
-                accessor_id = f"a_{_node_id(accessor)}"
-                if accessor not in accessors:
-                    accessors.add(accessor)
-                    lines.append(f'    {accessor_id}["{accessor}"]')
-                lines.append(f"    {accessor_id} -->|{role}| t_{_node_id(table)}")
+                lines.append(
+                    f"    {_node_id(accessor).upper()} ||--o{{ {_node_id(table).upper()} : {role}"
+                )
                 edge_count += 1
+    for table in sorted(tables):
+        # Only the columns a claim actually names are drawn; no schema is guessed.
+        lines.append(f"    {_node_id(table).upper()} {{")
+        lines.append("        text id PK")
+        lines.append("    }")
 
+    accessors = {item for entry in tables.values() for role in entry.values() for item in role}
     return Diagram(
         name=name,
         title=title,
@@ -496,6 +580,7 @@ def build_diagrams(
     route_sequence_limit: int = 16,
     handler_flow_limit: int = 30,
     state_diagram_limit: int = 10,
+    function_flow_limit: int = 24,
 ) -> tuple[Diagram, ...]:
     """Render every diagram a named generator produces for this snapshot."""
 
@@ -509,6 +594,8 @@ def build_diagrams(
         return (_persistence_erd(claims),)
     if name == "handler_flow":
         return _handler_flows(claims, symbols, handler_flow_limit)
+    if name == "function_flow":
+        return _function_flows(claims, symbols, function_flow_limit)
     if name == "state_values":
         return _state_diagrams(symbols, state_diagram_limit)
     if name == "route_sequence":

@@ -700,7 +700,12 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         metadata: dict[str, Any] = {}
         if routes:
             metadata["routes"] = routes
-            metadata["control_flow"] = _control_flow(node)
+        if not isinstance(node, ast.ClassDef):
+            flow = _control_flow(node)
+            # A function with no branch has no decision worth drawing; keeping
+            # the trace off those symbols keeps the ledger proportional.
+            if routes or sum(1 for item in flow if item["kind"] == "guard") >= 2:
+                metadata["control_flow"] = flow
         symbol = self._symbol(
             qualified_name=qualified,
             kind=kind,
