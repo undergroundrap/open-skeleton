@@ -14,6 +14,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.python_ast import (
     PythonAstAnalyzer,
     _embedded_literals,
+    _external_calls,
     _imported_names,
     _model_fields,
     _payload_shapes,
@@ -569,3 +570,33 @@ class SchemaMigrationTests(TestCase):
             "c.execute('CREATE TABLE IF NOT EXISTS players (id TEXT)')\n"
         )
         self.assertEqual(claims, [])
+
+
+class ExternalCallTests(TestCase):
+    """An import edge names a module; this names what is called through it."""
+
+    def _calls(self, source: str) -> dict[str, Any]:
+        return _external_calls(ast.parse(source))
+
+    def test_a_call_through_an_imported_module_is_recorded(self) -> None:
+        calls = self._calls("import os\nos.path.join(a, b)\n")
+        self.assertEqual(calls["os.path.join"]["via"], "os")
+
+    def test_self_and_parameters_are_this_module_s_own_wiring(self) -> None:
+        source = "class E:\n    def go(self, mob):\n        self.helper()\n        mob.roll()\n"
+        self.assertEqual(self._calls(source), {})
+
+    def test_a_client_built_from_an_import_counts_as_that_import(self) -> None:
+        calls = self._calls(
+            "from openai import AsyncOpenAI\nclient = AsyncOpenAI()\nclient.chat.create(x=1)\n"
+        )
+        self.assertEqual(calls["client.chat.create"]["via"], "AsyncOpenAI")
+
+    def test_an_alias_resolves_to_the_imported_name(self) -> None:
+        calls = self._calls("import numpy as np\nnp.array([1])\n")
+        self.assertEqual(calls["np.array"]["via"], "numpy")
+
+    def test_repeated_sites_are_counted_and_located_at_the_first(self) -> None:
+        calls = self._calls("import time\ntime.time()\ntime.time()\n")
+        self.assertEqual(calls["time.time"]["count"], 2)
+        self.assertEqual(calls["time.time"]["first_line"], 2)

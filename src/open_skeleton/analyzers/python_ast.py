@@ -407,6 +407,58 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Calls made through an imported name: the runtime surface this module uses.
+
+    An import edge records that `asyncio` is a dependency. It does not record
+    that what is called through it is `create_task`, and the difference is what
+    a reviewer means by "what does this actually do at runtime" —
+    `os.system` and `os.path.join` are the same import and not the same risk.
+
+    The receiver has to trace back to an import, so `self.method()` and a call
+    on a parameter are excluded: those are this module's own wiring, not a
+    surface it depends on. Names bound from a call to an imported name are
+    followed one step, so a client constructed from an SDK counts as that SDK.
+    """
+
+    imported: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                # `import a.b.c` binds `a` unless aliased.
+                imported[alias.asname or alias.name.split(".")[0]] = alias.name
+
+    # `client = AsyncOpenAI(...)` makes `client` stand for the imported name.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        root = (_expr_name(node.value.func) or "").split(".")[0]
+        if root and root in imported:
+            for target in node.targets:
+                for name in _assigned_names(target):
+                    imported.setdefault(name, imported[root])
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        dotted = _expr_name(node.func)
+        if not dotted or "." not in dotted:
+            continue
+        root = dotted.split(".")[0]
+        if root not in imported:
+            continue
+        entry = found.setdefault(
+            dotted, {"count": 0, "first_line": node.lineno, "via": imported[root]}
+        )
+        entry["count"] = int(entry["count"]) + 1
+        entry["first_line"] = min(int(entry["first_line"]), node.lineno)
+    return found
+
+
 def _parameter_entry(argument: ast.arg, default: ast.expr | None, kind: str) -> dict[str, Any]:
     """One parameter, with annotation and default rendered as written."""
 
@@ -866,6 +918,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.string_constants = _string_constants(tree)
         self.embedded_literals = _embedded_literals(tree)
         self.signatures = _signatures(tree)
+        self.external_calls = _external_calls(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1633,6 +1686,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["embedded_literals"] = self.embedded_literals
         if self.signatures:
             payload["signatures"] = self.signatures
+        if self.external_calls:
+            payload["external_calls"] = self.external_calls
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):

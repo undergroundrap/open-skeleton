@@ -728,6 +728,71 @@ def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _external_calls(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Calls made through an imported name: the runtime surface actually used.
+
+    An import edge says `os` is a dependency. It does not say whether what is
+    called through it is `os.path.join` or `os.system`, which is the same
+    import and not the same risk.
+    """
+
+    totals: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        calls = symbol.get("metadata", {}).get("external_calls") or {}
+        for name, entry in calls.items():
+            running = totals.setdefault(
+                name,
+                {
+                    "count": 0,
+                    "via": str(entry.get("via", "")),
+                    "site": f"{symbol['path']}:{entry['first_line']}",
+                },
+            )
+            running["count"] = int(running["count"]) + int(entry["count"])
+    rows = tuple(
+        (name, str(entry["via"]), f"{int(entry['count']):,}", str(entry["site"]))
+        for name, entry in sorted(
+            totals.items(), key=lambda item: (-int(item[1]["count"]), item[0])
+        )
+    )
+    return Panel(
+        name="external_calls",
+        title="Calls through imported names",
+        columns=("Call", "Imported as", "Sites", "First seen"),
+        alignments=("left", "left", "right", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "The receiver has to trace back to an import, so a call on self or "
+            "on a parameter is this module's own wiring and is excluded. A name "
+            "bound from a call to an imported name is followed one step, so a "
+            "client constructed from an SDK counts as that SDK."
+        ),
+    )
+
+
+def _config_settings(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Build and compiler settings, which decide what the toolchain accepts."""
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        settings = symbol.get("metadata", {}).get("config_settings") or {}
+        for key, value in sorted(settings.items()):
+            rows.append((key, f"`{value}`", str(symbol["path"])))
+    rows.sort(key=lambda row: (row[2], row[0]))
+    return Panel(
+        name="config_settings",
+        title="Compiler and build settings",
+        columns=("Setting", "Value", "Declared in"),
+        alignments=("left", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            "Scalar settings only, flattened to dotted keys. `strict` set to "
+            "false is a fact about how much of a codebase the type checker "
+            "actually checks, and it lives in a file no language analyzer opens."
+        ),
+    )
+
+
 def _external_origins(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Third-party hosts named in source string literals.
 
@@ -888,6 +953,10 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
+    if name == "external_calls":
+        return _external_calls(context.symbols)
+    if name == "config_settings":
+        return _config_settings(context.symbols)
     if name == "external_origins":
         return _external_origins(context.symbols)
     if name == "external_api_surface":

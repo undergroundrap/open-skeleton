@@ -56,6 +56,95 @@ DOCUMENTED_ROUTE_PATTERN = re.compile(
 NEGATION_PATTERN = re.compile(r"\b(?:no|not|without|doesn['’]?t)\b", re.IGNORECASE)  # noqa: RUF001
 
 
+def _strip_json_comments(source: str) -> str:
+    """Remove the comments a tsconfig is allowed to carry but JSON is not.
+
+    tsconfig.json is JSONC by convention and the files in the wild use it, so a
+    strict parser rejects perfectly ordinary configurations. Strings are
+    tracked so a `//` inside one is left alone.
+    """
+
+    out: list[str] = []
+    index = 0
+    length = len(source)
+    in_string = False
+    while index < length:
+        character = source[index]
+        if in_string:
+            out.append(character)
+            if character == "\\" and index + 1 < length:
+                out.append(source[index + 1])
+                index += 2
+                continue
+            if character == '"':
+                in_string = False
+            index += 1
+            continue
+        if character == '"':
+            in_string = True
+            out.append(character)
+            index += 1
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index)
+            index = length if newline < 0 else newline
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            index = length if end < 0 else end + 2
+            continue
+        out.append(character)
+        index += 1
+
+    # Trailing commas are the other thing JSONC tolerates, and they have to be
+    # removed after the comments rather than alongside them: a comment sitting
+    # between the comma and its closing brace hides the brace from a
+    # single-pass scan, which is exactly how real configurations are written.
+    stripped = "".join(out)
+    cleaned: list[str] = []
+    index = 0
+    length = len(stripped)
+    in_string = False
+    while index < length:
+        character = stripped[index]
+        if in_string:
+            cleaned.append(character)
+            if character == "\\" and index + 1 < length:
+                cleaned.append(stripped[index + 1])
+                index += 2
+                continue
+            if character == '"':
+                in_string = False
+            index += 1
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "," and stripped[index + 1 :].lstrip()[:1] in {"}", "]"}:
+            index += 1
+            continue
+        cleaned.append(character)
+        index += 1
+    return "".join(cleaned)
+
+
+def _flatten_settings(document: Any, prefix: str = "") -> dict[str, str]:
+    """Scalar settings as dotted keys, so a nested option is still searchable."""
+
+    flat: dict[str, str] = {}
+    if isinstance(document, dict):
+        for key, value in document.items():
+            flat.update(_flatten_settings(value, f"{prefix}.{key}" if prefix else str(key)))
+    elif isinstance(document, list):
+        rendered = ", ".join(str(item) for item in document if isinstance(item, (str, int, float)))
+        if rendered and prefix:
+            flat[prefix] = rendered
+    elif isinstance(document, bool):
+        flat[prefix] = "true" if document else "false"
+    elif isinstance(document, (str, int, float)) and prefix:
+        flat[prefix] = str(document)
+    return flat
+
+
 def _normalize_requirement(value: object) -> str | None:
     """Reduce a PEP 508 requirement string to its normalized distribution name."""
 
@@ -708,6 +797,79 @@ class ProjectMetadataAnalyzer:
                     invalidation_keys=("snapshot:file-set",),
                 )
             )
+
+        # Build and compiler settings decide what the toolchain will accept.
+        # `"strict": false` in a tsconfig is a fact about how much of this
+        # codebase is actually type-checked, and it lived in a file no analyzer
+        # opened.
+        for file_record in snapshot.files:
+            name = Path(file_record.path).name.casefold()
+            if not (name.startswith(("tsconfig", "jsconfig")) and name.endswith(".json")):
+                continue
+            source = file_sources.get(file_record.path)
+            if source is None:
+                continue
+            try:
+                document = json.loads(_strip_json_comments(source))
+            except (json.JSONDecodeError, ValueError):
+                failures.append(f"{file_record.path}: unparsed compiler configuration")
+                continue
+            settings = _flatten_settings(document)
+            if not settings:
+                continue
+            config_evidence = receipt(file_record.path, 1, None, "compiler_configuration")
+            symbols.append(
+                SymbolRecord(
+                    symbol_id=stable_id(
+                        "symbol",
+                        (
+                            snapshot.snapshot_id,
+                            file_record.path,
+                            "compiler_configuration",
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    path=file_record.path,
+                    qualified_name=file_record.path,
+                    kind="compiler_configuration",
+                    start_line=1,
+                    end_line=max(1, file_record.line_count),
+                    language="JSON",
+                    analyzer=ANALYZER_VERSION,
+                    metadata={"config_settings": settings},
+                )
+            )
+            strictness = settings.get("compilerOptions.strict")
+            if strictness is not None:
+                strict_text = (
+                    f"{file_record.path} sets compilerOptions.strict to {strictness}, which "
+                    "decides how much of this codebase the type checker actually checks."
+                )
+                claims.append(
+                    ClaimRecord(
+                        claim_id=stable_id(
+                            "claim",
+                            (
+                                snapshot.snapshot_id,
+                                "compiler_configuration",
+                                strict_text,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        claim=strict_text,
+                        category="compiler_configuration",
+                        status="verified",
+                        confidence=1.0,
+                        importance="medium",
+                        produced_by=ANALYZER_VERSION,
+                        created_at=created_at,
+                        verified_at=created_at,
+                        supporting_evidence=(config_evidence.evidence_id,),
+                        invalidation_keys=(f"file:{file_record.path}",),
+                    )
+                )
 
         # Stylesheets and markup fetch from third parties too, and neither is
         # any language analyzer's territory. A font `@import` and a background

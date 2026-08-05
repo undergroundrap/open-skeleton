@@ -465,6 +465,40 @@
           "panels": [
             "imported_names"
           ]
+        },
+        {
+          "id": "stack.compiler-settings",
+          "number": "3.6",
+          "title": "Compiler and Build Settings",
+          "concern": "The toolchain configuration that decides what is accepted.",
+          "framing": "`strict` set to false is a fact about how much of a codebase the type checker actually checks. It decides the value of every type annotation in the tree and it lives in a file no language analyzer opens.",
+          "probes": [
+            {
+              "name": "Compiler configuration",
+              "kind": "path_glob",
+              "terms": [
+                "tsconfig*.json",
+                "jsconfig.json",
+                "*/tsconfig*.json"
+              ]
+            },
+            {
+              "name": "Configuration findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "compiler_configuration"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "compiler_configuration"
+            ],
+            "limit": 10
+          },
+          "panels": [
+            "config_settings"
+          ]
         }
       ]
     },
@@ -2445,6 +2479,19 @@
           ],
           "cross_references": [
             "maintenance.symbol-index"
+          ]
+        },
+        {
+          "id": "maintenance.external-calls",
+          "number": "9.13",
+          "title": "Calls Through Imported Names",
+          "concern": "Which functions of each dependency this code actually calls.",
+          "framing": "A manifest names a package and an import edge names a module. Neither says whether what is called is `os.path.join` or `os.system` — the same import, and not the same risk.",
+          "panels": [
+            "external_calls"
+          ],
+          "cross_references": [
+            "stack.imported-names"
           ]
         }
       ]

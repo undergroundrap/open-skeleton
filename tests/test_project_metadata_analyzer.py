@@ -209,3 +209,40 @@ class ThirdPartyOriginTests(TestCase):
             "body { background: url('https://cdn.example.com/b.png'); }\n",
         )
         self.assertEqual(origins, {"cdn.example.com"})
+
+
+class CompilerSettingTests(TestCase):
+    """`strict: false` decides the value of every annotation in the tree."""
+
+    def _settings(self, source: str) -> dict[str, str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tsconfig.json").write_text(source, encoding="utf-8")
+            result = ProjectMetadataAnalyzer().analyze(scan_repository(root))
+        for symbol in result.symbols:
+            settings = symbol.metadata.get("config_settings")
+            if settings:
+                return dict(settings)
+        return {}
+
+    def test_nested_settings_flatten_to_dotted_keys(self) -> None:
+        settings = self._settings('{"compilerOptions": {"strict": true, "target": "es2017"}}')
+        self.assertEqual(settings["compilerOptions.strict"], "true")
+        self.assertEqual(settings["compilerOptions.target"], "es2017")
+
+    def test_a_list_setting_is_rendered_as_its_members(self) -> None:
+        settings = self._settings('{"compilerOptions": {"lib": ["dom", "esnext"]}}')
+        self.assertEqual(settings["compilerOptions.lib"], "dom, esnext")
+
+    def test_comments_and_trailing_commas_are_tolerated(self) -> None:
+        # tsconfig is JSONC by convention and real ones use it, so a strict
+        # parser would reject perfectly ordinary configurations.
+        settings = self._settings(
+            '{\n  // the compiler section\n  "compilerOptions": {\n'
+            '    "strict": false, /* off */\n  },\n}'
+        )
+        self.assertEqual(settings["compilerOptions.strict"], "false")
+
+    def test_a_double_slash_inside_a_string_is_not_a_comment(self) -> None:
+        settings = self._settings('{"compilerOptions": {"baseUrl": "https://x.test/y"}}')
+        self.assertEqual(settings["compilerOptions.baseUrl"], "https://x.test/y")
