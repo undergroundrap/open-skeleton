@@ -25,20 +25,66 @@ def _dashboard_html(nonce: str) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Open Skeleton</title>
 <style nonce="{nonce}">
-:root{{--ink:#171717;--muted:#6b6b6b;--paper:#f6f3ed;--panel:#fff;--line:#ded9cf;--violet:#6545e8;--red:#b33a3a;--amber:#a26412;--green:#216e4e}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}}
-header{{background:var(--ink);color:#fff;padding:24px max(24px,calc((100vw - 1280px)/2));display:flex;justify-content:space-between;align-items:end}}
-h1{{margin:0;font:700 32px/1 system-ui,sans-serif;letter-spacing:-1.2px}}header p{{margin:7px 0 0;color:#bcbcbc}}.badge{{border:1px solid #555;border-radius:999px;padding:6px 10px;font-size:12px}}
-main{{max-width:1280px;margin:auto;padding:24px}}.metrics{{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px}}.metric,.panel{{background:var(--panel);border:1px solid var(--line);border-radius:10px}}
-.metric{{padding:16px}}.metric strong{{display:block;font:700 27px/1 system-ui,sans-serif;margin-top:8px}}.label{{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}}
-.layout{{display:grid;grid-template-columns:1fr 340px;gap:18px;margin-top:18px}}.panel{{padding:18px}}h2{{font:700 18px system-ui,sans-serif;margin:0 0 14px}}
-.toolbar{{display:grid;grid-template-columns:1fr 150px 190px;gap:8px;margin-bottom:14px}}input,select{{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:7px;background:#fff;font:inherit}}
-.claim{{border-top:1px solid var(--line);padding:14px 2px}}.claim:first-of-type{{border-top:0}}.claim-head{{display:flex;gap:8px;align-items:center;margin-bottom:6px}}.status{{font-size:10px;font-weight:700;padding:3px 6px;border-radius:999px;text-transform:uppercase}}
-.verified{{color:var(--green);background:#e8f5ee}}.inferred{{color:var(--amber);background:#fff2dd}}.conflict{{color:var(--red);background:#fdeaea}}.unknown,.stale{{color:#555;background:#eee}}
-.category{{color:var(--muted);font-size:12px}}.claim p{{margin:0}}button{{border:0;background:none;color:var(--violet);font:inherit;padding:6px 0;cursor:pointer}}button:hover{{text-decoration:underline}}
-.coverage{{margin:12px 0}}progress{{display:block;width:100%;height:8px;margin-top:5px;accent-color:var(--violet)}}.small{{font-size:12px;color:var(--muted)}}.spaced{{margin-top:18px}}
-#drawer{{position:fixed;right:0;top:0;width:min(620px,92vw);height:100vh;background:#111;color:#eee;padding:24px;transform:translateX(105%);transition:.18s;overflow:auto;box-shadow:-12px 0 40px #0005}}#drawer.open{{transform:none}}#drawer pre{{white-space:pre-wrap;background:#1d1d1d;padding:14px;border-radius:8px;border:1px solid #333}}#close{{color:#c9bfff;float:right}}
-.empty{{padding:30px;text-align:center;color:var(--muted)}}@media(max-width:850px){{.metrics{{grid-template-columns:repeat(2,1fr)}}.layout{{grid-template-columns:1fr}}.toolbar{{grid-template-columns:1fr}}}}
+/* Monochrome by intent. Status is carried by weight, border and label text so a
+   finding reads the same to a colour-blind reader and in a grayscale
+   screenshot. Only `conflict` gets a light accent, because an unresolved
+   contradiction is the one thing that should interrupt a scan. */
+:root{{--bg:#000;--panel:#0a0a0a;--raised:#141414;--line:#242424;--line-soft:#1a1a1a;
+--ink:#f5f5f5;--muted:#8a8a8a;--faint:#5c5c5c;--accent:#fff;--alert:#e5e5e5}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+-webkit-font-smoothing:antialiased}}
+header{{border-bottom:1px solid var(--line);padding:28px max(24px,calc((100vw - 1280px)/2));
+display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap}}
+h1{{margin:0;font:600 30px/1 system-ui,-apple-system,sans-serif;letter-spacing:-.9px}}
+header p{{margin:8px 0 0;color:var(--muted);font-size:13px}}
+.badge{{border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--muted)}}
+main{{max-width:1280px;margin:auto;padding:24px}}
+.metrics{{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:10px}}
+.metric,.panel{{background:var(--panel);border:1px solid var(--line);border-radius:8px}}
+.metric{{padding:16px}}
+.metric strong{{display:block;font:600 28px/1 system-ui,sans-serif;margin-top:10px;letter-spacing:-.5px}}
+.label{{color:var(--faint);font-size:10px;text-transform:uppercase;letter-spacing:.1em}}
+.layout{{display:grid;grid-template-columns:1fr 340px;gap:16px;margin-top:16px}}
+.panel{{padding:20px}}
+h2{{font:600 15px system-ui,sans-serif;margin:0 0 16px;letter-spacing:-.2px;color:var(--ink)}}
+.toolbar{{display:grid;grid-template-columns:1fr 150px 190px;gap:8px;margin-bottom:16px}}
+input,select{{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:6px;
+background:var(--raised);color:var(--ink);font:inherit;font-size:13px}}
+input:focus,select:focus{{outline:none;border-color:var(--faint)}}
+input::placeholder{{color:var(--faint)}}
+.claim{{border-top:1px solid var(--line-soft);padding:16px 2px}}
+.claim:first-of-type{{border-top:0}}
+.claim-head{{display:flex;gap:8px;align-items:center;margin-bottom:7px;flex-wrap:wrap}}
+.status{{font-size:10px;font-weight:700;padding:3px 7px;border-radius:4px;
+text-transform:uppercase;letter-spacing:.06em;border:1px solid var(--line)}}
+.verified{{color:var(--ink);background:var(--raised)}}
+.inferred{{color:var(--muted);background:transparent}}
+.conflict{{color:#000;background:var(--alert);border-color:var(--alert)}}
+.unknown,.stale{{color:var(--faint);background:transparent}}
+.category{{color:var(--faint);font-size:12px}}
+.claim p{{margin:0;color:var(--ink)}}
+button{{border:0;background:none;color:var(--muted);font:inherit;font-size:12px;
+padding:7px 0;cursor:pointer;text-align:left}}
+button:hover{{color:var(--accent);text-decoration:underline}}
+.coverage{{margin:14px 0}}
+progress{{display:block;width:100%;height:4px;margin-top:6px;accent-color:var(--accent);
+background:var(--raised);border:0;border-radius:2px}}
+progress::-webkit-progress-bar{{background:var(--raised);border-radius:2px}}
+progress::-webkit-progress-value{{background:var(--accent);border-radius:2px}}
+.small{{font-size:12px;color:var(--muted)}}
+.spaced{{margin-top:16px}}
+#drawer{{position:fixed;right:0;top:0;width:min(620px,92vw);height:100vh;background:var(--panel);
+color:var(--ink);padding:24px;transform:translateX(105%);transition:transform .18s ease;
+overflow:auto;border-left:1px solid var(--line)}}
+#drawer.open{{transform:none}}
+#drawer pre{{white-space:pre-wrap;background:var(--bg);padding:14px;border-radius:6px;
+border:1px solid var(--line);font-size:12px;line-height:1.6}}
+#close{{color:var(--muted);float:right}}
+.empty{{padding:36px;text-align:center;color:var(--faint);font-size:13px}}
+@media(max-width:850px){{.metrics{{grid-template-columns:repeat(2,1fr)}}
+.layout{{grid-template-columns:1fr}}.toolbar{{grid-template-columns:1fr}}}}
 </style></head><body>
 <header><div><h1>Open Skeleton</h1><p>Evidence first. Source pinned. Unknowns preserved.</p></div><span class="badge" id="snapshot">loading</span></header>
 <main><section class="metrics" id="metrics"></section><section class="layout"><div class="panel"><h2>Prioritized findings</h2><div class="toolbar"><input id="search" aria-label="Filter findings" placeholder="Filter findings"><select id="status" aria-label="Filter by status"><option value="">All statuses</option><option>verified</option><option>inferred</option><option>conflict</option><option>unknown</option><option>stale</option></select><select id="category" aria-label="Filter by category"><option value="">All categories</option></select></div><div id="claims"></div></div><aside><div class="panel"><h2>Coverage</h2><div id="coverage"></div></div><div class="panel spaced"><h2>Latest change</h2><div id="diff" class="small">Loading...</div></div></aside></section></main>
