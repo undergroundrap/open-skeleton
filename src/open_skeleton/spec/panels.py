@@ -475,6 +475,47 @@ def _model_fields(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _embedded_literals(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Numeric literals written straight into function bodies.
+
+    A number with a module-level name is a tunable and the tunable index has
+    it. A number written into the logic is the same decision made without a
+    name, and it is the harder one to find: nothing indexes it, so changing
+    the behaviour means locating every site by reading.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        functions = symbol.get("metadata", {}).get("embedded_literals") or {}
+        for name, entry in sorted(functions.items()):
+            values = entry["values"]
+            rendered = ", ".join(f"`{item['value']}`" for item in values[:12])
+            if len(values) > 12:
+                rendered += f" +{len(values) - 12:,} more"
+            rows.append(
+                (
+                    name,
+                    f"{len(values):,}",
+                    rendered,
+                    f"{symbol['path']}:{entry['line']}",
+                )
+            )
+    rows.sort(key=lambda row: (-int(row[1].replace(",", "")), row[3], row[0]))
+    return Panel(
+        name="embedded_literals",
+        title="Numeric literals inside functions",
+        columns=("Function", "Distinct", "Values", "Defined at"),
+        alignments=("left", "right", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            "0 and 1 are excluded because they are structural far more often "
+            "than they are decisions. A value repeated within one function is "
+            "counted once and located at its first site, so the count is of "
+            "distinct values rather than of occurrences."
+        ),
+    )
+
+
 def _string_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Module-level string constants, with their values.
 
@@ -691,6 +732,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _symbol_index(context.symbols)
     if name == "model_fields":
         return _model_fields(context.symbols)
+    if name == "embedded_literals":
+        return _embedded_literals(context.symbols)
     if name == "string_constants":
         return _string_constants(context.symbols)
     if name == "imported_names":

@@ -2360,6 +2360,19 @@
           "panels": [
             "string_constants"
           ]
+        },
+        {
+          "id": "maintenance.embedded-literals",
+          "number": "9.11",
+          "title": "Numeric Literals Inside Functions",
+          "concern": "Behavioural values hardcoded in logic rather than named.",
+          "framing": "A number with a module-level name is a tunable and appears in the tunable index. A number written into the logic is the same decision made without a name, and it is the harder one to change: nothing indexes it, so every site has to be found by reading.",
+          "panels": [
+            "embedded_literals"
+          ],
+          "cross_references": [
+            "maintenance.tunables"
+          ]
         }
       ]
     }

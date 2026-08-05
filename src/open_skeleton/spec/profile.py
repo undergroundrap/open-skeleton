@@ -45,6 +45,7 @@ PANEL_KINDS = frozenset(
         "model_fields",
         "imported_names",
         "string_constants",
+        "embedded_literals",
     }
 )
 

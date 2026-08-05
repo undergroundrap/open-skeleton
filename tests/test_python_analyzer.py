@@ -13,6 +13,7 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.python_ast import (
     PythonAstAnalyzer,
+    _embedded_literals,
     _imported_names,
     _model_fields,
     _payload_shapes,
@@ -459,3 +460,31 @@ class StringConstantTests(TestCase):
 
     def test_an_annotated_assignment_is_recorded(self) -> None:
         self.assertEqual(self._constants('NAME: str = "x"\n')["NAME"]["value"], "x")
+
+
+class EmbeddedLiteralTests(TestCase):
+    """A number written into logic is a decision made without a name."""
+
+    def _literals(self, source: str) -> dict[str, Any]:
+        return _embedded_literals(ast.parse(source))
+
+    def test_literals_in_a_body_are_recorded_with_their_lines(self) -> None:
+        found = self._literals("def f():\n    wait = 300.0\n    tries = 5\n")
+        values = {item["value"]: item["line"] for item in found["f"]["values"]}
+        self.assertEqual(values, {"300.0": 2, "5": 3})
+
+    def test_zero_and_one_are_excluded_as_structural(self) -> None:
+        self.assertEqual(self._literals("def f():\n    return [0, 1]\n"), {})
+
+    def test_a_negative_literal_keeps_its_sign(self) -> None:
+        found = self._literals("def f():\n    return -20\n")
+        self.assertEqual(found["f"]["values"][0]["value"], "-20")
+
+    def test_a_repeated_value_is_counted_once_at_its_first_site(self) -> None:
+        found = self._literals("def f():\n    a = 7\n    b = 7\n")
+        self.assertEqual(found["f"]["values"], [{"value": "7", "line": 2}])
+
+    def test_a_nested_function_owns_its_own_literals(self) -> None:
+        found = self._literals("def outer():\n    def inner():\n        return 42\n    return 3\n")
+        self.assertEqual([item["value"] for item in found["outer"]["values"]], ["3"])
+        self.assertEqual([item["value"] for item in found["inner"]["values"]], ["42"])

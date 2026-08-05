@@ -377,6 +377,76 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Numeric literals written inside a function body.
+
+    A number given a module-level name is a tunable and already reported. A
+    number written straight into the logic — a 300-second buff, a 1500ms
+    cooldown, a 0.15 drop chance — is the same decision made without a name,
+    and it is the harder one to find: nothing indexes it, and changing the
+    behaviour means locating every site by reading.
+
+    0 and 1 are excluded because they are structural far more often than they
+    are decisions; every other value is recorded with the line that holds it.
+    """
+
+    def own_body(node: ast.AST) -> list[ast.AST]:
+        """Nodes belonging to this function, stopping at a nested definition.
+
+        ast.walk cannot express this: it queues a node's children before the
+        caller sees the node, so skipping a nested FunctionDef still yields
+        everything inside it.
+        """
+
+        collected: list[ast.AST] = []
+        pending: list[ast.AST] = list(ast.iter_child_nodes(node))
+        while pending:
+            current = pending.pop()
+            if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            collected.append(current)
+            pending.extend(ast.iter_child_nodes(current))
+        return collected
+
+    def render(node: ast.AST) -> str | None:
+        """The literal as written, so a float keeps the point that says so."""
+
+        sign = ""
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            sign, node = "-", node.operand
+        if not isinstance(node, ast.Constant):
+            return None
+        value = node.value
+        # bool is an int subclass, and True is not a magic number.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value in {0, 1}:
+            return None
+        return f"{sign}{value!r}"
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        values: dict[str, int] = {}
+        for inner in own_body(node):
+            rendered = render(inner)
+            if rendered is None:
+                continue
+            line = getattr(inner, "lineno", node.lineno)
+            # Traversal order is not source order, so the earliest line has to
+            # be taken rather than the first one seen.
+            values[rendered] = min(values.get(rendered, line), line)
+        if values:
+            found[node.name] = {
+                "values": [
+                    {"value": value, "line": line} for value, line in sorted(values.items())
+                ],
+                "line": node.lineno,
+            }
+    return found
+
+
 def _string_constants(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Module-level string constants, with their values.
 
@@ -707,6 +777,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.model_fields = _model_fields(tree)
         self.imported_names = _imported_names(tree)
         self.string_constants = _string_constants(tree)
+        self.embedded_literals = _embedded_literals(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1443,6 +1514,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["imported_names"] = self.imported_names
         if self.string_constants:
             payload["string_constants"] = self.string_constants
+        if self.embedded_literals:
+            payload["embedded_literals"] = self.embedded_literals
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):
