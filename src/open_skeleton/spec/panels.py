@@ -632,6 +632,45 @@ def _payload_shapes(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Field names coined as object literal keys.
+
+    A request body assembled inline is a contract with the server that exists
+    only as these keys: there is no model class to read, and the symbol index
+    holds the function that builds the object rather than its shape. This is
+    the client-side counterpart to the returned payload fields.
+    """
+
+    totals: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        keys = symbol.get("metadata", {}).get("object_keys") or {}
+        for name, entry in keys.items():
+            running = totals.setdefault(
+                name,
+                {"count": 0, "site": f"{symbol['path']}:{entry['first_line']}"},
+            )
+            running["count"] = int(running["count"]) + int(entry["count"])
+    rows = tuple(
+        (name, f"{int(entry['count']):,}", str(entry["site"]))
+        for name, entry in sorted(
+            totals.items(), key=lambda item: (-int(item[1]["count"]), item[0])
+        )
+    )
+    return Panel(
+        name="object_keys",
+        title="Object literal field names",
+        columns=("Field", "Sites", "First seen"),
+        alignments=("left", "right", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Keys written literally in object position. A computed key is "
+            "absent rather than guessed at, and shorthand is counted only "
+            "where the name is declared in the same module, so this is a "
+            "lower bound on the shapes the code builds."
+        ),
+    )
+
+
 def _external_origins(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Third-party hosts named in source string literals.
 
@@ -788,6 +827,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _imported_names(context.symbols)
     if name == "payload_shapes":
         return _payload_shapes(context.symbols)
+    if name == "object_keys":
+        return _object_keys(context.symbols)
     if name == "external_origins":
         return _external_origins(context.symbols)
     if name == "external_api_surface":

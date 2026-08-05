@@ -12,6 +12,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _declarations,
     _external_origins,
     _imported_names,
+    _object_keys,
     _parameter_names,
     _references,
     _tokens,
@@ -276,3 +277,32 @@ class ExternalOriginTests(TestCase):
         refs = _references(tokens, frozenset())
         self.assertNotIn("if", refs)
         self.assertNotIn("while", refs)
+
+
+class ObjectKeyTests(TestCase):
+    """A payload assembled inline is a contract that exists only as keys."""
+
+    def _keys(self, source: str) -> dict[str, Any]:
+        tokens = _tokens(source)
+        declared = frozenset(item.name.rsplit(".", 1)[-1] for item in _declarations(tokens))
+        return _object_keys(tokens, declared)
+
+    def test_literal_keys_are_recorded(self) -> None:
+        keys = self._keys("const body = { player_name: n, target_hp: h };")
+        self.assertEqual(sorted(keys), ["player_name", "target_hp"])
+
+    def test_a_statement_block_is_not_an_object_literal(self) -> None:
+        # `{` after `)` opens a block. Its contents are statements, and
+        # treating them as keys filled the panel with control flow.
+        self.assertEqual(self._keys("function f(a) { if (a) { return 1; } }"), {})
+
+    def test_a_nested_object_contributes_its_keys(self) -> None:
+        self.assertIn("inner_field", self._keys("const o = { outer: { inner_field: 2 } };"))
+
+    def test_a_member_access_is_not_a_key(self) -> None:
+        self.assertNotIn("hp", self._keys("const o = { total: player.hp };"))
+
+    def test_shorthand_counts_only_for_a_name_this_module_declares(self) -> None:
+        declared = self._keys("const hp = 3; const o = { hp };")
+        self.assertIn("hp", declared)
+        self.assertEqual(self._keys("const o = { unknownName };"), {})

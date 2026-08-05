@@ -303,6 +303,20 @@
           "panels": [
             "payload_shapes"
           ]
+        },
+        {
+          "id": "surface.object-keys",
+          "number": "2.11",
+          "title": "Object Literal Field Names",
+          "concern": "Field names the client coins when assembling payloads.",
+          "framing": "A request body assembled inline is a contract with the server that exists only as these keys. There is no model class to read, and the symbol index holds the function that builds the object rather than the shape it builds.",
+          "panels": [
+            "object_keys"
+          ],
+          "cross_references": [
+            "surface.payload-shapes",
+            "state.declared-models"
+          ]
         }
       ]
     },

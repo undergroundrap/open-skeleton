@@ -270,6 +270,56 @@ def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int
     return names, index
 
 
+def _object_keys(tokens: list[Token], declared: frozenset[str]) -> dict[str, dict[str, Any]]:
+    """Field names written as object literal keys.
+
+    A request body assembled inline — `{ player_name, target_hp, rested_bonus }`
+    — is a contract with the server that exists only as these keys. Nothing
+    else records it: there is no model class to read, and the symbol index
+    holds the function that builds the object rather than its shape.
+
+    A key is counted when it sits in key position, which means followed by a
+    colon inside braces, or standing alone as shorthand before a comma or the
+    closing brace. Anything computed is skipped rather than guessed at.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    depth = 0
+    brace_stack: list[bool] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind == "punctuation":
+            if token.value == "{":
+                # An object literal opens where a value is expected. After `)`
+                # or an identifier it is a block, and blocks hold statements.
+                previous = tokens[index - 1].value if index else "{"
+                brace_stack.append(previous in {"=", "(", ",", ":", "[", "return", "=>", "{"})
+                depth += 1
+            elif token.value == "}":
+                if brace_stack:
+                    brace_stack.pop()
+                depth -= 1
+            continue
+        if token.kind != "identifier" or not brace_stack or not brace_stack[-1]:
+            continue
+        previous = tokens[index - 1].value if index else ""
+        following = tokens[index + 1].value if index + 1 < total else ""
+        if previous == ".":
+            continue
+        is_pair = following == ":"
+        is_shorthand = previous in {"{", ","} and following in {",", "}"}
+        if not (is_pair or is_shorthand):
+            continue
+        # Shorthand repeats a name already declared elsewhere in the module;
+        # the pair form is where a field name is actually coined.
+        if is_shorthand and token.value not in declared:
+            continue
+        entry = found.setdefault(token.value, {"count": 0, "first_line": token.line})
+        entry["count"] = int(entry["count"]) + 1
+        entry["first_line"] = min(int(entry["first_line"]), token.line)
+    return found
+
+
 def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     """Hosts named in string literals, and the assets fetched from elsewhere.
 
@@ -785,6 +835,10 @@ class TypeScriptLexicalAnalyzer:
             file_declarations = _declarations(file_tokens)
             file_imports = _imported_names(file_tokens)
             file_origins = _external_origins(file_tokens)
+            file_object_keys = _object_keys(
+                file_tokens,
+                frozenset(item.name.rsplit(".", 1)[-1] for item in file_declarations),
+            )
             file_references = _references(
                 file_tokens,
                 frozenset(
@@ -820,6 +874,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"external_references": file_references} if file_references else {}),
                         **({"imported_names": file_imports} if file_imports else {}),
                         **({"external_origins": file_origins} if file_origins else {}),
+                        **({"object_keys": file_object_keys} if file_object_keys else {}),
                     },
                 )
             )
