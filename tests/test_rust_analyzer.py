@@ -9,10 +9,12 @@ from unittest import TestCase
 from open_skeleton.analyzers.rust_lexical import (
     RustLexicalAnalyzer,
     _constants,
+    _error_surface,
     _impl_methods,
     _mutable_statics,
     _name_index,
     _struct_fields,
+    _trait_implementations,
     tokenize,
 )
 from open_skeleton.models import AnalysisResult
@@ -219,3 +221,49 @@ class RustSharedStateTests(TestCase):
     def test_an_inherent_impl_attributes_to_its_type(self) -> None:
         found = _impl_methods(tokenize("impl Machine {\n  pub fn boot(&self) {}\n}\n"))
         self.assertEqual(found, [("Machine", "boot", 2)])
+
+
+class RustErrorAndTraitTests(TestCase):
+    """Rust states its failure surface in the type system, not in raises."""
+
+    def test_a_result_signature_is_fallible_and_its_error_type_is_named(self) -> None:
+        found = _error_surface(tokenize("fn boot() -> Result<Machine, BootError> { Ok(m) }\n"))
+        self.assertEqual(found["fallible_functions"], [("boot", 1)])
+        self.assertEqual(found["error_types"], {"BootError": 1})
+
+    def test_question_marks_are_counted_as_propagation(self) -> None:
+        found = _error_surface(
+            tokenize("fn go() -> Result<()> {\n  let a = f()?;\n  g()?;\n  Ok(())\n}\n")
+        )
+        self.assertEqual(found["propagation_sites"], 2)
+
+    def test_an_infallible_function_is_not_counted(self) -> None:
+        self.assertEqual(
+            _error_surface(tokenize("fn plain(x: u8) -> u8 { x }\n"))["fallible_functions"], []
+        )
+
+    def test_a_generic_argument_is_not_mistaken_for_the_trait(self) -> None:
+        # `impl From<Error> for BootError` implements From. Reading the last
+        # name before `for` would call the trait Error.
+        self.assertEqual(
+            _trait_implementations(tokenize("impl From<Error> for BootError {}\n")),
+            [("BootError", "From", 1)],
+        )
+
+    def test_a_path_qualified_trait_resolves_to_its_final_segment(self) -> None:
+        self.assertEqual(
+            _trait_implementations(tokenize("impl std::fmt::Display for M {}\n")),
+            [("M", "Display", 1)],
+        )
+
+    def test_an_inherent_impl_declares_no_contract(self) -> None:
+        self.assertEqual(_trait_implementations(tokenize("impl Machine { fn a() {} }\n")), [])
+
+    def test_a_macro_template_is_not_a_type(self) -> None:
+        # `impl fmt::Display for $name` inside macro_rules declares nothing
+        # about a type called `name`. Reporting one is a fabricated fact.
+        source = (
+            "macro_rules! m { ($name:ident) => { impl fmt::Display for $name { fn fmt() {} } }; }\n"
+        )
+        self.assertEqual(_trait_implementations(tokenize(source)), [])
+        self.assertEqual(_impl_methods(tokenize(source)), [])

@@ -167,6 +167,19 @@ def tokenize(source: str) -> list[Token]:
     return tokens
 
 
+def _is_macro_parameter(tokens: list[Token], index: int) -> bool:
+    """Whether an identifier is a `macro_rules!` substitution rather than a name.
+
+    `impl fmt::Display for $name` inside a macro declares nothing about a type
+    called `name`; it is a template. The tokenizer emits `$` separately, so the
+    preceding token is the whole test — and without it the analyzer reports a
+    macro parameter as a real type, which is a fabricated fact rather than a
+    missed one.
+    """
+
+    return index > 0 and tokens[index - 1].value == "$"
+
+
 def _name_index(tokens: list[Token]) -> dict[str, int]:
     """Every identifier a Rust file mentions, with the line it first appears on.
 
@@ -381,6 +394,126 @@ def _mutable_statics(tokens: list[Token]) -> list[tuple[str, int, str]]:
     return found
 
 
+def _error_surface(tokens: list[Token]) -> dict[str, Any]:
+    """How this file propagates failure: `Result` signatures and `?` sites.
+
+    Rust states its failure surface in the type system, which is the opposite
+    of a language that raises. A function returning `Result` is declaring that
+    it can fail and that its caller must decide what to do; a `?` is a caller
+    declining to and passing it upward. Counting both says where errors are
+    handled and where they only travel.
+
+    The error types named in those signatures are the vocabulary a caller
+    codes against, so they are collected rather than only counted.
+    """
+
+    total = len(tokens)
+    fallible: list[tuple[str, int]] = []
+    error_types: dict[str, int] = {}
+    propagations = 0
+
+    for index, token in enumerate(tokens):
+        if token.kind == "punctuation" and token.value == "?":
+            # `?` after an identifier or a closing bracket is propagation. In
+            # any other position it is part of a type or a macro.
+            previous = tokens[index - 1] if index else None
+            if previous is not None and (
+                previous.kind == "identifier" or previous.value in {")", "]", "}"}
+            ):
+                propagations += 1
+            continue
+        if token.kind != "identifier" or token.value != "fn":
+            continue
+        if index + 1 >= total or tokens[index + 1].kind != "identifier":
+            continue
+        name = tokens[index + 1].value
+        # Walk the signature to its body, watching for a `Result` return.
+        scan = index + 2
+        depth = 0
+        while scan < total and scan < index + 200:
+            current = tokens[scan]
+            if current.value in {"(", "<", "["}:
+                depth += 1
+            elif current.value in {")", ">", "]"}:
+                depth -= 1
+            elif current.value == "{" and depth <= 0:
+                break
+            elif current.kind == "identifier" and current.value in {"Result", "Option"}:
+                fallible.append((name, token.line))
+                # The error parameter is whatever follows the comma inside
+                # `Result<T, E>`; a type alias has none and is still a Result.
+                inner = scan + 1
+                nested = 0
+                seen_comma = False
+                while inner < total and inner < scan + 60:
+                    value = tokens[inner].value
+                    if value in {"<", "(", "["}:
+                        nested += 1
+                    elif value in {">", ")", "]"}:
+                        nested -= 1
+                        if nested <= 0:
+                            break
+                    elif value == "," and nested == 1:
+                        seen_comma = True
+                    elif seen_comma and tokens[inner].kind == "identifier" and nested == 1:
+                        error_types[tokens[inner].value] = (
+                            error_types.get(tokens[inner].value, 0) + 1
+                        )
+                        break
+                    inner += 1
+                break
+            scan += 1
+
+    return {
+        "fallible_functions": fallible,
+        "error_types": error_types,
+        "propagation_sites": propagations,
+    }
+
+
+def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """`impl Trait for Type` pairs: the contracts a type actually satisfies.
+
+    A trait implementation is where a Rust type declares it can be used a
+    certain way, which is the closest thing the language has to the capability
+    a route exposes in a service. An inherent `impl Type` block declares no
+    contract and is excluded.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "impl":
+            continue
+        header: list[str] = []
+        scan = index + 1
+        # Identifiers inside angle brackets are type arguments, not the trait:
+        # `impl From<Error> for BootError` implements From, and reading the
+        # last name before `for` would call it Error. A path-qualified trait
+        # such as `std::fmt::Display` still resolves to its final segment.
+        generics = 0
+        while scan < total and tokens[scan].value not in {"{", ";"}:
+            value = tokens[scan].value
+            if value == "<":
+                generics += 1
+            elif value == ">":
+                generics -= 1
+            elif tokens[scan].kind == "identifier" and generics <= 0:
+                if _is_macro_parameter(tokens, scan):
+                    header.append("$")
+                else:
+                    header.append(value)
+            scan += 1
+        if "for" not in header:
+            continue
+        divider = header.index("for")
+        trait_name = header[divider - 1] if divider else ""
+        owner = header[divider + 1] if divider + 1 < len(header) else ""
+        if trait_name and owner and "$" not in {trait_name, owner}:
+            found.append((owner, trait_name, token.line))
+    return found
+
+
 def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """Methods inside `impl` blocks, as `(type, method, line)`.
 
@@ -401,12 +534,15 @@ def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
         scan = index + 1
         while scan < total and tokens[scan].value != "{":
             if tokens[scan].kind == "identifier":
-                header.append(tokens[scan].value)
+                header.append("$" if _is_macro_parameter(tokens, scan) else tokens[scan].value)
             scan += 1
         if scan >= total or not header:
             index = scan + 1
             continue
         owner = header[header.index("for") + 1] if "for" in header else header[-1]
+        if owner == "$":
+            index = scan + 1
+            continue
         scan += 1
         depth = 1
         while scan < total and depth:
@@ -535,6 +671,8 @@ class RustLexicalAnalyzer:
             file_names = _name_index(tokens)
             file_statics = _mutable_statics(tokens)
             file_impls = _impl_methods(tokens)
+            file_errors = _error_surface(tokens)
+            file_traits = _trait_implementations(tokens)
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
@@ -713,6 +851,62 @@ class RustLexicalAnalyzer:
                     continue
 
                 index += 1
+
+            fallible = file_errors["fallible_functions"]
+            if fallible:
+                first_line = fallible[0][1]
+                error_receipt = receipt(
+                    file_record.path, first_line, "error_surface", module, excerpt
+                )
+                named = ", ".join(
+                    f"{name} ({count})"
+                    for name, count in sorted(
+                        file_errors["error_types"].items(), key=lambda pair: (-pair[1], pair[0])
+                    )[:5]
+                )
+                propagated = int(file_errors["propagation_sites"])
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"{module} declares {len(fallible)} fallible function(s) returning "
+                            f"Result or Option, and propagates with `?` at {propagated} site(s). "
+                            + (
+                                f"Declared error types: {named}."
+                                if named
+                                else "No error type is named in those signatures."
+                            )
+                        ),
+                        category="error_surface",
+                        supporting=(error_receipt.evidence_id,),
+                        importance="medium",
+                        path=file_record.path,
+                    )
+                )
+
+            for owner, trait_name, trait_line in file_traits:
+                trait_receipt = receipt(
+                    file_record.path,
+                    trait_line,
+                    "trait_implementation",
+                    f"{module}::{owner}",
+                    excerpt,
+                )
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"{module}::{owner} implements {trait_name}, so it satisfies that "
+                            "contract wherever the trait is accepted."
+                        ),
+                        category="trait_implementation",
+                        supporting=(trait_receipt.evidence_id,),
+                        importance="medium",
+                        path=file_record.path,
+                    )
+                )
 
             for static_name, static_line, reason in file_statics:
                 qualified = f"{module}::{static_name}"
