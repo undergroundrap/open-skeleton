@@ -1,0 +1,148 @@
+{
+  "schema": "open-skeleton.question-set.v1",
+  "fixture": "SINGLE-PLAYER-AI-MUD",
+  "commit": "93ebd51cb4083d2307564c265394358e53c4f5ca",
+  "note": "Questions a maintainer or an agent asks before changing this system. Ground truth was established from source, not from either document under test. A document scores only when the answer token appears; a citation point is awarded separately when a file reference sits within 400 characters of it.",
+  "questions": [
+    {
+      "id": "Q01",
+      "question": "How many HTTP routes does the service actually serve?",
+      "answers": ["44"],
+      "subject": ["route", "endpoint"],
+      "kind": "inventory"
+    },
+    {
+      "id": "Q02",
+      "question": "What is the attack cooldown in seconds?",
+      "answers": ["1.5"],
+      "subject": ["ATTACK_COOLDOWN", "cooldown"],
+      "kind": "tunable"
+    },
+    {
+      "id": "Q03",
+      "question": "What is the inventory bag size limit?",
+      "answers": ["16"],
+      "subject": ["BAG_SIZE", "bag"],
+      "kind": "tunable"
+    },
+    {
+      "id": "Q04",
+      "question": "Which durable tables exist?",
+      "answers": ["players"],
+      "subject": ["table", "sqlite"],
+      "kind": "storage"
+    },
+    {
+      "id": "Q05",
+      "question": "Which HTTP failure statuses can a route return?",
+      "answers": ["429"],
+      "subject": ["429", "status"],
+      "kind": "failure-surface"
+    },
+    {
+      "id": "Q06",
+      "question": "Does any route declare an authentication or authorization dependency?",
+      "answers": ["Depends", "Security"],
+      "subject": ["auth"],
+      "kind": "security"
+    },
+    {
+      "id": "Q07",
+      "question": "What origin policy does the server apply?",
+      "answers": ["wildcard", "allow_origins"],
+      "subject": ["CORS", "origin"],
+      "kind": "security"
+    },
+    {
+      "id": "Q08",
+      "question": "Where does the optional language model run?",
+      "answers": ["1234"],
+      "subject": ["LM Studio", "localhost"],
+      "kind": "integration"
+    },
+    {
+      "id": "Q09",
+      "question": "Which state is held only in process memory?",
+      "answers": ["_attack_times"],
+      "subject": ["process-local", "module-owned", "in-memory"],
+      "kind": "state"
+    },
+    {
+      "id": "Q10",
+      "question": "What is the largest source file and how large is it?",
+      "answers": ["4476", "4,476"],
+      "subject": ["page.tsx"],
+      "kind": "concentration"
+    },
+    {
+      "id": "Q11",
+      "question": "How many routes does the README document versus the number served?",
+      "answers": ["38"],
+      "subject": ["document", "README"],
+      "kind": "drift"
+    },
+    {
+      "id": "Q12",
+      "question": "Is Tailwind CSS actually used?",
+      "answers": ["Tailwind"],
+      "subject": ["Tailwind"],
+      "kind": "drift"
+    },
+    {
+      "id": "Q13",
+      "question": "What are the two exponential scaling bases in progression?",
+      "answers": ["1.15"],
+      "subject": ["exponent", "scaling", "ascension"],
+      "kind": "domain-rule"
+    },
+    {
+      "id": "Q14",
+      "question": "Is there a CI pipeline?",
+      "answers": ["workflow", "CI"],
+      "subject": ["CI", "pipeline", "workflow"],
+      "kind": "delivery"
+    },
+    {
+      "id": "Q15",
+      "question": "Is the application containerized?",
+      "answers": ["Dockerfile", "container"],
+      "subject": ["container", "Docker"],
+      "kind": "delivery"
+    },
+    {
+      "id": "Q16",
+      "question": "What happens to an in-flight dungeon run when the process restarts?",
+      "answers": ["active_dungeon_run_id", "_dungeon_runs"],
+      "subject": ["restart", "reconcil", "login"],
+      "kind": "reconciliation"
+    },
+    {
+      "id": "Q17",
+      "question": "Can this run as more than one concurrent instance?",
+      "answers": ["second", "replica", "instance"],
+      "subject": ["scale", "instance", "horizontal"],
+      "kind": "consequence"
+    },
+    {
+      "id": "Q18",
+      "question": "Which package does source import that no manifest declares?",
+      "answers": ["requests"],
+      "subject": ["manifest", "declare", "depend"],
+      "kind": "dependency"
+    },
+    {
+      "id": "Q19",
+      "question": "Does the repository have an automated test suite?",
+      "answers": ["smoke_test", "no test", "operator"],
+      "subject": ["test"],
+      "kind": "verification"
+    },
+    {
+      "id": "Q20",
+      "question": "What is the world simulation tick interval in seconds?",
+      "answers": ["10"],
+      "subject": ["tick", "simulation", "sleep"],
+      "kind": "tunable"
+    }
+  ]
+}
