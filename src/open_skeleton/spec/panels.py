@@ -350,6 +350,34 @@ def _failure_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def short_form(qualified_name: str) -> str:
+    """The `module.name` spelling a developer uses when talking about a symbol.
+
+    A fully qualified name carries the whole package path and any enclosing
+    class: `backend.app.core.scaling_math.ScalingMath.get_xp_required`. That is
+    unambiguous and nobody writes it. Imports, stack traces, review comments and
+    prose all say `scaling_math.get_xp_required`, so a reader searching the
+    document for the name they know finds nothing.
+
+    Both spellings are correct, so the index carries both rather than choosing.
+    """
+
+    parts = qualified_name.split(".")
+    if len(parts) < 2:
+        return qualified_name
+    leaf = parts[-1]
+    # Walk back past enclosing classes to the module. A class is capitalised by
+    # convention in every language this analyzes; a module is not. The result is
+    # a heuristic, which is why it supplements the exact name instead of
+    # replacing it.
+    module = parts[-2]
+    for candidate in reversed(parts[:-1]):
+        if not candidate[:1].isupper():
+            module = candidate
+            break
+    return f"{module}.{leaf}" if module != leaf else leaf
+
+
 def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Every extracted symbol, named. The ledger holds these; the document did not.
 
@@ -365,6 +393,7 @@ def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     rows = tuple(
         (
             str(item["qualified_name"]),
+            short_form(str(item["qualified_name"])),
             str(item["kind"]),
             f"{item['path']}:{item['start_line']}",
         )
@@ -373,13 +402,15 @@ def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     note = (
         f"Showing {min(len(rows), MAX_SYMBOL_ROWS):,} of {len(rows):,} extracted "
         "symbols. Module-level variables and imports are omitted; the JSON "
-        "projection carries the complete set."
+        "projection carries the complete set. The short form elides the package "
+        "path and any enclosing class so the name is searchable in the spelling "
+        "imports and stack traces use; it is not guaranteed unique."
     )
     return Panel(
         name="symbol_index",
         title="Extracted symbol index",
-        columns=("Symbol", "Kind", "Defined at"),
-        alignments=("left", "left", "left"),
+        columns=("Symbol", "Short form", "Kind", "Defined at"),
+        alignments=("left", "left", "left", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
         note=note,
     )

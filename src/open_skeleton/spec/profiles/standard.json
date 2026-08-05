@@ -237,6 +237,62 @@
             "surface.capability-catalog",
             "surface.traceability"
           ]
+        },
+        {
+          "id": "surface.pagination",
+          "number": "2.8",
+          "title": "Collection Pagination",
+          "concern": "Whether list endpoints bound the size of their response.",
+          "probes": [
+            {
+              "name": "Pagination helpers",
+              "kind": "dependency_name",
+              "terms": [
+                "fastapi-pagination",
+                "django-rest-framework",
+                "drf-spectacular",
+                "sqlakeyset",
+                "paginate",
+                "graphql-relay",
+                "prisma-paginate"
+              ]
+            },
+            {
+              "name": "Pagination findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "pagination"
+              ]
+            }
+          ],
+          "framing": "An unpaginated collection endpoint returns a response whose size is set by the data, not by the contract. It works until the table grows."
+        },
+        {
+          "id": "surface.idempotency",
+          "number": "2.9",
+          "title": "Idempotency and Replay Safety",
+          "concern": "Whether a retried write is safe to apply twice.",
+          "probes": [
+            {
+              "name": "Idempotency support",
+              "kind": "dependency_name",
+              "terms": [
+                "django-idempotency-key",
+                "idempotency-header",
+                "express-idempotency",
+                "stripe",
+                "svix"
+              ]
+            },
+            {
+              "name": "Idempotency findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "idempotency"
+              ]
+            }
+          ],
+          "framing": "Any client that retries a failed write needs the second attempt to be harmless. Where no idempotency key is accepted, that guarantee rests on the caller not retrying."
         }
       ]
     },
@@ -486,10 +542,16 @@
                 "hiredis",
                 "ioredis",
                 "@redis/*",
+                "redis-py",
+                "aioredis",
                 "memcached",
                 "pymemcache",
                 "python-memcached",
-                "node-cache"
+                "node-cache",
+                "hazelcast-python-client",
+                "elasticache",
+                "keydb",
+                "dragonfly"
               ]
             },
             {
@@ -499,7 +561,9 @@
                 "redis",
                 "memcache*",
                 "pymemcache",
-                "cachetools"
+                "cachetools",
+                "aioredis",
+                "hazelcast"
               ]
             }
           ],
@@ -558,6 +622,69 @@
           },
           "cross_references": [
             "state.durable"
+          ]
+        },
+        {
+          "id": "state.relational-store",
+          "number": "4.6",
+          "title": "Database Engines and Drivers",
+          "concern": "Which database engines the implementation actually connects to.",
+          "probes": [
+            {
+              "name": "Database drivers",
+              "kind": "dependency_name",
+              "terms": [
+                "psycopg",
+                "psycopg2",
+                "psycopg2-binary",
+                "asyncpg",
+                "pg",
+                "postgres",
+                "mysqlclient",
+                "pymysql",
+                "mysql-connector-python",
+                "mysql2",
+                "pymongo",
+                "motor",
+                "mongoose",
+                "mongodb",
+                "cassandra-driver",
+                "aiosqlite",
+                "sqlalchemy",
+                "alembic",
+                "peewee",
+                "tortoise-orm",
+                "prisma",
+                "sequelize",
+                "typeorm",
+                "drizzle-orm",
+                "boto3-stubs-dynamodb",
+                "pynamodb",
+                "aioodbc",
+                "pyodbc",
+                "cx-oracle"
+              ]
+            },
+            {
+              "name": "Database imports",
+              "kind": "import_target",
+              "terms": [
+                "psycopg*",
+                "asyncpg",
+                "pymysql",
+                "pymongo",
+                "motor",
+                "sqlalchemy",
+                "sqlite3",
+                "cassandra",
+                "pynamodb",
+                "pyodbc"
+              ]
+            }
+          ],
+          "cross_references": [
+            "state.durable",
+            "state.migrations"
           ]
         }
       ]
@@ -664,7 +791,9 @@
                 ".sops.yaml",
                 "*.vault.yml",
                 "sealed-secret*.yaml",
-                "secrets.example.*"
+                "secrets.example.*",
+                "doppler.yaml",
+                ".envrc"
               ]
             },
             {
@@ -676,7 +805,11 @@
                 "dotenv",
                 "azure-keyvault*",
                 "@aws-sdk/client-secrets-manager",
-                "@google-cloud/secret-manager"
+                "@google-cloud/secret-manager",
+                "boto3-stubs-secretsmanager",
+                "doppler-env",
+                "aws-secretsmanager-caching",
+                "keyring"
               ]
             }
           ],
@@ -705,13 +838,26 @@
                 "pika",
                 "kafka-python",
                 "confluent-kafka",
+                "aiokafka",
                 "aio-pika",
                 "amqplib",
+                "amqp",
                 "bullmq",
                 "bull",
                 "@google-cloud/pubsub",
                 "rq",
-                "dramatiq"
+                "dramatiq",
+                "huey",
+                "nats-py",
+                "nats",
+                "pulsar-client",
+                "azure-servicebus",
+                "boto3-stubs-sqs",
+                "kombu",
+                "faust-streaming",
+                "sidekiq",
+                "bee-queue",
+                "agenda"
               ]
             },
             {
@@ -723,10 +869,289 @@
                 "kafka*",
                 "aio_pika",
                 "kombu",
-                "dramatiq"
+                "dramatiq",
+                "nats",
+                "pulsar",
+                "faust"
               ]
             }
           ]
+        },
+        {
+          "id": "integration.payments",
+          "number": "5.6",
+          "title": "Payment Processing",
+          "concern": "Handling of funds through a payment service provider.",
+          "probes": [
+            {
+              "name": "Payment SDKs",
+              "kind": "dependency_name",
+              "terms": [
+                "stripe",
+                "@stripe/*",
+                "braintree",
+                "adyen",
+                "square",
+                "squareup",
+                "paypalrestsdk",
+                "@paypal/*",
+                "razorpay",
+                "mollie-api-python",
+                "checkout-sdk-node",
+                "@lemonsqueezy/*",
+                "paddle-sdk"
+              ]
+            },
+            {
+              "name": "Payment imports",
+              "kind": "import_target",
+              "terms": [
+                "stripe",
+                "braintree",
+                "adyen",
+                "razorpay"
+              ]
+            }
+          ],
+          "framing": "A repository handling payments carries compliance obligations that one merely calling an API does not. This records which provider is integrated, not whether the integration is compliant."
+        },
+        {
+          "id": "integration.analytics",
+          "number": "5.7",
+          "title": "Product Analytics and Feature Flags",
+          "concern": "Third-party collection of user behaviour, and runtime flag control.",
+          "probes": [
+            {
+              "name": "Analytics SDKs",
+              "kind": "dependency_name",
+              "terms": [
+                "segment-analytics-python",
+                "analytics-python",
+                "@segment/*",
+                "amplitude-analytics-python",
+                "@amplitude/*",
+                "mixpanel",
+                "mixpanel-browser",
+                "posthog",
+                "posthog-js",
+                "heap-api",
+                "@heap/*",
+                "rudder-sdk-python",
+                "google-analytics-data",
+                "plausible",
+                "@vercel/analytics"
+              ]
+            },
+            {
+              "name": "Feature flag SDKs",
+              "kind": "dependency_name",
+              "terms": [
+                "launchdarkly-server-sdk",
+                "launchdarkly-js-client-sdk",
+                "@launchdarkly/*",
+                "splitio",
+                "@splitsoftware/*",
+                "unleash-client",
+                "UnleashClient",
+                "flagsmith",
+                "optimizely-sdk",
+                "ldclient-py",
+                "growthbook"
+              ]
+            }
+          ],
+          "framing": "Behavioural data leaving the process is a privacy obligation, and runtime flags mean deployed code paths are not decided by the deployment. Both change what a reviewer must check."
+        },
+        {
+          "id": "integration.search",
+          "number": "5.8",
+          "title": "Search and Analytical Stores",
+          "concern": "Query engines and warehouses beyond the primary datastore.",
+          "probes": [
+            {
+              "name": "Search and warehouse clients",
+              "kind": "dependency_name",
+              "terms": [
+                "elasticsearch",
+                "opensearch-py",
+                "@elastic/*",
+                "@opensearch-project/*",
+                "algoliasearch",
+                "meilisearch",
+                "typesense",
+                "pysolr",
+                "whoosh",
+                "snowflake-connector-python",
+                "google-cloud-bigquery",
+                "clickhouse-driver",
+                "clickhouse-connect",
+                "duckdb",
+                "pyathena",
+                "redshift-connector",
+                "databricks-sql-connector",
+                "trino",
+                "pinecone-client",
+                "weaviate-client",
+                "qdrant-client",
+                "chromadb",
+                "lancedb"
+              ]
+            },
+            {
+              "name": "Search imports",
+              "kind": "import_target",
+              "terms": [
+                "elasticsearch",
+                "opensearchpy",
+                "algoliasearch",
+                "meilisearch",
+                "snowflake",
+                "duckdb",
+                "clickhouse*",
+                "pinecone",
+                "weaviate",
+                "qdrant"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "integration.request-throttling",
+          "number": "5.9",
+          "title": "Rate Limiting and Backpressure",
+          "concern": "Whether the service bounds the work a caller can demand of it.",
+          "probes": [
+            {
+              "name": "Throttling libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "slowapi",
+                "limits",
+                "ratelimit",
+                "django-ratelimit",
+                "flask-limiter",
+                "express-rate-limit",
+                "rate-limiter-flexible",
+                "bottleneck",
+                "p-limit",
+                "p-queue",
+                "aiolimiter",
+                "token-bucket",
+                "pyrate-limiter"
+              ]
+            },
+            {
+              "name": "Throttling in source",
+              "kind": "import_target",
+              "terms": [
+                "slowapi",
+                "limits",
+                "ratelimit",
+                "aiolimiter",
+                "asyncio.semaphore"
+              ]
+            },
+            {
+              "name": "Throttling findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "rate_limit"
+              ]
+            }
+          ],
+          "framing": "An unbounded endpoint is a capacity risk that no amount of horizontal scaling fixes, because the caller sets the rate. Absence here is a finding, not a gap in the audit."
+        },
+        {
+          "id": "integration.resilience",
+          "number": "5.10",
+          "title": "Retry, Timeout, and Circuit Breaking",
+          "concern": "How the system behaves when a dependency is slow or down.",
+          "probes": [
+            {
+              "name": "Resilience libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "tenacity",
+                "backoff",
+                "retrying",
+                "pybreaker",
+                "circuitbreaker",
+                "resilience4j",
+                "opossum",
+                "cockatiel",
+                "async-retry",
+                "p-retry",
+                "polly",
+                "hyx",
+                "aiobreaker"
+              ]
+            },
+            {
+              "name": "Resilience imports",
+              "kind": "import_target",
+              "terms": [
+                "tenacity",
+                "backoff",
+                "retrying",
+                "pybreaker",
+                "circuitbreaker",
+                "aiobreaker"
+              ]
+            },
+            {
+              "name": "Timeout and retry findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "timeout_control"
+              ]
+            }
+          ],
+          "framing": "A call with no timeout inherits its caller's patience, which in a request path means a client's. Retry without backoff turns a slow dependency into an outage."
+        },
+        {
+          "id": "integration.request-correlation",
+          "number": "5.11",
+          "title": "Request Correlation and Structured Logging",
+          "concern": "Whether one request can be followed across components.",
+          "probes": [
+            {
+              "name": "Structured logging",
+              "kind": "dependency_name",
+              "terms": [
+                "structlog",
+                "python-json-logger",
+                "loguru",
+                "winston",
+                "pino",
+                "bunyan",
+                "watchtower",
+                "asgi-correlation-id",
+                "django-request-id",
+                "express-request-id",
+                "cls-rtracer",
+                "nestjs-pino"
+              ]
+            },
+            {
+              "name": "Logging imports",
+              "kind": "import_target",
+              "terms": [
+                "structlog",
+                "loguru",
+                "logging",
+                "pythonjsonlogger",
+                "asgi_correlation_id"
+              ]
+            },
+            {
+              "name": "Logging findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "logging_surface"
+              ]
+            }
+          ],
+          "framing": "Without a correlation identifier, a distributed failure is read one log file at a time and reconstructed by timestamp. This records whether that identifier exists, not whether it is used."
         }
       ]
     },
@@ -797,8 +1222,14 @@
                 "passlib",
                 "pyjwt",
                 "jsonwebtoken",
+                "jose",
+                "python-jose",
                 "node-forge",
-                "libsodium-wrappers"
+                "libsodium-wrappers",
+                "scrypt",
+                "pycryptodome",
+                "authlib",
+                "oauthlib"
               ]
             },
             {
@@ -813,7 +1244,8 @@
                 "jwt",
                 "bcrypt",
                 "argon2*",
-                "nacl"
+                "nacl",
+                "jose"
               ]
             }
           ]
@@ -832,7 +1264,12 @@
                 ".github/dependabot.yaml",
                 "renovate.json",
                 ".renovaterc*",
-                ".snyk"
+                ".snyk",
+                "trivy.yaml",
+                ".grype.yaml",
+                ".semgrep.yml",
+                ".github/workflows/codeql*.yml",
+                "sonar-project.properties"
               ]
             },
             {
@@ -844,7 +1281,12 @@
                 "bandit",
                 "audit-ci",
                 "snyk",
-                "semgrep"
+                "semgrep",
+                "trivy",
+                "grype",
+                "npm-audit-resolver",
+                "retire",
+                "sonarqube-scanner"
               ]
             }
           ],
@@ -895,6 +1337,103 @@
             "limit": 15
           },
           "framing": "A census of `unsafe` tokens in source. It counts where guarantees are delegated to the author; it does not evaluate whether each use is sound, and it does not see into dependencies."
+        },
+        {
+          "id": "security.identity-provider",
+          "number": "6.7",
+          "title": "External Identity Provider",
+          "concern": "Delegated authentication through a managed identity service.",
+          "probes": [
+            {
+              "name": "Identity SDKs",
+              "kind": "dependency_name",
+              "terms": [
+                "auth0",
+                "auth0-python",
+                "@auth0/*",
+                "okta-jwt-verifier",
+                "okta-sdk-nodejs",
+                "python-keycloak",
+                "keycloak-connect",
+                "msal",
+                "@azure/msal-*",
+                "firebase-admin",
+                "@clerk/*",
+                "clerk-sdk-python",
+                "@supabase/auth-*",
+                "passport",
+                "passport-*",
+                "django-allauth",
+                "flask-login",
+                "authlib",
+                "python-social-auth",
+                "cognitojwt",
+                "amazon-cognito-identity-js"
+              ]
+            },
+            {
+              "name": "Identity imports",
+              "kind": "import_target",
+              "terms": [
+                "auth0",
+                "okta*",
+                "keycloak",
+                "msal",
+                "cognitojwt",
+                "authlib"
+              ]
+            }
+          ],
+          "cross_references": [
+            "security.authentication"
+          ]
+        },
+        {
+          "id": "security.session-handling",
+          "number": "6.8",
+          "title": "Session, Cookie, and Token Handling",
+          "concern": "How a caller's identity is carried between requests.",
+          "probes": [
+            {
+              "name": "Session libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "itsdangerous",
+                "starlette-session",
+                "express-session",
+                "cookie-parser",
+                "flask-session",
+                "django-session",
+                "iron-session",
+                "next-auth",
+                "@auth/core",
+                "cookie",
+                "js-cookie",
+                "tough-cookie"
+              ]
+            },
+            {
+              "name": "Session and token imports",
+              "kind": "import_target",
+              "terms": [
+                "itsdangerous",
+                "http.cookies",
+                "secrets",
+                "uuid"
+              ]
+            },
+            {
+              "name": "Session findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "session_control"
+              ]
+            }
+          ],
+          "cross_references": [
+            "security.authentication",
+            "security.identity-provider"
+          ]
         }
       ]
     },
@@ -1000,6 +1539,81 @@
           "cross_references": [
             "integration.failure"
           ]
+        },
+        {
+          "id": "verification.tooling",
+          "number": "7.5",
+          "title": "Test Runners and Quality Gates",
+          "concern": "The tools configured to check this code, whether or not they run.",
+          "probes": [
+            {
+              "name": "Runner configuration",
+              "kind": "path_glob",
+              "terms": [
+                "pytest.ini",
+                "tox.ini",
+                "conftest.py",
+                "setup.cfg",
+                "noxfile.py",
+                "jest.config.*",
+                "vitest.config.*",
+                "playwright.config.*",
+                "cypress.config.*",
+                "karma.conf.js",
+                ".mocharc*",
+                "phpunit.xml",
+                ".pre-commit-config.yaml",
+                ".editorconfig",
+                "Makefile",
+                "justfile"
+              ]
+            },
+            {
+              "name": "Test and lint tooling",
+              "kind": "dependency_name",
+              "terms": [
+                "pytest",
+                "pytest-cov",
+                "pytest-asyncio",
+                "hypothesis",
+                "tox",
+                "nox",
+                "coverage",
+                "unittest2",
+                "jest",
+                "vitest",
+                "mocha",
+                "chai",
+                "jasmine",
+                "playwright",
+                "@playwright/test",
+                "cypress",
+                "puppeteer",
+                "testing-library",
+                "@testing-library/*",
+                "supertest",
+                "msw",
+                "faker",
+                "factory-boy",
+                "ruff",
+                "flake8",
+                "pylint",
+                "black",
+                "isort",
+                "mypy",
+                "pyright",
+                "eslint",
+                "prettier",
+                "biome",
+                "istanbul",
+                "nyc",
+                "stylelint"
+              ]
+            }
+          ],
+          "cross_references": [
+            "verification.tests"
+          ]
         }
       ]
     },
@@ -1023,8 +1637,18 @@
                 ".github/workflows/*.yaml",
                 ".gitlab-ci.yml",
                 "azure-pipelines.yml",
+                "azure-pipelines.yaml",
                 "Jenkinsfile",
-                ".circleci/config.yml"
+                ".circleci/config.yml",
+                ".travis.yml",
+                ".drone.yml",
+                "buildkite.yml",
+                ".buildkite/*",
+                "bitbucket-pipelines.yml",
+                "teamcity*.xml",
+                "cloudbuild.yaml",
+                "codeship*.yml",
+                ".woodpecker.yml"
               ]
             },
             {
@@ -1162,15 +1786,37 @@
               "terms": [
                 "*.tf",
                 "*.tfvars",
+                "*.tfstate",
                 "*.bicep",
                 "template.yaml",
                 "template.yml",
                 "serverless.yml",
+                "serverless.yaml",
                 "pulumi.yaml",
+                "Pulumi.yaml",
                 "cdk.json",
                 "ansible.cfg",
                 "playbook*.yml",
-                "playbook*.yaml"
+                "playbook*.yaml",
+                "Vagrantfile",
+                "*.sls",
+                "cookbook*/metadata.rb",
+                "kustomization.yaml"
+              ]
+            },
+            {
+              "name": "Provisioning tooling",
+              "kind": "dependency_name",
+              "terms": [
+                "pulumi",
+                "@pulumi/*",
+                "aws-cdk",
+                "aws-cdk-lib",
+                "constructs",
+                "troposphere",
+                "ansible",
+                "salt",
+                "python-terraform"
               ]
             }
           ]
@@ -1190,11 +1836,14 @@
                 "prometheus.yml",
                 "prometheus.yaml",
                 "grafana/*",
-                "*.otel.yaml"
+                "*.otel.yaml",
+                "newrelic.yml",
+                "datadog.yaml",
+                "dynatrace*.yaml"
               ]
             },
             {
-              "name": "Telemetry libraries",
+              "name": "APM and metrics libraries",
               "kind": "dependency_name",
               "terms": [
                 "opentelemetry*",
@@ -1203,7 +1852,19 @@
                 "prom-client",
                 "statsd",
                 "datadog",
-                "ddtrace"
+                "ddtrace",
+                "dd-trace",
+                "newrelic",
+                "elastic-apm-node",
+                "elastic-apm",
+                "appdynamics",
+                "dynatrace*",
+                "scout-apm",
+                "honeycomb-beeline",
+                "libhoney",
+                "opencensus",
+                "micrometer",
+                "@sentry/tracing"
               ]
             },
             {
@@ -1213,7 +1874,10 @@
                 "opentelemetry*",
                 "prometheus_client",
                 "statsd",
-                "ddtrace"
+                "ddtrace",
+                "newrelic",
+                "elasticapm",
+                "opencensus"
               ]
             }
           ],
@@ -1236,9 +1900,15 @@
               "terms": [
                 "sentry-sdk",
                 "@sentry/*",
+                "sentry",
                 "rollbar",
                 "bugsnag",
-                "raygun4py"
+                "@bugsnag/*",
+                "raygun4py",
+                "airbrake",
+                "honeybadger",
+                "@honeybadger-io/*",
+                "trackjs"
               ]
             },
             {
@@ -1247,7 +1917,9 @@
               "terms": [
                 "sentry_sdk",
                 "rollbar",
-                "bugsnag"
+                "bugsnag",
+                "airbrake",
+                "honeybadger"
               ]
             }
           ],
@@ -1300,11 +1972,26 @@
               "terms": [
                 "boto3",
                 "botocore",
-                "google-cloud-*",
-                "azure-*",
+                "aws-sdk",
                 "@aws-sdk/*",
+                "aws-cdk-lib",
+                "google-cloud-*",
                 "@google-cloud/*",
-                "firebase-admin"
+                "google-api-python-client",
+                "azure-*",
+                "@azure/*",
+                "firebase-admin",
+                "firebase",
+                "@supabase/*",
+                "supabase",
+                "@vercel/*",
+                "@netlify/*",
+                "cloudflare",
+                "@cloudflare/*",
+                "oci",
+                "ibm-cloud-sdk-core",
+                "linode-api",
+                "digitalocean"
               ]
             },
             {
@@ -1314,8 +2001,25 @@
                 "boto3",
                 "botocore",
                 "google.cloud",
+                "googleapiclient",
                 "azure",
-                "firebase_admin"
+                "firebase_admin",
+                "oci"
+              ]
+            },
+            {
+              "name": "Platform configuration",
+              "kind": "path_glob",
+              "terms": [
+                "app.yaml",
+                "vercel.json",
+                "netlify.toml",
+                "wrangler.toml",
+                "fly.toml",
+                "Procfile",
+                "render.yaml",
+                "railway.json",
+                "amplify.yml"
               ]
             }
           ],
@@ -1353,6 +2057,127 @@
           "cross_references": [
             "state.durable"
           ]
+        },
+        {
+          "id": "operations.health-checks",
+          "number": "8.10",
+          "title": "Health, Readiness, and Graceful Shutdown",
+          "concern": "The signals an orchestrator needs to route traffic safely.",
+          "probes": [
+            {
+              "name": "Probe endpoints",
+              "kind": "path_glob",
+              "terms": [
+                "healthcheck*",
+                "*health*.py",
+                "*readiness*"
+              ]
+            },
+            {
+              "name": "Health tooling",
+              "kind": "dependency_name",
+              "terms": [
+                "py-healthcheck",
+                "fastapi-health",
+                "terminus",
+                "@godaddy/terminus",
+                "lightship",
+                "healthchecks-io"
+              ]
+            },
+            {
+              "name": "Lifecycle findings",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "lifecycle_hook"
+              ]
+            }
+          ],
+          "framing": "A container with no readiness signal receives traffic as soon as the process starts, which is before it can serve. A process with no shutdown hook drops in-flight requests when it is replaced."
+        },
+        {
+          "id": "operations.runtime-topology",
+          "number": "8.11",
+          "title": "Process Managers and Reverse Proxies",
+          "concern": "What actually serves the application in a deployment.",
+          "probes": [
+            {
+              "name": "Server configuration",
+              "kind": "path_glob",
+              "terms": [
+                "nginx.conf",
+                "*.nginx",
+                "haproxy.cfg",
+                "Caddyfile",
+                "httpd.conf",
+                "gunicorn.conf.py",
+                "uwsgi.ini",
+                "supervisord.conf",
+                "ecosystem.config.js",
+                "pm2.json",
+                "*.service",
+                "traefik.yml",
+                "envoy.yaml"
+              ]
+            },
+            {
+              "name": "Application servers",
+              "kind": "dependency_name",
+              "terms": [
+                "gunicorn",
+                "uvicorn",
+                "hypercorn",
+                "uwsgi",
+                "waitress",
+                "daphne",
+                "pm2",
+                "forever",
+                "nodemon",
+                "granian"
+              ]
+            }
+          ],
+          "framing": "The development server is not the deployment. Where no process manager or proxy configuration is committed, how the service is actually served lives outside this repository."
+        },
+        {
+          "id": "operations.audit-trail",
+          "number": "8.12",
+          "title": "Audit Logging and Compliance Artifacts",
+          "concern": "Records kept for review after the fact.",
+          "probes": [
+            {
+              "name": "Compliance documents",
+              "kind": "path_glob",
+              "terms": [
+                "SECURITY.md",
+                "PRIVACY*.md",
+                "COMPLIANCE*.md",
+                "*soc2*",
+                "*gdpr*",
+                "*hipaa*",
+                "*dpa*.md",
+                "THREAT_MODEL*.md",
+                "CODEOWNERS",
+                ".github/CODEOWNERS",
+                "*.sbom.json",
+                "sbom*.xml"
+              ]
+            },
+            {
+              "name": "Audit libraries",
+              "kind": "dependency_name",
+              "terms": [
+                "django-auditlog",
+                "django-simple-history",
+                "sqlalchemy-continuum",
+                "python-audit-log",
+                "audit-log",
+                "cyclonedx-bom",
+                "syft"
+              ]
+            }
+          ],
+          "framing": "A regulated buyer asks who changed what and when. This records which artifacts exist in the repository, and makes no claim about whether any control is effective."
         }
       ]
     },
