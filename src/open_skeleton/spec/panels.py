@@ -317,9 +317,14 @@ def _tunable_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     for symbol in symbols:
         tunables = symbol.get("metadata", {}).get("tunables") or {}
         for name, entry in sorted(tunables.items()):
-            value = entry["value"]
+            # An analyzer may know a constant's name and site without its value:
+            # a Rust `static` can be declared in one place and assigned in
+            # another. A missing optional field must not take the whole
+            # document down, which is the contract every contributed analyzer
+            # gets to rely on.
+            value = entry.get("value", "—")
             rendered = f"{value:g}" if isinstance(value, (int, float)) else str(value)
-            rows.append((name, rendered, f"{symbol['path']}:{entry['line']}"))
+            rows.append((name, rendered, f"{symbol['path']}:{entry.get('line', 1)}"))
     rows.sort(key=lambda row: (row[2], row[0]))
     return Panel(
         name="tunable_index",
@@ -449,15 +454,19 @@ def _model_fields(symbols: tuple[dict[str, Any], ...]) -> Panel:
         models = symbol.get("metadata", {}).get("model_fields") or {}
         for model, entry in sorted(models.items()):
             bases = ", ".join(str(item) for item in entry.get("bases", ())) or "—"
-            for field_entry in entry["fields"]:
+            for field_entry in entry.get("fields", ()):
+                annotation = field_entry.get("annotation")
+                requirement = field_entry.get("required")
                 rows.append(
                     (
                         model,
                         bases,
-                        str(field_entry["name"]),
-                        f"`{field_entry['annotation']}`",
-                        "required" if field_entry["required"] else "optional",
-                        f"{symbol['path']}:{field_entry['line']}",
+                        str(field_entry.get("name", "—")),
+                        f"`{annotation}`" if annotation else "—",
+                        "required"
+                        if requirement
+                        else ("optional" if requirement is False else "—"),
+                        f"{symbol['path']}:{field_entry.get('line', 1)}",
                     )
                 )
     rows.sort(key=lambda row: (row[5], row[0]))

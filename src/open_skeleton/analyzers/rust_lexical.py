@@ -28,6 +28,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
@@ -166,6 +167,171 @@ def tokenize(source: str) -> list[Token]:
     return tokens
 
 
+def _name_index(tokens: list[Token]) -> dict[str, int]:
+    """Every identifier a Rust file mentions, with the line it first appears on.
+
+    The same concordance built for Python and TypeScript. Rust contributed
+    nothing to it, which is a large part of why a Rust repository looked empty
+    beside a Python one.
+    """
+
+    found: dict[str, int] = {}
+    for token in tokens:
+        if token.kind != "identifier" or len(token.value) < 3:
+            continue
+        found[token.value] = min(found.get(token.value, token.line), token.line)
+    return found
+
+
+def _constants(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """`const` and `static` items with their declared type and value.
+
+    These are Rust's tunables. A timeout, a capacity or a scaling factor is
+    written here exactly as it is written at Python module scope, and neither
+    the type nor the value was being recorded.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in {"const", "static"}:
+            continue
+        step = index + 1
+        if step < total and tokens[step].value == "mut":
+            step += 1
+        if step >= total or tokens[step].kind != "identifier":
+            continue
+        name = tokens[step].value
+        # `const NAME: Type = value;`
+        declared = ""
+        value = ""
+        scan = step + 1
+        if scan < total and tokens[scan].value == ":":
+            scan += 1
+            parts: list[str] = []
+            # A fixed-length array type carries its own semicolon: `[&str; 2]`.
+            # Stopping at the first one truncates the type and loses the value.
+            depth = 0
+            while scan < total:
+                current = tokens[scan].value
+                if current in {"[", "(", "<"}:
+                    depth += 1
+                elif current in {"]", ")", ">"}:
+                    depth -= 1
+                elif depth <= 0 and current in {"=", ";"}:
+                    break
+                parts.append(current)
+                scan += 1
+            declared = "".join(parts)
+        if scan < total and tokens[scan].value == "=":
+            scan += 1
+            parts = []
+            while scan < total and tokens[scan].value != ";":
+                parts.append(tokens[scan].value)
+                scan += 1
+            # The tokenizer emits every non-identifier character separately,
+            # so a literal like 22.0 arrives as four tokens. Joining with a
+            # space renders it "2 2 . 0"; the value has to be reassembled.
+            reassembled = "".join(parts)[:60]
+            # The tokenizer discards string contents so comments and quotes
+            # cannot corrupt the scan, which means a string constant's value is
+            # simply not recoverable here. What survives is punctuation — `[,]`
+            # for a string array — and printing that would be worse than
+            # printing nothing, so a value with no alphanumeric content is
+            # omitted and the constant is reported by name, type and site.
+            value = reassembled if any(ch.isalnum() for ch in reassembled) else ""
+        entry: dict[str, Any] = {"line": token.line, "kind": token.value}
+        if declared:
+            entry["type"] = declared
+        if value:
+            entry["value"] = value
+        found.setdefault(name, entry)
+    return found
+
+
+def _struct_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Fields of each struct: the data contract, as Rust writes it down.
+
+    A struct is where a Rust program states what it stores, the way an
+    annotated class is in Python. Reporting the struct name without its fields
+    describes a container by its label alone.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    total = len(tokens)
+    index = 0
+    while index < total:
+        token = tokens[index]
+        if token.kind != "identifier" or token.value != "struct":
+            index += 1
+            continue
+        if index + 1 >= total or tokens[index + 1].kind != "identifier":
+            index += 1
+            continue
+        name = tokens[index + 1].value
+        # Skip generics and any where-clause to reach the body.
+        scan = index + 2
+        depth = 0
+        while scan < total and tokens[scan].value not in {"{", ";"}:
+            scan += 1
+        if scan >= total or tokens[scan].value == ";":
+            index = scan + 1
+            continue
+        scan += 1
+        depth = 1
+        fields: list[dict[str, Any]] = []
+        while scan < total and depth:
+            current = tokens[scan]
+            if current.value in {"{", "(", "["}:
+                depth += 1
+            elif current.value in {"}", ")", "]"}:
+                depth -= 1
+                if depth == 0:
+                    break
+            elif (
+                depth == 1
+                and current.kind == "identifier"
+                and current.value not in {"pub", "crate", "super", "mut", "ref", "dyn"}
+                and scan + 1 < total
+                and tokens[scan + 1].value == ":"
+            ):
+                parts = []
+                inner = scan + 2
+                nested = 0
+                while inner < total:
+                    value = tokens[inner].value
+                    if value in {"<", "(", "["}:
+                        nested += 1
+                    elif value in {">", ")", "]"}:
+                        nested -= 1
+                    elif value in {",", "}"} and nested <= 0:
+                        # A comma at the field's own depth ends it; a brace
+                        # ends the struct body and the last field with it.
+                        break
+                    parts.append(value)
+                    inner += 1
+                fields.append(
+                    {
+                        "name": current.value,
+                        # The key is `annotation` to match the Python analyzer:
+                        # one shape for declared model fields means one panel
+                        # renders both languages rather than each growing its
+                        # own. A struct field has no default, so it is always
+                        # required in a struct literal.
+                        "annotation": "".join(parts)[:80],
+                        "required": True,
+                        "line": current.line,
+                    }
+                )
+                scan = inner
+                continue
+            scan += 1
+        if fields:
+            found[name] = {"fields": fields, "line": token.line, "bases": []}
+        index = scan + 1
+    return found
+
+
 def _module_name(path: str) -> str:
     parts = path.removesuffix(".rs").split("/")
     if parts[-1] in {"mod", "lib", "main"} and len(parts) > 1:
@@ -268,6 +434,10 @@ class RustLexicalAnalyzer:
 
             lines = source.splitlines()
             module = _module_name(file_record.path)
+            tokens = tokenize(source)
+            file_names = _name_index(tokens)
+            file_constants = _constants(tokens)
+            file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
                 "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
             )
@@ -282,11 +452,15 @@ class RustLexicalAnalyzer:
                     end_line=max(1, file_record.line_count),
                     language="Rust",
                     analyzer=ANALYZER_VERSION,
-                    metadata={},
+                    metadata={
+                        "analysis_level": "lexical",
+                        **({"name_index": file_names} if file_names else {}),
+                        **({"tunables": file_constants} if file_constants else {}),
+                        **({"model_fields": file_structs} if file_structs else {}),
+                    },
                 )
             )
 
-            tokens = tokenize(source)
             index = 0
             while index < len(tokens):
                 token = tokens[index]

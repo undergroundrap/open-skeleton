@@ -6,7 +6,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from open_skeleton.analyzers.rust_lexical import RustLexicalAnalyzer, tokenize
+from open_skeleton.analyzers.rust_lexical import (
+    RustLexicalAnalyzer,
+    _constants,
+    _name_index,
+    _struct_fields,
+    tokenize,
+)
 from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
 
@@ -143,3 +149,44 @@ class CoverageTests(TestCase):
         self.assertEqual(
             [item.claim for item in first.claims], [item.claim for item in second.claims]
         )
+
+
+class RustDeclarationTests(TestCase):
+    """Rust needs the same extraction families Python has, not fewer."""
+
+    def test_constants_carry_their_type_and_value(self) -> None:
+        found = _constants(tokenize("pub const MAX: u32 = 5;\nstatic mut N: usize = 0;\n"))
+        self.assertEqual(found["MAX"], {"line": 1, "kind": "const", "type": "u32", "value": "5"})
+        self.assertEqual(found["N"]["kind"], "static")
+
+    def test_a_numeric_literal_is_reassembled_from_its_characters(self) -> None:
+        # The tokenizer emits every non-identifier character separately, so
+        # 22.0 arrives as four tokens and a naive join renders "2 2 . 0".
+        found = _constants(tokenize("const AMBIENT: f32 = 22.0;\n"))
+        self.assertEqual(found["AMBIENT"]["value"], "22.0")
+
+    def test_an_array_type_keeps_its_internal_semicolon(self) -> None:
+        found = _constants(tokenize('const NAMES: [&str; 2] = ["a", "b"];\n'))
+        self.assertEqual(found["NAMES"]["type"], "[&str;2]")
+
+    def test_an_unrecoverable_value_is_omitted_rather_than_mangled(self) -> None:
+        # String contents are discarded by the tokenizer, so what survives is
+        # punctuation. Printing "[,]" would be worse than printing nothing.
+        self.assertNotIn("value", _constants(tokenize('static V: &str = "1.0";\n'))["V"])
+
+    def test_struct_fields_are_recorded_with_their_types(self) -> None:
+        found = _struct_fields(
+            tokenize("pub struct M {\n  pub id: String,\n  parts: Vec<Part>,\n}\n")
+        )
+        fields = {item["name"]: item["annotation"] for item in found["M"]["fields"]}
+        self.assertEqual(fields, {"id": "String", "parts": "Vec<Part>"})
+
+    def test_a_unit_struct_has_no_fields(self) -> None:
+        self.assertEqual(_struct_fields(tokenize("struct Unit;\n")), {})
+
+    def test_the_name_index_covers_rust_sources(self) -> None:
+        # Rust contributed nothing to the concordance, which is much of why a
+        # Rust repository looked empty beside a Python one.
+        names = _name_index(tokenize("fn resolve_tick(delta: f32) -> f32 { delta }\n"))
+        self.assertIn("resolve_tick", names)
+        self.assertIn("delta", names)
