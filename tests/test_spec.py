@@ -16,6 +16,7 @@ from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import render_spec_json
+from open_skeleton.spec.substitutes import derive_substitutes
 from tests.helpers import create_sample_repository
 
 
@@ -615,3 +616,98 @@ class NameIndexTests(TestCase):
                 "scratch_local_value",
                 {item["qualified_name"] for item in payload["symbols"]},
             )
+
+
+class SubstituteTests(TestCase):
+    """An absent verdict that stops at the absence sends a reader to grep."""
+
+    def test_a_static_lookup_table_is_not_a_place_work_waits(self) -> None:
+        # Being initialised to a mutable literal is not enough: a dict of room
+        # names never changes, and calling it a queue fabricates a property.
+        symbols = (
+            {
+                "path": "e.py",
+                "qualified_name": "e._ROOM_NAMES",
+                "start_line": 3,
+                "metadata": {"mutable_initializer": True},
+            },
+        )
+        self.assertEqual(
+            derive_substitutes(symbols, (), absent_sections=frozenset({"integration.messaging"})),
+            (),
+        )
+
+    def test_a_container_written_to_at_runtime_is_reported(self) -> None:
+        symbols = (
+            {"path": "m.py", "qualified_name": "m._pending", "start_line": 7, "metadata": {}},
+        )
+        claims = (
+            {
+                "category": "process_local_state",
+                "claim": "m._pending is a module-owned mutable container with observed mutation sites.",
+            },
+        )
+        result = derive_substitutes(
+            symbols, claims, absent_sections=frozenset({"integration.messaging"})
+        )
+        self.assertEqual(result[0].structures[0].name, "m._pending")
+        self.assertEqual(result[0].structures[0].location, "m.py:7")
+
+    def test_a_constant_compared_in_a_guard_is_a_threshold(self) -> None:
+        symbols = (
+            {
+                "path": "a.py",
+                "qualified_name": "a",
+                "start_line": 1,
+                "metadata": {"tunables": {"BAG_SIZE": {"value": 16.0, "line": 4}}},
+            },
+            {
+                "path": "a.py",
+                "qualified_name": "a.put",
+                "start_line": 9,
+                "metadata": {
+                    "control_flow": [{"kind": "guard", "label": "len(bag) >= BAG_SIZE", "line": 11}]
+                },
+            },
+        )
+        result = derive_substitutes(
+            symbols, (), absent_sections=frozenset({"operations.observability"})
+        )
+        self.assertIn("BAG_SIZE = 16", result[0].structures[0].name)
+        self.assertEqual(result[0].structures[0].location, "a.py:11")
+
+    def test_a_constant_never_compared_is_not_a_threshold(self) -> None:
+        symbols = (
+            {
+                "path": "a.py",
+                "qualified_name": "a",
+                "start_line": 1,
+                "metadata": {"tunables": {"BAG_SIZE": {"value": 16.0, "line": 4}}},
+            },
+            {
+                "path": "a.py",
+                "qualified_name": "a.put",
+                "start_line": 9,
+                "metadata": {"control_flow": [{"kind": "guard", "label": "ready", "line": 11}]},
+            },
+        )
+        self.assertEqual(
+            derive_substitutes(
+                symbols, (), absent_sections=frozenset({"operations.observability"})
+            ),
+            (),
+        )
+
+    def test_a_rule_does_not_fire_when_the_concern_is_present(self) -> None:
+        # Firing on an absent concern with nothing to show would assert a
+        # substitute exists on the strength of the concern being missing.
+        symbols = (
+            {"path": "m.py", "qualified_name": "m._pending", "start_line": 7, "metadata": {}},
+        )
+        claims = (
+            {
+                "category": "process_local_state",
+                "claim": "m._pending is a module-owned mutable container.",
+            },
+        )
+        self.assertEqual(derive_substitutes(symbols, claims, absent_sections=frozenset()), ())

@@ -18,6 +18,7 @@ from typing import Any
 
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.consequences import Consequence
+from open_skeleton.spec.substitutes import Substitute
 
 MAX_PANEL_ROWS = 15
 MAX_CELL_ITEMS = 4
@@ -58,6 +59,7 @@ class PanelContext:
     consequences: tuple[Consequence, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
     claim_locations: dict[str, str] = field(default_factory=dict)
+    substitutes: tuple[Substitute, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -728,6 +730,35 @@ def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _substitute_analysis(substitutes: tuple[Substitute, ...]) -> Panel:
+    """What plays each absent concern's part, since the work happens regardless.
+
+    Reporting that a repository has no broker is true and incomplete: a list
+    appended to and trimmed is a queue with a capacity and a loss mode. An
+    absent verdict that stops at the absence sends a reader to grep.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for substitute in substitutes:
+        for structure in substitute.structures:
+            rows.append((substitute.concern, structure.name, structure.role, structure.location))
+    caveats = " ".join(item.caveat for item in substitutes)
+    return Panel(
+        name="substitute_analysis",
+        title="What stands in for an absent concern",
+        columns=("Absent concern", "Structure", "Why it plays that part", "Declared at"),
+        alignments=("left", "left", "left", "left"),
+        rows=tuple(rows),
+        note=((caveats + " ") if caveats else "")
+        + (
+            "A substitute is a structural resemblance and not an equivalence. "
+            "Nothing here recommends adopting the product it stands in for; "
+            "that is an engineering decision this document has no standing to "
+            "make."
+        ),
+    )
+
+
 def _documented_values(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """What the documentation asserts, set beside what the code declares.
 
@@ -1025,6 +1056,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
+    if name == "substitute_analysis":
+        return _substitute_analysis(context.substitutes)
     if name == "documented_values":
         return _documented_values(context.symbols)
     if name == "external_calls":

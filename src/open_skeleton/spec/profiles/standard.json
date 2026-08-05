@@ -1244,6 +1244,21 @@
             }
           ],
           "framing": "Without a correlation identifier, a distributed failure is read one log file at a time and reconstructed by timestamp. This records whether that identifier exists, not whether it is used."
+        },
+        {
+          "id": "integration.substitutes",
+          "number": "5.12",
+          "title": "What Stands In for an Absent Concern",
+          "concern": "Structures that do a missing product's job.",
+          "framing": "Reporting that no broker is declared is true and incomplete. The work still has to happen somewhere: a list appended to and trimmed is a queue with a capacity and a loss mode, and a constant compared in a guard is a threshold whether or not anything pages on it. An absent verdict that stops at the absence sends a reader to grep.",
+          "panels": [
+            "substitute_analysis"
+          ],
+          "cross_references": [
+            "integration.messaging",
+            "state.caching",
+            "operations.observability"
+          ]
         }
       ]
     },

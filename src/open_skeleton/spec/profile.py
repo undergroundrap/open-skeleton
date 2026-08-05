@@ -44,6 +44,7 @@ PANEL_KINDS = frozenset(
         "external_origins",
         "external_calls",
         "documented_values",
+        "substitute_analysis",
         "config_settings",
         "object_keys",
         "signatures",

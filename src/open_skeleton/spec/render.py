@@ -18,6 +18,7 @@ from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
 from open_skeleton.spec.panels import Panel, PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
 from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
+from open_skeleton.spec.substitutes import Substitute, derive_substitutes
 
 SPEC_SCHEMA_VERSION = "open-skeleton.spec.v1"
 
@@ -151,6 +152,7 @@ class SpecDocument:
     capabilities: tuple[Capability, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     dossiers: tuple[Dossier, ...] = ()
+    substitutes: tuple[Substitute, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
     name_index: dict[str, dict[str, int]] = field(default_factory=dict)
 
@@ -160,6 +162,7 @@ class SpecDocument:
             "capabilities": [item.to_dict() for item in self.capabilities],
             "consequences": [item.to_dict() for item in self.consequences],
             "dossiers": [item.to_dict() for item in self.dossiers],
+            "substitutes": [item.to_dict() for item in self.substitutes],
             "snapshot_id": self.snapshot_id,
             "root": self.root,
             "profile_id": self.profile_id,
@@ -359,9 +362,17 @@ def build_spec(
             )
             break
     consequences = derive(claims, absent_categories=absent)
+    substitutes = derive_substitutes(
+        symbols,
+        tuple(claims),
+        absent_sections=frozenset(item.section_id for item in rendered if item.verdict == "absent"),
+    )
     dossiers = build_dossiers(capabilities, claims, evidence_by_id, consequences)
     panel_context = replace(
-        panel_context, consequences=consequences, claim_locations=claim_locations
+        panel_context,
+        consequences=consequences,
+        claim_locations=claim_locations,
+        substitutes=substitutes,
     )
     for index, item in enumerate(rendered):
         if not item.panels:
@@ -388,6 +399,7 @@ def build_spec(
         capabilities=capabilities,
         consequences=consequences,
         dossiers=dossiers,
+        substitutes=substitutes,
         name_index={
             str(item["path"]): dict(item["metadata"]["name_index"])
             for item in symbols
