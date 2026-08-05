@@ -15,7 +15,7 @@ from open_skeleton.spec.capabilities import Capability, build_capabilities
 from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
-from open_skeleton.spec.panels import Panel, PanelContext, build_panel
+from open_skeleton.spec.panels import Panel, PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
 from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
 
@@ -151,6 +151,7 @@ class SpecDocument:
     capabilities: tuple[Capability, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     dossiers: tuple[Dossier, ...] = ()
+    symbols: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -168,6 +169,10 @@ class SpecDocument:
             "stale_claim_count": self.stale_claim_count,
             "total_claims": self.total_claims,
             "cited_claims": self.cited_claims,
+            # Complete and untruncated on purpose. The markdown index is a
+            # readable selection; a consumer that needs every name the analyzers
+            # found reads this instead of re-deriving it from the repository.
+            "symbols": [dict(item) for item in self.symbols],
             "sections": [item.to_dict() for item in self.sections],
         }
 
@@ -377,6 +382,19 @@ def build_spec(
         capabilities=capabilities,
         consequences=consequences,
         dossiers=dossiers,
+        symbols=tuple(
+            {
+                "qualified_name": str(item["qualified_name"]),
+                "short_form": short_form(str(item["qualified_name"])),
+                "kind": str(item["kind"]),
+                "path": str(item["path"]),
+                "start_line": item["start_line"],
+                "end_line": item["end_line"],
+                "language": item.get("language"),
+                "analyzer": item.get("analyzer"),
+            }
+            for item in symbols
+        ),
     )
 
 

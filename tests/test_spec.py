@@ -11,7 +11,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, verify_spec
-from open_skeleton.spec.panels import PanelContext, build_panel
+from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import render_spec_json
@@ -207,6 +207,46 @@ class SpecDocumentTests(TestCase):
             ]
             self.assertTrue(cited)
             self.assertTrue(all(item["evidence_id"] for item in cited))
+
+    def test_the_json_projection_carries_every_symbol_the_ledger_holds(self) -> None:
+        """The readable index is a selection; the JSON must not be one.
+
+        A consumer that has to re-parse the repository to find a name the
+        analyzers already extracted is being handed a summary, not data.
+        """
+
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            document = build_spec(ledger, load_profile())
+            payload = json.loads(render_spec_json(document))
+            snapshot = ledger.latest_snapshot()
+            assert snapshot is not None
+            expected = {
+                str(item["qualified_name"])
+                for item in ledger.list_symbols(snapshot["snapshot_id"], limit=5_000)
+            }
+
+            self.assertTrue(expected)
+            self.assertEqual({item["qualified_name"] for item in payload["symbols"]}, expected)
+            for item in payload["symbols"]:
+                self.assertTrue(item["path"])
+                self.assertTrue(item["kind"])
+                self.assertTrue(item["short_form"])
+
+    def test_the_short_form_drops_the_package_path_and_enclosing_class(self) -> None:
+        # Imports, stack traces and review comments all use this spelling, so a
+        # reader searching for the name they know has to be able to find it.
+        self.assertEqual(
+            short_form("backend.app.core.scaling_math.ScalingMath.get_xp_required"),
+            "scaling_math.get_xp_required",
+        )
+        self.assertEqual(short_form("backend.app.core.dungeon_engine.roll"), "dungeon_engine.roll")
+        self.assertEqual(short_form("solitary"), "solitary")
 
     def test_diagrams_are_omitted_with_a_reason_rather_than_invented(self) -> None:
         with TemporaryDirectory() as temporary:

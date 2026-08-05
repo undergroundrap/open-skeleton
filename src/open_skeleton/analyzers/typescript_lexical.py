@@ -25,7 +25,29 @@ from open_skeleton.models import (
 ANALYZER_NAME = "typescript-lexical"
 ANALYZER_VERSION = "typescript-lexical/v1"
 ELIGIBLE_LANGUAGES = frozenset({"JavaScript", "JavaScript JSX", "TypeScript", "TypeScript JSX"})
-DECLARATION_KEYWORDS = frozenset({"class", "function", "interface", "type", "enum"})
+BINDING_KEYWORDS = frozenset({"const", "let", "var"})
+CONTAINER_KEYWORDS = frozenset({"class", "interface", "enum", "type"})
+# Modifiers sit between a member's position and its name. They are skipped so
+# `private static readonly limit = 5` is recorded as `limit`, not `private`.
+MEMBER_MODIFIERS = frozenset(
+    {
+        "public",
+        "private",
+        "protected",
+        "static",
+        "readonly",
+        "abstract",
+        "override",
+        "declare",
+        "async",
+    }
+)
+# Names that appear in a member position but introduce syntax rather than a
+# member. `new` and `import` are call-signature forms; the rest are control flow
+# that can legally open a block at container depth in a type body.
+NON_MEMBER_NAMES = frozenset(
+    {"new", "import", "typeof", "keyof", "infer", "extends", "implements", "in", "of"}
+)
 REACT_HOOKS = frozenset(
     {"useCallback", "useContext", "useEffect", "useMemo", "useReducer", "useRef", "useState"}
 )
@@ -121,6 +143,221 @@ def _tokens(source: str) -> list[Token]:
 
 def _module_name(path: str) -> str:
     return path.rsplit(".", 1)[0].replace("/", ".")
+
+
+@dataclass(frozen=True, slots=True)
+class Declaration:
+    """One name a module introduces, with the kind the tokens actually support."""
+
+    name: str
+    kind: str
+    start_line: int
+    end_line: int
+
+
+def _initializer_kind(tokens: list[Token], start: int, limit: int = 400) -> str:
+    """Classify what a binding is bound to, using only what the tokens show.
+
+    An arrow or the `function` keyword at the initializer's own nesting level
+    means the name holds a callable. A literal means a constant. Anything else
+    is recorded as a binding rather than guessed at, because `const rows =
+    useMemo(() => ..., [])` holds a value even though an arrow appears inside
+    it, and depth is what tells those two apart.
+    """
+
+    depth = 0
+    index = start
+    end = min(len(tokens), start + limit)
+    # A type annotation and the `=` itself sit between the name and the value.
+    while index < end and tokens[index].value != "=":
+        if tokens[index].kind == "punctuation" and tokens[index].value in {";", ",", "{"}:
+            return "binding"
+        index += 1
+    index += 1
+    first = True
+    while index < end:
+        token = tokens[index]
+        value = token.value
+        if token.kind == "punctuation":
+            if value in {"(", "[", "{"}:
+                depth += 1
+            elif value in {")", "]", "}"}:
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0:
+                if value == ";":
+                    break
+                if value == "=" and index + 1 < end and tokens[index + 1].value == ">":
+                    return "function"
+        elif depth == 0 and token.kind == "identifier" and value == "function":
+            return "function"
+        elif first and depth == 0 and token.kind in {"string", "number"}:
+            return "constant"
+        if not (token.kind == "punctuation" and value in {"(", "["}):
+            first = False
+        index += 1
+    return "binding"
+
+
+def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int]:
+    """Names introduced by a destructuring pattern, and where the pattern ends.
+
+    In `const { rows, total: count } = props`, `rows` and `count` are bound and
+    `total` is a lookup key. An identifier followed by `:` is therefore the key
+    side and the name after it is what enters scope.
+    """
+
+    opener = tokens[start].value
+    closer = {"{": "}", "[": "]"}[opener]
+    names: list[Token] = []
+    depth = 0
+    index = start
+    while index < len(tokens):
+        token = tokens[index]
+        if token.kind == "punctuation":
+            if token.value in {"{", "["}:
+                depth += 1
+            elif token.value in {"}", "]"}:
+                depth -= 1
+                if depth == 0 and token.value == closer:
+                    return names, index
+        elif token.kind == "identifier":
+            following = tokens[index + 1].value if index + 1 < len(tokens) else ""
+            if following == ":":
+                index += 2
+                continue
+            # A default (`= 3`) belongs to the name before it, not after.
+            previous = tokens[index - 1].value if index > start else ""
+            if previous != "=":
+                names.append(token)
+        index += 1
+    return names, index
+
+
+def _declarations(tokens: list[Token]) -> list[Declaration]:
+    """Every name a module introduces at a position the tokens make unambiguous.
+
+    Declaration keywords were already covered. What was not: value bindings,
+    which is how most modern TypeScript declares both constants and functions,
+    and the members of classes, interfaces, enums and object type aliases. A
+    module whose functions are all `const handleX = () => {}` previously
+    reported no symbols at all.
+
+    Nesting is tracked so only direct members are recorded. An object literal
+    built inside a method body sits deeper than the class body and its keys are
+    not members of the class.
+    """
+
+    result: list[Declaration] = []
+    # (container name, the brace depth of its body, whether it is an enum)
+    containers: list[tuple[str, int, bool]] = []
+    pending: tuple[str, bool] | None = None
+    depth = 0
+    # Parameter lists and index signatures live in parentheses and brackets. A
+    # parameter is not a member of the enclosing class, so member detection is
+    # suppressed while either is open.
+    parens = 0
+    index = 0
+    total = len(tokens)
+
+    while index < total:
+        token = tokens[index]
+
+        if token.kind == "punctuation":
+            if token.value == "{":
+                depth += 1
+                if pending is not None:
+                    containers.append((pending[0], depth, pending[1]))
+                    pending = None
+            elif token.value == "}":
+                while containers and containers[-1][1] == depth:
+                    containers.pop()
+                depth -= 1
+            elif token.value in {"(", "["}:
+                parens += 1
+            elif token.value in {")", "]"}:
+                parens = max(0, parens - 1)
+            elif token.value == ";":
+                pending = None
+            index += 1
+            continue
+
+        if token.kind != "identifier":
+            index += 1
+            continue
+
+        value = token.value
+        in_container_body = bool(containers) and depth == containers[-1][1] and parens == 0
+        prefix = ".".join(item[0] for item in containers) if in_container_body else ""
+
+        if value in CONTAINER_KEYWORDS or value == "function":
+            step = index + 1
+            if value == "function" and step < total and tokens[step].value == "*":
+                step += 1
+            if step < total and tokens[step].kind == "identifier":
+                name_token = tokens[step]
+                kind = "function" if value == "function" else value
+                qualified = f"{prefix}.{name_token.value}" if prefix else name_token.value
+                result.append(Declaration(qualified, kind, token.line, name_token.end_line))
+                if value in CONTAINER_KEYWORDS:
+                    pending = (name_token.value, value == "enum")
+                index = step + 1
+                continue
+
+        if value in BINDING_KEYWORDS:
+            step = index + 1
+            if step < total and tokens[step].value in {"{", "["}:
+                names, closed = _pattern_bindings(tokens, step)
+                for name_token in names:
+                    qualified = f"{prefix}.{name_token.value}" if prefix else name_token.value
+                    result.append(
+                        Declaration(qualified, "binding", name_token.line, name_token.end_line)
+                    )
+                index = closed + 1
+                continue
+            if step < total and tokens[step].kind == "identifier":
+                name_token = tokens[step]
+                kind = _initializer_kind(tokens, step + 1)
+                # A binding inside a function body is a local, not part of the
+                # module's surface. It is still recorded, because a reader
+                # searching for the name needs to find where it lives, but it is
+                # not dressed up as a member of whatever class encloses it.
+                if depth > 0 and not in_container_body and kind != "function":
+                    kind = "local"
+                qualified = f"{prefix}.{name_token.value}" if prefix else name_token.value
+                result.append(Declaration(qualified, kind, name_token.line, name_token.end_line))
+                index = step + 1
+                continue
+
+        if in_container_body and value not in NON_MEMBER_NAMES:
+            step = index
+            while step < total and tokens[step].value in MEMBER_MODIFIERS:
+                step += 1
+            if step < total and tokens[step].kind == "identifier":
+                name_token = tokens[step]
+                following = tokens[step + 1].value if step + 1 < total else ""
+                is_enum = containers[-1][2]
+                member: str | None = None
+                if following in {"(", "<"}:
+                    member = "method"
+                elif following in {":", "?"}:
+                    member = "property"
+                elif is_enum and following in {",", "=", "}"}:
+                    member = "enum_member"
+                elif following == "=":
+                    member = "property"
+                if member is not None:
+                    qualified = f"{prefix}.{name_token.value}"
+                    result.append(
+                        Declaration(qualified, member, name_token.line, name_token.end_line)
+                    )
+                    index = step + 1
+                    continue
+
+        index += 1
+
+    return result
 
 
 def _next_token(tokens: list[Token], index: int, value: str | None = None) -> int | None:
@@ -343,81 +580,71 @@ class TypeScriptLexicalAnalyzer:
             store_evidence: dict[str, list[str]] = {name: [] for name in CLIENT_STORES}
             test_evidence: list[str] = []
 
+            for declaration in _declarations(file_tokens):
+                qualified = f"{module}.{declaration.name}"
+                receipt = add_evidence(
+                    file_record.path,
+                    declaration.start_line,
+                    declaration.end_line,
+                    qualified,
+                    "symbol",
+                    file_record.sha256,
+                )
+                symbol_id = stable_id(
+                    "symbol",
+                    (
+                        snapshot.snapshot_id,
+                        file_record.path,
+                        qualified,
+                        declaration.kind,
+                        declaration.start_line,
+                        ANALYZER_VERSION,
+                    ),
+                )
+                symbols.append(
+                    SymbolRecord(
+                        symbol_id=symbol_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        path=file_record.path,
+                        qualified_name=qualified,
+                        kind=declaration.kind,
+                        start_line=declaration.start_line,
+                        end_line=declaration.end_line,
+                        language=file_record.language,
+                        analyzer=ANALYZER_VERSION,
+                        metadata={
+                            "analysis_level": "lexical",
+                            **({"state_fields": file_state_fields} if file_state_fields else {}),
+                        },
+                    )
+                )
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge",
+                            (
+                                snapshot.snapshot_id,
+                                module_id,
+                                "contains",
+                                qualified,
+                                receipt.evidence_id,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=module_id,
+                        source_path=file_record.path,
+                        relationship="contains",
+                        target_ref=qualified,
+                        target_symbol_id=symbol_id,
+                        evidence_id=receipt.evidence_id,
+                        analyzer=ANALYZER_VERSION,
+                    )
+                )
+
             for index, token in enumerate(file_tokens):
                 following = _next_token(file_tokens, index)
                 next_value = file_tokens[following].value if following is not None else None
-
-                if token.kind == "identifier" and token.value in DECLARATION_KEYWORDS:
-                    name_index = _next_token(file_tokens, index)
-                    if token.value == "function" and next_value == "*":
-                        name_index = _next_token(file_tokens, name_index or index)
-                    if name_index is not None and file_tokens[name_index].kind == "identifier":
-                        name_token = file_tokens[name_index]
-                        qualified = f"{module}.{name_token.value}"
-                        kind = "function" if token.value == "function" else token.value
-                        receipt = add_evidence(
-                            file_record.path,
-                            token.line,
-                            name_token.end_line,
-                            qualified,
-                            "symbol",
-                            file_record.sha256,
-                        )
-                        symbol_id = stable_id(
-                            "symbol",
-                            (
-                                snapshot.snapshot_id,
-                                file_record.path,
-                                qualified,
-                                kind,
-                                token.line,
-                                ANALYZER_VERSION,
-                            ),
-                        )
-                        symbols.append(
-                            SymbolRecord(
-                                symbol_id=symbol_id,
-                                snapshot_id=snapshot.snapshot_id,
-                                path=file_record.path,
-                                qualified_name=qualified,
-                                kind=kind,
-                                start_line=token.line,
-                                end_line=name_token.end_line,
-                                language=file_record.language,
-                                analyzer=ANALYZER_VERSION,
-                                metadata={
-                                    "analysis_level": "lexical",
-                                    **(
-                                        {"state_fields": file_state_fields}
-                                        if file_state_fields
-                                        else {}
-                                    ),
-                                },
-                            )
-                        )
-                        edges.append(
-                            EdgeRecord(
-                                edge_id=stable_id(
-                                    "edge",
-                                    (
-                                        snapshot.snapshot_id,
-                                        module_id,
-                                        "contains",
-                                        qualified,
-                                        receipt.evidence_id,
-                                        ANALYZER_VERSION,
-                                    ),
-                                ),
-                                snapshot_id=snapshot.snapshot_id,
-                                source_symbol_id=module_id,
-                                source_path=file_record.path,
-                                relationship="contains",
-                                target_ref=qualified,
-                                target_symbol_id=symbol_id,
-                                evidence_id=receipt.evidence_id,
-                                analyzer=ANALYZER_VERSION,
-                            )
-                        )
 
                 if token.value == "import":
                     scan = index + 1

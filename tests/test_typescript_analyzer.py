@@ -7,7 +7,11 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer, _tokens
+from open_skeleton.analyzers.typescript_lexical import (
+    TypeScriptLexicalAnalyzer,
+    _declarations,
+    _tokens,
+)
 from open_skeleton.scanner import scan_repository
 
 SOURCE = """\
@@ -109,3 +113,80 @@ class StateValueDomainTests(TestCase):
     def test_a_long_literal_is_not_treated_as_a_state_value(self) -> None:
         long_value = "x" * 60
         self.assertEqual(self._fields(f'let m = "a";\nm = "{long_value}";\n'), {})
+
+
+class TypeScriptDeclarationTests(TestCase):
+    """Most modern TypeScript declares through bindings, not declaration keywords.
+
+    A module whose every function is `const handleX = () => {}` reported no
+    symbols at all before these cases existed.
+    """
+
+    def _declared(self, source: str) -> dict[str, str]:
+        return {item.name: item.kind for item in _declarations(_tokens(source))}
+
+    def test_an_arrow_binding_is_a_function_and_a_literal_binding_is_a_constant(self) -> None:
+        declared = self._declared(
+            "export const addLog = (line: string) => { push(line); };\n"
+            "export const ATTACK_COOLDOWN_MS = 1500;\n"
+        )
+        self.assertEqual(declared["addLog"], "function")
+        self.assertEqual(declared["ATTACK_COOLDOWN_MS"], "constant")
+
+    def test_a_type_annotation_does_not_hide_the_initializer(self) -> None:
+        self.assertEqual(self._declared('const label: string = "hi";\n')["label"], "constant")
+
+    def test_an_arrow_inside_a_call_does_not_make_the_binding_a_function(self) -> None:
+        # `useMemo(() => compute(), [])` holds a value. Only an arrow at the
+        # initializer's own depth means the name itself is callable.
+        self.assertEqual(
+            self._declared("const rows = useMemo(() => compute(), []);\n")["rows"], "binding"
+        )
+
+    def test_destructuring_binds_the_renamed_name_not_the_lookup_key(self) -> None:
+        declared = self._declared("const { rows, total: count } = props;\nconst [head] = list;\n")
+        self.assertIn("rows", declared)
+        self.assertIn("count", declared)
+        self.assertIn("head", declared)
+        self.assertNotIn("total", declared)
+
+    def test_class_and_interface_members_are_qualified_by_their_container(self) -> None:
+        declared = self._declared(
+            "export interface PlayerState { hp: number; mana?: number; act(): void; }\n"
+            "export class Engine {\n"
+            "  private static readonly limit = 5;\n"
+            "  async resolveTick(dt: number) { return dt; }\n"
+            "}\n"
+        )
+        self.assertEqual(declared["PlayerState.hp"], "property")
+        self.assertEqual(declared["PlayerState.act"], "method")
+        self.assertEqual(declared["Engine.limit"], "property")
+        self.assertEqual(declared["Engine.resolveTick"], "method")
+
+    def test_a_parameter_is_not_a_member_of_the_enclosing_class(self) -> None:
+        # Parameters sit inside parentheses at the same brace depth as members,
+        # so without paren tracking `dt` and `db` were recorded as class fields.
+        declared = self._declared(
+            "class Engine {\n"
+            "  constructor(private db: DB) {}\n"
+            "  resolveTick(dt: number) { return dt; }\n"
+            "}\n"
+        )
+        self.assertNotIn("Engine.dt", declared)
+        self.assertNotIn("Engine.db", declared)
+
+    def test_a_function_local_is_not_dressed_up_as_a_class_member(self) -> None:
+        declared = self._declared("class Engine {\n  run() { const inner = 1; }\n}\n")
+        self.assertEqual(declared["inner"], "local")
+        self.assertNotIn("Engine.inner", declared)
+
+    def test_enum_members_are_recorded(self) -> None:
+        declared = self._declared("enum Slot { Head, Chest = 2 }\n")
+        self.assertEqual(declared["Slot.Head"], "enum_member")
+        self.assertEqual(declared["Slot.Chest"], "enum_member")
+
+    def test_a_declaration_inside_a_comment_or_string_is_not_recorded(self) -> None:
+        declared = self._declared('// const ghost = 1;\nconst real = "const phantom = 2;";\n')
+        self.assertIn("real", declared)
+        self.assertNotIn("ghost", declared)
+        self.assertNotIn("phantom", declared)

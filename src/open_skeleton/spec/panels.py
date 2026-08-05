@@ -22,7 +22,29 @@ from open_skeleton.spec.consequences import Consequence
 MAX_PANEL_ROWS = 15
 MAX_CELL_ITEMS = 4
 MAX_TUNABLES = 120
-MAX_SYMBOL_ROWS = 400
+MAX_SYMBOL_ROWS = 1_200
+# Kinds that name something a reader can navigate to. `module` is excluded
+# because the file census already lists every file, and a function-local binding
+# is excluded from the readable index because it is not part of any module's
+# surface — both remain complete in the JSON projection.
+DECLARED_KINDS = frozenset(
+    {
+        "function",
+        "async_function",
+        "class",
+        "struct",
+        "enum",
+        "trait",
+        "interface",
+        "type",
+        "method",
+        "property",
+        "enum_member",
+        "constant",
+        "binding",
+        "module_variable",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,11 +407,7 @@ def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     leaves a reader unable to search for them.
     """
 
-    interesting = [
-        item
-        for item in symbols
-        if str(item["kind"]) in {"function", "async_function", "class", "struct", "enum", "trait"}
-    ]
+    interesting = [item for item in symbols if str(item["kind"]) in DECLARED_KINDS]
     rows = tuple(
         (
             str(item["qualified_name"]),
