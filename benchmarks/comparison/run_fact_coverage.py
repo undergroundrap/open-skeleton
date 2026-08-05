@@ -103,6 +103,69 @@ def _quantities(document: str, window: int = 90) -> set[tuple[str, str]]:
     return found
 
 
+SOURCE_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".rs",
+        ".go",
+        ".java",
+        ".rb",
+        ".php",
+        ".css",
+        ".scss",
+        ".html",
+        ".md",
+        ".json",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".ini",
+        ".cfg",
+        ".txt",
+        ".lock",
+        ".sql",
+        ".sh",
+        ".ps1",
+    }
+)
+SKIP_DIRECTORIES = frozenset({".git", "node_modules", "__pycache__", ".venv", "dist", "build"})
+
+
+def _repository_text(root: Path) -> str:
+    """Everything the repository actually contains, lowercased, as one blob.
+
+    This is the ground truth a baseline fact is checked against. It is
+    deliberately crude — a substring test over concatenated sources — because
+    the question it answers is only "does this name occur here at all", and a
+    cheap over-inclusive answer biases against the candidate rather than for
+    it: anything it wrongly calls present stays in the strict denominator.
+    """
+
+    parts: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.casefold() not in SOURCE_SUFFIXES:
+            continue
+        if SKIP_DIRECTORIES & set(path.parts):
+            continue
+        try:
+            parts.append(path.read_text(encoding="utf-8", errors="ignore").casefold())
+        except OSError:
+            continue
+        parts.append("\n" + path.as_posix().casefold() + "\n")
+    return "\n".join(parts)
+
+
+def _is_grounded(item: Any, repository: str) -> bool:
+    """Whether the repository contains what this baseline fact names."""
+
+    identifier = item[0] if isinstance(item, tuple) else item
+    return str(identifier) in repository
+
+
 def _coverage(expected: set[Any], haystack: str) -> tuple[int, list[Any]]:
     missing: list[Any] = []
     hits = 0
@@ -136,6 +199,15 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--candidate-label", default="Open Skeleton")
     parser.add_argument("--sample", type=int, default=25)
+    parser.add_argument(
+        "--repo",
+        type=Path,
+        help=(
+            "The analyzed repository. When given, every baseline fact is "
+            "checked against the sources first, splitting facts about this "
+            "codebase from names the baseline asserts the absence of."
+        ),
+    )
     args = parser.parse_args()
 
     baseline = args.baseline.read_text(encoding="utf-8")
@@ -174,6 +246,45 @@ def main() -> int:
         ),
         f"| **Total** | **{total:,}** | **{hits:,}** | **{pct(hits, total)}** |\n\n",
     ]
+
+    grounded_summary: dict[str, Any] = {}
+    if args.repo is not None:
+        repository = _repository_text(args.repo)
+        every = list(symbols) + list(quantities)
+        grounded = {item for item in every if _is_grounded(item, repository)}
+        asserted_absent = [item for item in every if item not in grounded]
+        missing_all = set(symbol_missing) | set(quantity_missing)
+        grounded_hits = len(grounded) - len(grounded & missing_all)
+        absent_hits = len(asserted_absent) - len(set(asserted_absent) & missing_all)
+        grounded_summary = {
+            "grounded_expected": len(grounded),
+            "grounded_covered": grounded_hits,
+            "absence_expected": len(asserted_absent),
+            "absence_covered": absent_hits,
+        }
+        lines.append(
+            "## Facts about this repository, and names asserted absent from it\n\n"
+            "A baseline names two different things. Some are facts about the "
+            "code — a symbol, a path, a value that exists. Others are "
+            "technologies it checked for and did not find, listed to record "
+            "their absence: matching those means reproducing somebody's vendor "
+            "checklist, not extracting anything from this codebase.\n\n"
+            "The split is computed by testing each fact against the repository "
+            "sources, not chosen by hand. Both rows are reported because "
+            "dropping the second one would be moving the goalposts; it is "
+            "shown separately because the two measure different things.\n\n"
+            "| Fact origin | Baseline asserts | Carried | Coverage |\n"
+            "|---|---:|---:|---:|\n"
+            f"| Present in the repository | {len(grounded):,} | {grounded_hits:,} | "
+            f"{pct(grounded_hits, len(grounded))} |\n"
+            f"| Asserted absent from it | {len(asserted_absent):,} | {absent_hits:,} | "
+            f"{pct(absent_hits, len(asserted_absent))} |\n\n"
+            "Grounding is a substring test over concatenated sources, which "
+            "over-includes: a short name that happens to occur inside a longer "
+            "word counts as present. That bias runs against the candidate, "
+            "since anything wrongly called present stays in the stricter "
+            "denominator.\n\n"
+        )
 
     if symbol_missing:
         counts = collections.Counter(
@@ -227,6 +338,7 @@ def main() -> int:
                 "quantities_covered": quantity_hits,
                 "missing_symbols": sorted(symbol_missing),
                 "missing_quantities": sorted(quantity_missing),
+                **grounded_summary,
             },
             indent=2,
             sort_keys=True,
