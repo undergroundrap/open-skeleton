@@ -117,8 +117,11 @@ recommendations.
 
 ## Composition panels
 
-A node may declare `panels`, which report what the scanner saw rather than what
-the analyzers concluded. §1.1 Repository Composition uses all five:
+A node may declare `panels`, which report what the scanner and analyzers
+recorded rather than what a claim concluded. A panel renders a table or nothing;
+it never asserts.
+
+Composition — what the scanner saw:
 
 | Panel | Reports |
 |---|---|
@@ -127,14 +130,52 @@ the analyzers concluded. §1.1 Repository Composition uses all five:
 | `role_census` | The same breakdown per scanner-assigned role |
 | `largest_files` | The largest included files with their content hashes |
 | `exclusions` | Every excluded entry grouped by reason |
+
+Capabilities — what the implementation exposes, and what checks it:
+
+| Panel | Reports |
+|---|---|
 | `capability_catalog` | Implemented capabilities with route and symbol counts |
 | `traceability_matrix` | Per capability: implementing files, receipts, and what exercises it |
 | `verification_gaps` | Capabilities no verifying file reaches |
+| `consequences` | Implications composed from claim categories, never recommendations |
+
+Declared surface — the names and shapes a repository writes down:
+
+| Panel | Reports |
+|---|---|
+| `symbol_index` | Every extracted symbol, with a short form matching import spelling |
+| `signatures` | Parameters, annotations, defaults, and return types as written |
+| `model_fields` | Annotated class attributes: the data contract stated outright |
+| `payload_shapes` | Literal keys of dictionaries a function returns |
+| `object_keys` | Field names coined as object literal keys |
+| `imported_names` | Which names each imported module actually contributes |
+| `data_containers` | Module-level lookup tables with their sizes |
+
+Values and behaviour — decisions written into the code:
+
+| Panel | Reports |
+|---|---|
+| `tunable_index` | Named numeric constants, module-level and per instance |
+| `string_constants` | Named string values the system compares against |
+| `embedded_literals` | Numbers hardcoded inside function bodies, which nothing else indexes |
+| `failure_surface` | Raises recorded inside route handler bodies |
+
+Runtime reach — what the code depends on but does not own:
+
+| Panel | Reports |
+|---|---|
+| `external_api_surface` | Platform and library API reached from outside the module |
+| `external_origins` | Third-party hosts named in string literals |
 
 The exclusions panel is the one that matters most. A census that silently drops
 files overstates its own coverage, so excluded content is counted and labelled —
 and every percentage elsewhere in the document is explicitly relative to the
 included set.
+
+Adding a panel means a function in `spec/panels.py`, an entry in `PANEL_KINDS`,
+and a row here. The profile schema rejects a panel name it does not know, so a
+typo fails at load rather than rendering an empty section.
 
 ## Capabilities and traceability
 

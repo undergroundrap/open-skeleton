@@ -8,8 +8,24 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 - `open-skeleton spec`: outline-driven long-form specifications projected from the
   claim ledger, with user-editable JSON profiles and no model in the path
-- 55-section standard profile covering functional surface, state ownership,
-  integration, security posture, verification, and enterprise delivery concerns
+- 85-section standard profile covering functional surface, state ownership,
+  integration, security posture, verification, and enterprise delivery concerns,
+  with roughly 700 technology terms across APM, cloud, provisioning, CI,
+  brokers, identity, payments, analytics, and feature-flag ecosystems
+- cross-cutting concern sections a platform team gates on before adoption:
+  rate limiting, retry and circuit breaking, request correlation, pagination,
+  idempotency, health and readiness signals, process managers, audit artifacts,
+  configured quality gates, and session handling
+- declared-surface extraction the ledger held but never projected: model fields
+  from annotated classes, function signatures with defaults as written, returned
+  payload shapes, object literal field names, and imported names per module
+- runtime-reach extraction: platform API reached from outside a module, and
+  third-party hosts named in string literals, which no dependency manifest shows
+- numeric literals hardcoded inside function bodies, which nothing else indexes
+- a complete, untruncated symbol inventory in `spec.json`, with a short form
+  matching the spelling imports and stack traces use
+- deeper TypeScript extraction: value bindings, destructuring, class and
+  interface members, enum members, and object literal keys
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
 - a numeric tunable index and a consolidated failure-response surface, both
@@ -22,6 +38,16 @@ All notable changes will be documented here. This project follows Semantic Versi
   diagram inventory to 83
 - `benchmarks/comparison/run_comparison.py`, which counts both documents on
   disk rather than asserting a comparison
+- `benchmarks/comparison/run_fact_coverage.py`, which enumerates every fact a
+  baseline asserts and reports which are missing by name; `--repo` separates
+  facts about the analyzed code from names asserted absent from it, since
+  matching the second kind means reproducing a vendor checklist rather than
+  extracting anything
+- `benchmarks/comparison/run_questions.py`, scoring both documents against
+  maintainer questions whose ground truth came from source, not from either
+  document
+- `scripts/gate.py`, which runs every check CI runs against the local
+  interpreter, so a failure is found before it costs metered minutes
 - guard-and-exit flowcharts for non-route functions, and a real `erDiagram`
   for durable storage in place of a flowchart approximation
 - observed value-assignment state diagrams, each edge labelled with the real
@@ -82,6 +108,23 @@ All notable changes will be documented here. This project follows Semantic Versi
 - presence probes no longer count a claim that asserts a counted absence, which
   had inverted the verdict for CI, authentication, testing, and telemetry
 - dashboard rejects an unrecognized claim status instead of passing it through
+- the reference census no longer reports callback parameters as platform API;
+  `mobs.map(m => m.respawn_at)` made `m` look like a global and outranked every
+  real call
+- TypeScript members are no longer confused with parameters: braces alone put a
+  parameter at class-member depth, so `resolveTick(dt)` recorded `dt` as a field
+- a binding below a container body is recorded as a local rather than dressed up
+  as a member of whatever class encloses it
+- numeric literals keep the form they were written in, so `300.0` no longer
+  renders as `300` and lose the point that says it is a float
+- nested functions no longer leak literals into their parent: `ast.walk` queues
+  children before the caller sees the node, so skipping a nested definition
+  still yielded everything inside it
+- the MCP protocol test no longer relies on iterating a result object, which
+  yields `(field, value)` pairs rather than tools when the SDK is installed
+- every copy-pasteable command in the README: escape sequences had been
+  interpreted at some point, replacing backslashes with tabs and form feeds and
+  splitting commands across lines
 
 ### Security
 

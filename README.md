@@ -141,7 +141,7 @@ The included gold set pins `SINGLE-PLAYER-AI-MUD` commit `93ebd51cb4083d2307564c
 | Open Skeleton | 100.0% | 100.0% | 100.0% | 100.0% |
 | Supplied commercial baseline | 89.4% | 89.4% | 95.5% | 75.0% |
 
-Open Skeleton completed in about 1.2 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. The generated specification is 55 sections and roughly 9,700 words, against approximately 180,800 words for the baseline.
+Open Skeleton completed in about 1.5 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. The generated specification is 85 sections and roughly 49,800 words, against approximately 180,800 words for the baseline.
 
 **These numbers describe one author-reviewed fixture, not universal product superiority**, and the comparison is deliberately narrow. It measures whether the material findings of a long-form specification can be reproduced deterministically and cited verifiably. It does not measure breadth: the baseline artifact also contains a requirements catalog, process and state-machine diagrams, architectural decision records, and user-interface analysis that Open Skeleton does not attempt. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
@@ -153,10 +153,9 @@ two documents on disk; the baseline artifact is not redistributed here, so suppl
 your own export to reproduce it.
 
 ```powershell
-python benchmarks\comparison
-un_comparison.py `
-  --repository C:\path	oixture `
-  --baseline C:\path	oaseline	ech_spec.md `
+python benchmarks\comparison\run_comparison.py `
+  --repository C:\path\to\fixture `
+  --baseline C:\path\to\baseline\tech_spec.md `
   --output-dir comparison-output
 ```
 
@@ -165,17 +164,49 @@ commit:
 
 | Measure | Open Skeleton | Baseline |
 |---|---:|---:|
-| Generation time | ~2 s | 5 h 47 m |
+| Generation time | ~1.5 s | 5 h 47 m |
 | Diagrams | 83 | 82 |
-| References carrying a line number | 320 | 375 |
-| Citations verified against source hashes | 744 | 0 |
+| References carrying a line number | 432 | 375 |
+| Citations verified against source hashes | 749 | 0 |
 | Citation integrity | 100% | not reported |
 
 The two documents do not attempt the same scope: the baseline carries a
 requirements catalog and interface analysis this engine does not produce, and it
-is roughly nine times longer. The rows that matter are the last two. A reference
-naming only a file cannot be checked; a citation pinned to a content hash is
-re-resolved on every `spec --verify` run.
+is roughly three and a half times longer. The rows that matter are the last two.
+A reference naming only a file cannot be checked; a citation pinned to a content
+hash is re-resolved on every `spec --verify` run.
+
+### How much of the baseline's content is carried
+
+Counting diagrams and citations describes shape, not content. This asks the
+harder question directly: enumerate every fact the baseline asserts, then check
+whether this engine's output carries it.
+
+```powershell
+python benchmarks\comparison\run_fact_coverage.py `
+  --baseline C:\path\to\baseline\tech_spec.md `
+  --candidate spec-output\spec.md spec-output\spec.json `
+  --repo C:\path\to\fixture `
+  --output-dir coverage-output
+```
+
+| Fact origin | Baseline asserts | Open Skeleton carries | Coverage |
+|---|---:|---:|---:|
+| Present in the repository | 4,192 | 3,585 | 85.5% |
+| Asserted absent from it | 630 | 247 | 39.2% |
+| **All facts asserted** | **4,822** | **3,832** | **79.5%** |
+
+A baseline names two different kinds of thing. Some are facts about the code:
+a symbol, a path, a value that exists. Others are technologies it checked for
+and did not find, named to record their absence — matching those means
+reproducing somebody's vendor checklist, and a repository running none of those
+services cannot contain them however good the extraction is. `--repo` splits the
+two by testing each fact against the sources, so the split is reproducible
+rather than asserted. Both rows are reported because dropping the second would
+be moving the goalposts.
+
+Whatever is missing is listed by name in the report. That list, not the
+percentage, is the useful output.
 
 ## Hum language support
 
@@ -185,8 +216,7 @@ a single index — then supply it:
 
 ```powershell
 hum graph (Get-ChildItem -Recurse -Filter *.hum | ForEach-Object FullName) > graph.json
-open-skeleton analyze C:\path	o
-epository --hum-index graph.json
+open-skeleton analyze C:\path\to\repository --hum-index graph.json
 ```
 
 Repeat `--hum-index` to combine sharded indexes; each keeps its own hashed receipt, and
