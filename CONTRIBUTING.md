@@ -32,6 +32,14 @@ bare suppression will be sent back.
 
 Run the pinned benchmark before making accuracy or superiority claims. Use scoped Conventional Commits such as `feat(analyzer): detect documented route drift`.
 
+## Adding a language
+
+Language coverage is the most useful contribution this project can receive.
+The extension contract is one Protocol and five record types; see
+[docs/ADDING_AN_ANALYZER.md](docs/ADDING_AN_ANALYZER.md). State your accuracy
+tier honestly — native parser, lexical, or supplied index — and give each of
+your language's tokenizer traps a test.
+
 ## Clean-room requirement
 
 Do not contribute vendor-confidential source, hidden prompts, copied proprietary expression, credentials, or material obtained by bypassing access controls. Public factual behavior may inform independent design; cite public sources in documentation where useful.

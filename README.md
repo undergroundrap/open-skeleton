@@ -153,7 +153,8 @@ a single index — then supply it:
 
 ```powershell
 hum graph (Get-ChildItem -Recurse -Filter *.hum | ForEach-Object FullName) > graph.json
-open-skeleton analyze C:\path	oepository --hum-index graph.json
+open-skeleton analyze C:\path	o
+epository --hum-index graph.json
 ```
 
 Repeat `--hum-index` to combine sharded indexes; each keeps its own hashed receipt, and
@@ -178,6 +179,13 @@ CI runs tests on Windows and Linux, the optional MCP protocol contract, Ruff, My
 - Inferences retain alternatives; conflicts remain unresolved until a human or stronger evidence resolves them.
 - The local-command provider is arbitrary code execution by explicit user choice and runs only from the provider workspace.
 - Automatic source edits, commits, pushes, and pull requests are intentionally out of scope.
+
+## Adding a language
+
+An analyzer emits symbols, relationships, evidence, claims and one coverage
+record. Everything downstream is a projection of those five types, so nothing
+else needs to know the language exists. The Rust adapter is about 400 lines.
+See [docs/ADDING_AN_ANALYZER.md](docs/ADDING_AN_ANALYZER.md).
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), and [SECURITY.md](SECURITY.md) before extending trust boundaries.
 

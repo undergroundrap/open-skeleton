@@ -47,6 +47,9 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Changed
 
+- the dashboard is monochrome; status is carried by weight, border and label
+  text rather than hue, so a finding reads the same in grayscale
+
 - the specification opens with an executive summary that leads with decisions
   required — conflicts, untraced capabilities, top findings, absent concerns,
   and the analyzers whose coverage is high but whose yield is low
