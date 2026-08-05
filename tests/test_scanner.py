@@ -67,7 +67,11 @@ class RepositoryScannerTests(TestCase):
 
     def test_unreadable_directory_is_recorded_not_fatal(self) -> None:
         with TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            # scan_repository resolves its root, so a fixture that compares
+            # against an unresolved temporary directory never matches where the
+            # two spellings differ: Windows hands back an 8.3 short name
+            # (RUNNER~1 for runneradmin) and macOS symlinks /var to /private/var.
+            root = Path(temporary).resolve()
             blocked = root / "blocked"
             blocked.mkdir()
             original_scandir = __import__("os").scandir
@@ -108,7 +112,10 @@ class RepositoryScannerTests(TestCase):
 
     def test_symlink_branch_is_enforced_without_platform_privileges(self) -> None:
         with TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            # The fabricated entry has to carry the path the scanner will see,
+            # which is resolved. An unresolved temporary directory differs from
+            # it on Windows (8.3 short names) and macOS (/var is a symlink).
+            root = Path(temporary).resolve()
             entry = Mock()
             entry.name = "linked"
             entry.path = str(root / "linked")
