@@ -226,6 +226,97 @@ def _control_flow(node: ast.AST) -> list[dict[str, Any]]:
     return events[:MAX_FLOW_NODES]
 
 
+MIN_STATE_VALUES = 2
+MAX_STATE_FIELDS = 6
+
+
+def _attribute_field(node: ast.AST) -> str | None:
+    """Name the field a value is stored into, e.g. `player.status`."""
+
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        key = _literal_string(node.slice)
+        return key if key else None
+    return None
+
+
+def _state_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Observed string values assigned to a field, and the guards preceding them.
+
+    This records what the source does, not what a state machine is presumed to
+    be. A field is reported only when at least two distinct string literals are
+    assigned to it somewhere in the module. A transition is recorded only when a
+    comparison of that same field against a literal appears earlier in the same
+    function than an assignment of another literal — an observed ordering, not a
+    reachability proof.
+    """
+
+    fields: dict[str, dict[str, Any]] = {}
+
+    def record(field: str) -> dict[str, Any]:
+        return fields.setdefault(field, {"values": set(), "entries": set()})
+
+    def guarded_assignments(statements: list[ast.stmt], condition: str | None) -> None:
+        """Walk statements carrying the nearest enclosing `if` test.
+
+        `elif` parses as a nested `If` inside `orelse`, so each branch must be
+        entered as a branch. Labelling it with the outer negation would report a
+        condition the source never writes.
+        """
+
+        for statement in statements:
+            if isinstance(statement, ast.If):
+                text = _flow_label(statement.test)
+                guarded_assignments(statement.body, text)
+                guarded_assignments(statement.orelse, f"not ({text})")
+                continue
+            _collect(statement, condition)
+            for field in ("body", "orelse", "finalbody"):
+                nested = getattr(statement, field, None)
+                if isinstance(nested, list):
+                    guarded_assignments(
+                        [item for item in nested if isinstance(item, ast.stmt)], condition
+                    )
+            for handler in getattr(statement, "handlers", []):
+                guarded_assignments(handler.body, condition)
+
+    def _collect(statement: ast.AST, condition: str | None) -> None:
+        if not isinstance(statement, ast.Assign):
+            return
+        literal = _literal_string(statement.value)
+        if literal is None:
+            return
+        for target in statement.targets:
+            field = _attribute_field(target)
+            if not field:
+                continue
+            entry = record(field)
+            entry["values"].add(literal)
+            entry["entries"].add((literal, condition or "", statement.lineno))
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            body = [item for item in node.body if isinstance(item, ast.stmt)]
+            guarded_assignments(body, None)
+        if isinstance(node, ast.Compare):
+            field = _attribute_field(node.left)
+            if field:
+                for comparator in node.comparators:
+                    literal = _literal_string(comparator)
+                    if literal:
+                        record(field)["values"].add(literal)
+
+    return {
+        field: {
+            "values": sorted(entry["values"]),
+            "entries": sorted(entry["entries"]),
+        }
+        for field, entry in fields.items()
+        if len(entry["values"]) >= MIN_STATE_VALUES and entry["entries"]
+    }
+
+
 def _module_mutable_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for statement in tree.body:
@@ -400,12 +491,13 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.module_mutations = mutation_collector.mutations
 
         module_end = max(1, file_record.line_count)
+        state_fields = _state_fields(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
             start_line=1,
             end_line=module_end,
-            metadata={},
+            metadata=({"state_fields": state_fields} if state_fields else {}),
         )
         self.scope_ids.append(module_symbol.symbol_id)
         self._evidence(

@@ -398,6 +398,49 @@ def _handler_flows(
     return tuple(diagrams)
 
 
+def _state_diagrams(symbols: tuple[dict[str, Any], ...], limit: int) -> tuple[Diagram, ...]:
+    name, title = "state_values", "Observed value assignments"
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    for symbol in symbols:
+        fields = symbol.get("metadata", {}).get("state_fields") or {}
+        for field, entry in fields.items():
+            if entry.get("entries"):
+                candidates.append((str(symbol["path"]), str(field), entry))
+
+    if not candidates:
+        return (
+            _omitted(
+                name,
+                title,
+                "No field was assigned two or more distinct string literals, so no "
+                "value set was observed in source.",
+            ),
+        )
+
+    candidates.sort(key=lambda item: (-len(item[2]["entries"]), item[0], item[1]))
+    diagrams: list[Diagram] = []
+    for path, field, entry in candidates[:limit]:
+        entries = [tuple(item) for item in entry["entries"]][:MAX_DIAGRAM_EDGES]
+        states = sorted({str(item[0]) for item in entries})
+        lines = ["stateDiagram-v2"]
+        for state in states:
+            lines.append(f'    state "{_mermaid_text(state)}" as {_node_id(state)}')
+        for value, condition, line_number in entries:
+            label = _mermaid_text(str(condition) or "unconditional")
+            lines.append(f"    [*] --> {_node_id(str(value))}: {label} (L{line_number})")
+        diagrams.append(
+            Diagram(
+                name=f"{name}:{path}:{field}",
+                title=f"{title} — `{field}` in {path}",
+                mermaid="\n".join(lines),
+                node_count=len(states),
+                edge_count=len(entries),
+                truncated=len(entry["entries"]) > len(entries),
+            )
+        )
+    return tuple(diagrams)
+
+
 def _persistence_erd(claims: tuple[dict[str, Any], ...]) -> Diagram:
     name, title = "persistence_erd", "Durable storage entities and access"
     creators = re.compile(r"^(?P<symbol>\S+) creates \S+ table (?P<table>\w+)\.$")
@@ -450,8 +493,9 @@ def build_diagrams(
     symbols: tuple[dict[str, Any], ...],
     edges: tuple[dict[str, Any], ...],
     evidence_by_id: dict[str, dict[str, Any]],
-    route_sequence_limit: int = 6,
-    handler_flow_limit: int = 12,
+    route_sequence_limit: int = 16,
+    handler_flow_limit: int = 30,
+    state_diagram_limit: int = 10,
 ) -> tuple[Diagram, ...]:
     """Render every diagram a named generator produces for this snapshot."""
 
@@ -465,6 +509,8 @@ def build_diagrams(
         return (_persistence_erd(claims),)
     if name == "handler_flow":
         return _handler_flows(claims, symbols, handler_flow_limit)
+    if name == "state_values":
+        return _state_diagrams(symbols, state_diagram_limit)
     if name == "route_sequence":
         return _route_sequences(claims, symbols, edges, evidence_by_id, route_sequence_limit)
     return (_omitted(name, name, f"No generator is registered for diagram '{name}'."),)

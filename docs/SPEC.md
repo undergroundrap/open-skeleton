@@ -247,13 +247,26 @@ class bodies are not entered because they run under a different call, loops
 appear as a single node rather than unrolled, and nesting is bounded. A handler
 with no guard and one exit is skipped: there is no decision to draw.
 
+### Observed value assignments
+
+`state_values` draws the string literals a field is assigned, and labels each
+edge with the **actual enclosing condition** from source plus its line.
+
+This is not a recovered state machine. Real code gates a state write on a
+derived boolean — `if wiped: run.status = "wiped"` — so the guard is `wiped`,
+not a comparison against the previous state. Drawing an edge from `active` to
+`wiped` would require deciding that `wiped` implies the prior state, which the
+source does not say. The diagram therefore shows where each value is set and
+under what condition, and leaves the source state unasserted.
+
+A field is drawn only when two or more distinct literals are assigned to it. A
+field that is merely compared is not a state this module writes.
+
 ### What is deliberately not generated
 
-**State transition diagrams are not produced.** Recovering a state machine from
-an implementation requires deciding which values constitute states and which
-assignments constitute transitions — an inference this project has no evidence
-for. A drawn state machine would look authoritative while being a guess, so the
-generator does not exist rather than existing and being unreliable.
+**Reachability is never asserted.** No diagram here claims that a path can
+execute, only that the source contains it. A guard behind a `cfg` gate, a branch
+no caller reaches, and a live code path look identical to a reader of tokens.
 
 ## What this deliberately does not do
 

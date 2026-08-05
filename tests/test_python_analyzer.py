@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
@@ -298,3 +299,56 @@ async def handler(pid: str):
             )
             result = PythonAstAnalyzer().analyze(scan_repository(root))
         self.assertTrue(all("control_flow" not in item.metadata for item in result.symbols))
+
+
+class StateValueExtractionTests(TestCase):
+    def _fields(self, source: str) -> dict[str, Any]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "m.py").write_text(source, encoding="utf-8")
+            result = PythonAstAnalyzer().analyze(scan_repository(root))
+        for symbol in result.symbols:
+            fields = symbol.metadata.get("state_fields")
+            if fields:
+                return dict(fields)
+        return {}
+
+    def test_the_guard_recorded_is_the_real_enclosing_condition(self) -> None:
+        # Real code gates a state write on a derived boolean, not on the field
+        # itself. The recorded condition must be that boolean, verbatim.
+        fields = self._fields(
+            "def resolve(run, wiped, cleared):\n"
+            "    if wiped:\n"
+            "        run.status = 'wiped'\n"
+            "    elif cleared:\n"
+            "        run.status = 'cleared'\n"
+        )
+        entries = {(value, condition) for value, condition, _ in fields["status"]["entries"]}
+        self.assertIn(("wiped", "wiped"), entries)
+        self.assertIn(("cleared", "cleared"), entries)
+
+    def test_an_unconditional_assignment_records_no_condition(self) -> None:
+        fields = self._fields(
+            "def start(run):\n    run.status = 'active'\n    run.status = 'idle'\n"
+        )
+        conditions = {condition for _, condition, _ in fields["status"]["entries"]}
+        self.assertEqual(conditions, {""})
+
+    def test_a_field_with_one_value_is_not_reported(self) -> None:
+        self.assertEqual(self._fields("def f(x):\n    x.mode = 'only'\n"), {})
+
+    def test_comparisons_contribute_values_but_need_an_assignment(self) -> None:
+        # A field only ever compared is not a state this module writes.
+        self.assertEqual(self._fields("def f(x):\n    if x.status == 'a':\n        pass\n"), {})
+
+    def test_subscript_assignment_is_treated_as_a_field(self) -> None:
+        fields = self._fields(
+            "def f(d, ok):\n    if ok:\n        d['phase'] = 'open'\n    d['phase'] = 'closed'\n"
+        )
+        self.assertIn("phase", fields)
+        self.assertEqual(len(fields["phase"]["values"]), 2)
+
+    def test_every_entry_carries_its_line(self) -> None:
+        fields = self._fields("def f(x, ok):\n    if ok:\n        x.s = 'a'\n    x.s = 'b'\n")
+        lines = {line for _, _, line in fields["s"]["entries"]}
+        self.assertEqual(lines, {3, 4})

@@ -444,7 +444,11 @@
               "process_termination"
             ],
             "limit": 20
-          }
+          },
+          "diagrams": [
+            "state_values"
+          ],
+          "framing": "The transition diagrams below record observed source facts: string literals assigned to a field, and the comparisons of that same field that appear earlier in the same function. They are not a proof of reachability, and a value never assigned in source will not appear."
         },
         {
           "id": "state.caching",
