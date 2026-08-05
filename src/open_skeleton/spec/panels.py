@@ -21,7 +21,8 @@ from open_skeleton.spec.consequences import Consequence
 
 MAX_PANEL_ROWS = 15
 MAX_CELL_ITEMS = 4
-MAX_TUNABLES = 60
+MAX_TUNABLES = 120
+MAX_SYMBOL_ROWS = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +350,71 @@ def _failure_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Every extracted symbol, named. The ledger holds these; the document did not.
+
+    A specification that discusses a module without ever naming its functions
+    leaves a reader unable to search for them.
+    """
+
+    interesting = [
+        item
+        for item in symbols
+        if str(item["kind"]) in {"function", "async_function", "class", "struct", "enum", "trait"}
+    ]
+    rows = tuple(
+        (
+            str(item["qualified_name"]),
+            str(item["kind"]),
+            f"{item['path']}:{item['start_line']}",
+        )
+        for item in sorted(interesting, key=lambda item: (item["path"], item["start_line"]))
+    )
+    note = (
+        f"Showing {min(len(rows), MAX_SYMBOL_ROWS):,} of {len(rows):,} extracted "
+        "symbols. Module-level variables and imports are omitted; the JSON "
+        "projection carries the complete set."
+    )
+    return Panel(
+        name="symbol_index",
+        title="Extracted symbol index",
+        columns=("Symbol", "Kind", "Defined at"),
+        alignments=("left", "left", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=note,
+    )
+
+
+def _data_containers(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Module-level lookup tables with their sizes."""
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        containers = symbol.get("metadata", {}).get("data_containers") or {}
+        for name, entry in sorted(containers.items()):
+            rows.append(
+                (
+                    name,
+                    str(entry["kind"]),
+                    f"{int(entry['size']):,}",
+                    f"{symbol['path']}:{entry['line']}",
+                )
+            )
+    rows.sort(key=lambda row: (row[3], row[0]))
+    return Panel(
+        name="data_containers",
+        title="Module-level data tables",
+        columns=("Name", "Kind", "Entries", "Defined at"),
+        alignments=("left", "left", "right", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            "Literal list, set, and dict assignments at module scope with two or "
+            "more entries. A table built at import time by a call is not a literal "
+            "and does not appear."
+        ),
+    )
+
+
 def build_panel(name: str, context: PanelContext) -> Panel:
     """Render one named panel from pinned snapshot records."""
 
@@ -368,6 +434,10 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _capability_catalog(context.capabilities)
     if name == "traceability_matrix":
         return _traceability_matrix(context.capabilities)
+    if name == "symbol_index":
+        return _symbol_index(context.symbols)
+    if name == "data_containers":
+        return _data_containers(context.symbols)
     if name == "tunable_index":
         return _tunable_index(context.symbols)
     if name == "failure_surface":

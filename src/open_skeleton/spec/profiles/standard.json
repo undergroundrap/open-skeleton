@@ -1462,6 +1462,25 @@
             "surface.http",
             "integration.failure"
           ]
+        },
+        {
+          "id": "maintenance.data-tables",
+          "number": "9.7",
+          "title": "Module-Level Data Tables",
+          "concern": "Lookup tables the system's behaviour is written into.",
+          "panels": [
+            "data_containers"
+          ]
+        },
+        {
+          "id": "maintenance.symbol-index",
+          "number": "9.8",
+          "title": "Symbol Index",
+          "concern": "Every function, class, and type the analyzers extracted.",
+          "panels": [
+            "symbol_index"
+          ],
+          "framing": "A specification that discusses a module without naming its functions leaves a reader unable to search for them. This is the ledger's symbol inventory, rendered."
         }
       ]
     }

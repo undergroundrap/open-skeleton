@@ -38,6 +38,8 @@ PANEL_KINDS = frozenset(
         "consequences",
         "tunable_index",
         "failure_surface",
+        "symbol_index",
+        "data_containers",
     }
 )
 

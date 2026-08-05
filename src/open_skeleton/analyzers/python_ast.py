@@ -319,6 +319,64 @@ def _state_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
     }
 
 
+def _instance_tunables(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Numeric literals assigned to `self` attributes anywhere in the module.
+
+    A limit written as `self._cache_limit = 200` inside `__init__` is exactly as
+    tunable as one written at module level, and a module-scope walk never sees
+    it. The owning class is recorded so two classes using the same attribute
+    name stay distinguishable.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Assign):
+                continue
+            value = _literal_number(inner.value)
+            if value is None:
+                continue
+            for target in inner.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                ):
+                    found.setdefault(
+                        f"{node.name}.{target.attr}",
+                        {"value": value, "line": inner.lineno},
+                    )
+    return found
+
+
+def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Module-level list, dict, and set literals, with their element counts.
+
+    These are the lookup tables a system's behaviour is written into. Their size
+    is the fact a reader needs first: a 40-entry table is content, a 2-entry one
+    is a switch.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        value = statement.value
+        if isinstance(value, (ast.List, ast.Set)):
+            size, kind = len(value.elts), type(value).__name__.lower()
+        elif isinstance(value, ast.Dict):
+            size, kind = len(value.keys), "dict"
+        else:
+            continue
+        if size < 2:
+            continue
+        for name in (n for target in statement.targets for n in _assigned_names(target)):
+            found.setdefault(name, {"size": size, "kind": kind, "line": statement.lineno})
+    return found
+
+
 def _module_mutable_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for statement in tree.body:
@@ -497,6 +555,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
         module_end = max(1, file_record.line_count)
         self.state_fields = _state_fields(tree)
+        self.instance_tunables = _instance_tunables(tree)
+        self.data_containers = _data_containers(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1217,11 +1277,14 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             name: {"value": value, "line": self.constant_lines.get(name, 1)}
             for name, value in sorted(self.numeric_constants.items())
         }
+        tunables.update(sorted(self.instance_tunables.items()))
         payload: dict[str, Any] = {}
         if tunables:
             payload["tunables"] = tunables
         if self.state_fields:
             payload["state_fields"] = self.state_fields
+        if self.data_containers:
+            payload["data_containers"] = self.data_containers
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):
