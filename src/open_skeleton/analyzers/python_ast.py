@@ -407,6 +407,53 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _name_index(tree: ast.Module) -> dict[str, int]:
+    """Every name this module binds or reaches for, with the line it first appears.
+
+    This is a concordance, not analysis. The structured panels report what a
+    name *is* — a model field, a signature, a tunable — and each of those is a
+    judgement about a name in a particular position. This answers the flatter
+    question an agent asks when navigating: does this identifier occur in this
+    file, and where does it start.
+
+    It is deliberately exhaustive and deliberately unranked. A local loop
+    variable sits beside a public function here, which is why it lives in the
+    JSON projection and not in the readable index: presenting the two as equals
+    to a human would bury the surface that matters under the noise that does
+    not.
+    """
+
+    found: dict[str, int] = {}
+
+    def record(name: str, line: int) -> None:
+        if name and not name.startswith("__"):
+            found[name] = min(found.get(name, line), line)
+
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", 1)
+        if isinstance(node, ast.Name):
+            record(node.id, line)
+        elif isinstance(node, ast.arg):
+            record(node.arg, line)
+        elif isinstance(node, ast.Attribute):
+            record(node.attr, line)
+        elif isinstance(node, ast.keyword) and node.arg:
+            record(node.arg, line)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            record(node.name, line)
+        elif isinstance(node, ast.alias):
+            record(node.asname or node.name.split(".")[0], line)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            record(node.name, line)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # A dictionary key is a field name in every codebase that returns
+            # dictionaries, and it is the name a caller has to spell.
+            text = node.value
+            if text.isidentifier() and len(text) > 2:
+                record(text, line)
+    return found
+
+
 def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Calls made through an imported name: the runtime surface this module uses.
 
@@ -919,6 +966,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.embedded_literals = _embedded_literals(tree)
         self.signatures = _signatures(tree)
         self.external_calls = _external_calls(tree)
+        self.name_index = _name_index(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1688,6 +1736,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["signatures"] = self.signatures
         if self.external_calls:
             payload["external_calls"] = self.external_calls
+        if self.name_index:
+            payload["name_index"] = self.name_index
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):

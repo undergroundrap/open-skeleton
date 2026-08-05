@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from open_skeleton.ledger import EvidenceLedger
@@ -152,6 +152,7 @@ class SpecDocument:
     consequences: tuple[Consequence, ...] = ()
     dossiers: tuple[Dossier, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
+    name_index: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -173,6 +174,11 @@ class SpecDocument:
             # readable selection; a consumer that needs every name the analyzers
             # found reads this instead of re-deriving it from the repository.
             "symbols": [dict(item) for item in self.symbols],
+            # A concordance, not analysis: every name each file mentions and the
+            # line it first appears on. It is JSON-only because a local loop
+            # variable sits beside a public function here, and presenting those
+            # as equals to a reader would bury the surface under the noise.
+            "name_index": {path: dict(names) for path, names in sorted(self.name_index.items())},
             "sections": [item.to_dict() for item in self.sections],
         }
 
@@ -382,6 +388,11 @@ def build_spec(
         capabilities=capabilities,
         consequences=consequences,
         dossiers=dossiers,
+        name_index={
+            str(item["path"]): dict(item["metadata"]["name_index"])
+            for item in symbols
+            if isinstance(item.get("metadata"), dict) and item["metadata"].get("name_index")
+        },
         symbols=tuple(
             {
                 "qualified_name": str(item["qualified_name"]),

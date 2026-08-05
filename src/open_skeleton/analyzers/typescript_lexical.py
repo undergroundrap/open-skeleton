@@ -270,6 +270,28 @@ def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int
     return names, index
 
 
+def _name_index(tokens: list[Token]) -> dict[str, int]:
+    """Every identifier this module mentions, with the line it first appears.
+
+    A concordance rather than analysis, for the same reason as its Python
+    counterpart: the structured panels judge a name by its position, and this
+    answers only whether the name occurs here at all. String literals that are
+    valid identifiers are included, since a JSX prop and a DOM event name both
+    reach the code as strings.
+    """
+
+    found: dict[str, int] = {}
+    for token in tokens:
+        if (token.kind == "identifier" and token.value not in JS_KEYWORDS) or (
+            token.kind == "string" and token.value.isidentifier() and len(token.value) > 2
+        ):
+            value = token.value
+        else:
+            continue
+        found[value] = min(found.get(value, token.line), token.line)
+    return found
+
+
 def _object_keys(tokens: list[Token], declared: frozenset[str]) -> dict[str, dict[str, Any]]:
     """Field names written as object literal keys.
 
@@ -835,6 +857,7 @@ class TypeScriptLexicalAnalyzer:
             file_declarations = _declarations(file_tokens)
             file_imports = _imported_names(file_tokens)
             file_origins = _external_origins(file_tokens)
+            file_name_index = _name_index(file_tokens)
             file_object_keys = _object_keys(
                 file_tokens,
                 frozenset(item.name.rsplit(".", 1)[-1] for item in file_declarations),
@@ -875,6 +898,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"imported_names": file_imports} if file_imports else {}),
                         **({"external_origins": file_origins} if file_origins else {}),
                         **({"object_keys": file_object_keys} if file_object_keys else {}),
+                        **({"name_index": file_name_index} if file_name_index else {}),
                     },
                 )
             )

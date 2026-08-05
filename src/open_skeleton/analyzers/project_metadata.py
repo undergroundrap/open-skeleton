@@ -56,6 +56,29 @@ DOCUMENTED_ROUTE_PATTERN = re.compile(
 NEGATION_PATTERN = re.compile(r"\b(?:no|not|without|doesn['’]?t)\b", re.IGNORECASE)  # noqa: RUF001
 
 
+TEXT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{2,}(?:\.[A-Za-z0-9_]{1,6})?")
+
+
+def _text_name_index(source: str) -> dict[str, int]:
+    """Names a non-code file mentions, with the line each first appears on.
+
+    The same concordance the code analyzers build, for the files they do not
+    read. A stylesheet names its own keyframes and the assets it loads, a lock
+    file names every transitive dependency, and a README names whatever it
+    documents — none of which any language analyzer will ever see, and all of
+    which someone searching this repository would expect to find.
+    """
+
+    found: dict[str, int] = {}
+    for number, line in enumerate(source.splitlines(), start=1):
+        for match in TEXT_NAME.finditer(line):
+            value = match.group(0)
+            if len(value) > 60:
+                continue
+            found[value] = min(found.get(value, number), number)
+    return found
+
+
 DOC_CODE_SPAN = re.compile(r"`([^`\n]{2,80})`")
 DOC_IDENTIFIER = re.compile(r"^[A-Za-z_][\w.]*(?:\(\))?$")
 DOC_PATH = re.compile(r"^[\w./-]+\.[A-Za-z0-9]{1,5}$")
@@ -838,6 +861,37 @@ class ProjectMetadataAnalyzer:
                     verified_at=created_at,
                     supporting_evidence=(ci_census.evidence_id,),
                     invalidation_keys=("snapshot:file-set",),
+                )
+            )
+
+        # Files no language analyzer reads still name things: a stylesheet
+        # names its keyframes and assets, a lock file names every transitive
+        # dependency, a README names whatever it documents.
+        for file_record in snapshot.files:
+            suffix = Path(file_record.path).suffix.casefold()
+            if suffix not in {".css", ".scss", ".json", ".md", ".txt", ".toml", ".html"}:
+                continue
+            source = file_sources.get(file_record.path)
+            if source is None:
+                continue
+            names = _text_name_index(source)
+            if not names:
+                continue
+            symbols.append(
+                SymbolRecord(
+                    symbol_id=stable_id(
+                        "symbol",
+                        (snapshot.snapshot_id, file_record.path, "text_names", ANALYZER_VERSION),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    path=file_record.path,
+                    qualified_name=file_record.path,
+                    kind="text_names",
+                    start_line=1,
+                    end_line=max(1, file_record.line_count),
+                    language=file_record.language,
+                    analyzer=ANALYZER_VERSION,
+                    metadata={"name_index": names},
                 )
             )
 

@@ -568,3 +568,50 @@ class DocumentedValueTests(TestCase):
         panel = self._panel({}, {"run_dungeon": {"line": 3, "values": []}})
         assert panel.note is not None
         self.assertIn("0 of them", panel.note)
+
+
+class NameIndexTests(TestCase):
+    """A concordance: every name a file mentions, for navigation not judgement."""
+
+    def test_the_json_projection_carries_a_name_index_the_markdown_does_not(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            document = build_spec(ledger, load_profile())
+            payload = json.loads(render_spec_json(document))
+            index = payload["name_index"]
+
+            self.assertTrue(index, "expected at least one file to contribute names")
+            for path, names in index.items():
+                self.assertIsInstance(path, str)
+                self.assertTrue(names)
+                for name, line in names.items():
+                    self.assertIsInstance(name, str)
+                    self.assertGreaterEqual(int(line), 1)
+
+    def test_a_local_binding_reaches_the_index_but_not_the_readable_symbol_table(self) -> None:
+        # The concordance is exhaustive on purpose; the readable index is not.
+        # Presenting a loop variable as the equal of a public function would
+        # bury the surface that matters under the noise that does not.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            (root / "app.py").write_text(
+                "def handler():\n    scratch_local_value = 3\n    return scratch_local_value\n",
+                encoding="utf-8",
+            )
+            ledger = _analyzed(root, workspace / "state")
+
+            document = build_spec(ledger, load_profile())
+            payload = json.loads(render_spec_json(document))
+            every_name = {name for names in payload["name_index"].values() for name in names}
+            self.assertIn("scratch_local_value", every_name)
+            self.assertNotIn(
+                "scratch_local_value",
+                {item["qualified_name"] for item in payload["symbols"]},
+            )
