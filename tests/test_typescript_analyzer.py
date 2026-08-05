@@ -10,6 +10,9 @@ from unittest import TestCase
 from open_skeleton.analyzers.typescript_lexical import (
     TypeScriptLexicalAnalyzer,
     _declarations,
+    _imported_names,
+    _parameter_names,
+    _references,
     _tokens,
 )
 from open_skeleton.scanner import scan_repository
@@ -190,3 +193,47 @@ class TypeScriptDeclarationTests(TestCase):
         self.assertIn("real", declared)
         self.assertNotIn("ghost", declared)
         self.assertNotIn("phantom", declared)
+
+
+class TypeScriptReferenceTests(TestCase):
+    """What a module reaches for but does not own."""
+
+    def _refs(self, source: str) -> dict[str, Any]:
+        tokens = _tokens(source)
+        declared = frozenset(
+            {item.name.rsplit(".", 1)[-1] for item in _declarations(tokens)}
+            | _parameter_names(tokens)
+        )
+        return _references(tokens, declared)
+
+    def test_a_platform_call_is_recorded_with_its_use(self) -> None:
+        refs = self._refs("localStorage.setItem('k', '1');")
+        self.assertTrue(refs["localStorage.setItem"]["called"])
+
+    def test_a_callback_parameter_is_not_an_external_reference(self) -> None:
+        # `m` is bound by the arrow, so `m.respawn_at` is local field access
+        # rather than a platform API this module depends on.
+        self.assertNotIn("m.respawn_at", self._refs("mobs.map(m => m.respawn_at);"))
+
+    def test_a_parenthesised_arrow_parameter_is_also_excluded(self) -> None:
+        self.assertNotIn("a.id", self._refs("rows.map((a, i) => a.id);"))
+
+    def test_a_name_this_module_declares_is_not_external(self) -> None:
+        self.assertNotIn("engine.run", self._refs("const engine = build();engine.run();"))
+
+    def test_a_constructed_global_is_recorded(self) -> None:
+        self.assertIn("AbortController", self._refs("const c = new AbortController();"))
+
+
+class TypeScriptImportTests(TestCase):
+    def test_default_and_named_imports_are_both_recorded(self) -> None:
+        imports = _imported_names(_tokens('import React, { useState } from "react";'))
+        self.assertEqual(imports["react"]["names"], ["React", "useState"])
+
+    def test_an_alias_is_recorded_under_the_local_name(self) -> None:
+        imports = _imported_names(_tokens('import { createPortal as portal } from "react-dom";'))
+        self.assertEqual(imports["react-dom"]["names"], ["portal"])
+
+    def test_a_relative_module_keeps_its_specifier(self) -> None:
+        imports = _imported_names(_tokens('import styles from "./page.module.css";'))
+        self.assertEqual(imports["./page.module.css"]["names"], ["styles"])

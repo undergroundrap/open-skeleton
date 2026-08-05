@@ -16,6 +16,7 @@ from open_skeleton.analyzers.python_ast import (
     _imported_names,
     _model_fields,
     _payload_shapes,
+    _string_constants,
 )
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
@@ -440,3 +441,21 @@ class ImportedNameTests(TestCase):
     def test_names_from_repeated_imports_of_one_module_are_merged(self) -> None:
         imports = self._imports("from typing import Any\nfrom typing import Dict\n")
         self.assertEqual(imports["typing"]["names"], ["Any", "Dict"])
+
+
+class StringConstantTests(TestCase):
+    def _constants(self, source: str) -> dict[str, Any]:
+        return _string_constants(ast.parse(source))
+
+    def test_a_named_string_is_recorded_with_its_value(self) -> None:
+        constants = self._constants('_TELEGRAPH = "ANNIHILATE"\n')
+        self.assertEqual(constants["_TELEGRAPH"]["value"], "ANNIHILATE")
+
+    def test_a_module_docstring_is_not_a_constant(self) -> None:
+        self.assertEqual(self._constants('"""Module prose."""\n'), {})
+
+    def test_a_computed_value_is_not_recorded(self) -> None:
+        self.assertEqual(self._constants('NAME = "a" + "b"\n'), {})
+
+    def test_an_annotated_assignment_is_recorded(self) -> None:
+        self.assertEqual(self._constants('NAME: str = "x"\n')["NAME"]["value"], "x")

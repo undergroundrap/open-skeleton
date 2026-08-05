@@ -2350,6 +2350,16 @@
           "panels": [
             "external_api_surface"
           ]
+        },
+        {
+          "id": "maintenance.string-constants",
+          "number": "9.10",
+          "title": "Declared String Constants",
+          "concern": "Named string values the system compares and dispatches on.",
+          "framing": "The tunable index carries numbers because a number is obviously a dial. A named string is one too, and a reader who cannot see its value cannot match the constant to the data it meets at runtime.",
+          "panels": [
+            "string_constants"
+          ]
         }
       ]
     }

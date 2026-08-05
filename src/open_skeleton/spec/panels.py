@@ -475,6 +475,41 @@ def _model_fields(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _string_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Module-level string constants, with their values.
+
+    The tunable index carries numbers because a number is obviously a dial. A
+    string constant is one too: `_TELEGRAPH_ENRAGE = "ANNIHILATE"` names a
+    value the rest of the system compares against, and a reader who cannot see
+    it cannot match the constant to the data it meets at runtime.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        constants = symbol.get("metadata", {}).get("string_constants") or {}
+        for name, entry in sorted(constants.items()):
+            rows.append(
+                (
+                    name,
+                    f"`{entry['value']}`",
+                    f"{symbol['path']}:{entry['line']}",
+                )
+            )
+    rows.sort(key=lambda row: (row[2], row[0]))
+    return Panel(
+        name="string_constants",
+        title="Declared string constants",
+        columns=("Name", "Value", "Declared at"),
+        alignments=("left", "left", "left"),
+        rows=tuple(rows[:MAX_TUNABLES]),
+        note=(
+            "Module-level string assignments only. A value built at runtime, "
+            "a multi-line string and a docstring are all excluded, so this is "
+            "what the module states outright rather than what it computes."
+        ),
+    )
+
+
 def _imported_names(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Which names each dependency actually contributes.
 
@@ -656,6 +691,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _symbol_index(context.symbols)
     if name == "model_fields":
         return _model_fields(context.symbols)
+    if name == "string_constants":
+        return _string_constants(context.symbols)
     if name == "imported_names":
         return _imported_names(context.symbols)
     if name == "payload_shapes":

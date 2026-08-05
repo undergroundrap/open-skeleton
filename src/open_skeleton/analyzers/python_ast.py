@@ -377,6 +377,35 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _string_constants(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Module-level string constants, with their values.
+
+    The tunable index records numbers because a number is obviously a dial.
+    A string constant is one too: `_TELEGRAPH_ENRAGE = "ANNIHILATE"` names a
+    behaviour the rest of the system compares against, and a reader who cannot
+    see the value cannot match it to the data it will meet at runtime.
+
+    Docstrings are excluded — a module's own prose is not a constant it uses.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for statement in tree.body:
+        targets: list[ast.expr]
+        if isinstance(statement, ast.AnnAssign):
+            targets = [statement.target] if statement.value is not None else []
+            value: ast.expr | None = statement.value
+        elif isinstance(statement, ast.Assign):
+            targets, value = list(statement.targets), statement.value
+        else:
+            continue
+        literal = _literal_string(value)
+        if literal is None or "\n" in literal or len(literal) > 120:
+            continue
+        for name in (n for target in targets for n in _assigned_names(target)):
+            found.setdefault(name, {"value": literal, "line": statement.lineno})
+    return found
+
+
 def _imported_names(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Which names each module contributes, not merely that it was imported.
 
@@ -677,6 +706,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.payload_shapes = _payload_shapes(tree)
         self.model_fields = _model_fields(tree)
         self.imported_names = _imported_names(tree)
+        self.string_constants = _string_constants(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1411,6 +1441,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["model_fields"] = self.model_fields
         if self.imported_names:
             payload["imported_names"] = self.imported_names
+        if self.string_constants:
+            payload["string_constants"] = self.string_constants
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):

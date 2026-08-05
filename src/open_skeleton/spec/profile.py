@@ -44,6 +44,7 @@ PANEL_KINDS = frozenset(
         "payload_shapes",
         "model_fields",
         "imported_names",
+        "string_constants",
     }
 )
 

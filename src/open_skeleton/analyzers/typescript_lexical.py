@@ -235,6 +235,49 @@ def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int
     return names, index
 
 
+def _imported_names(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Which names each module contributes, not merely that it was imported.
+
+    The import edge already records `react-dom`. It does not record that what
+    comes from it is `createPortal`, and that is the difference between a
+    dependency a system is built on and one it borrows a helper from.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "import":
+            continue
+        names: list[str] = []
+        scan = index + 1
+        source: Token | None = None
+        while scan < total:
+            current = tokens[scan]
+            if current.kind == "string":
+                source = current
+                break
+            if current.kind == "punctuation" and current.value == ";":
+                break
+            if current.kind == "identifier" and current.value not in {"from", "type", "as"}:
+                previous = tokens[scan - 1].value
+                # `import x as y` binds `y`, so a name followed by `as` is the
+                # original and the local name is what the module refers to.
+                following = tokens[scan + 1].value if scan + 1 < total else ""
+                if following != "as" and previous != "." and current.value not in names:
+                    names.append(current.value)
+            scan += 1
+        if source is None or not names:
+            continue
+        entry = found.setdefault(source.value, {"names": [], "line": token.line})
+        for name in names:
+            if name not in entry["names"]:
+                entry["names"].append(name)
+        entry["line"] = min(int(entry["line"]), token.line)
+    for entry in found.values():
+        entry["names"] = sorted(entry["names"])
+    return found
+
+
 def _parameter_names(tokens: list[Token]) -> set[str]:
     """Names bound by a parameter list, including arrow shorthand.
 
@@ -657,6 +700,7 @@ class TypeScriptLexicalAnalyzer:
 
             file_state_fields = _state_fields(file_tokens)
             file_declarations = _declarations(file_tokens)
+            file_imports = _imported_names(file_tokens)
             file_references = _references(
                 file_tokens,
                 frozenset(
@@ -690,6 +734,7 @@ class TypeScriptLexicalAnalyzer:
                         "analysis_level": "lexical",
                         **({"state_fields": file_state_fields} if file_state_fields else {}),
                         **({"external_references": file_references} if file_references else {}),
+                        **({"imported_names": file_imports} if file_imports else {}),
                     },
                 )
             )
