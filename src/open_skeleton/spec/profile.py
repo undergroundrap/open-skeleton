@@ -41,6 +41,7 @@ PANEL_KINDS = frozenset(
         "symbol_index",
         "data_containers",
         "external_api_surface",
+        "external_origins",
         "payload_shapes",
         "model_fields",
         "imported_names",

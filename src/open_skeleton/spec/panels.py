@@ -632,6 +632,54 @@ def _payload_shapes(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _external_origins(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Third-party hosts named in source string literals.
+
+    A page that pulls a font from `fonts.googleapis.com` sends every visitor's
+    address to a third party before any consent dialog renders. That is
+    decided by a string in the source, not by anything in a dependency
+    manifest, so nothing else in this analysis would surface it. Loopback
+    addresses are excluded: those are the local process, not a third party.
+    """
+
+    totals: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        origins = symbol.get("metadata", {}).get("external_origins") or {}
+        for host, entry in origins.items():
+            running = totals.setdefault(
+                host,
+                {
+                    "count": 0,
+                    "scheme": str(entry["scheme"]),
+                    "site": f"{symbol['path']}:{entry['first_line']}",
+                },
+            )
+            running["count"] = int(running["count"]) + int(entry["count"])
+    rows = tuple(
+        (
+            host,
+            str(entry["scheme"]),
+            f"{int(entry['count']):,}",
+            str(entry["site"]),
+        )
+        for host, entry in sorted(
+            totals.items(), key=lambda item: (-int(item[1]["count"]), item[0])
+        )
+    )
+    return Panel(
+        name="external_origins",
+        title="Third-party origins in source literals",
+        columns=("Host", "Scheme", "Literals", "First seen"),
+        alignments=("left", "left", "right", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Hosts written as literals, not requests observed: a URL built at "
+            "runtime from parts is absent, and a literal in dead code still "
+            "appears. Loopback and .local hosts are excluded as local."
+        ),
+    )
+
+
 def _external_api_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Platform and library API the code reaches for but does not define.
 
@@ -740,6 +788,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _imported_names(context.symbols)
     if name == "payload_shapes":
         return _payload_shapes(context.symbols)
+    if name == "external_origins":
+        return _external_origins(context.symbols)
     if name == "external_api_surface":
         return _external_api_surface(context.symbols)
     if name == "data_containers":

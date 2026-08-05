@@ -1468,6 +1468,20 @@
             "security.authentication",
             "security.identity-provider"
           ]
+        },
+        {
+          "id": "security.third-party-origins",
+          "number": "6.9",
+          "title": "Third-Party Origins",
+          "concern": "Hosts outside this system that the source names directly.",
+          "framing": "A font pulled from a third-party CDN sends every visitor's address to that third party before any consent dialog renders. This is decided by a string in the source rather than by a dependency manifest, so it is invisible to a review that reads manifests.",
+          "panels": [
+            "external_origins"
+          ],
+          "cross_references": [
+            "security.boundaries",
+            "integration.analytics"
+          ]
         }
       ]
     },

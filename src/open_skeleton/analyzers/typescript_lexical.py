@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,10 +49,44 @@ MEMBER_MODIFIERS = frozenset(
 NON_MEMBER_NAMES = frozenset(
     {"new", "import", "typeof", "keyof", "infer", "extends", "implements", "in", "of"}
 )
+# Control flow that is followed by a parenthesis and is not a call.
+JS_KEYWORDS = frozenset(
+    {
+        "if",
+        "for",
+        "while",
+        "switch",
+        "catch",
+        "return",
+        "typeof",
+        "await",
+        "yield",
+        "delete",
+        "void",
+        "in",
+        "of",
+        "do",
+        "else",
+        "function",
+        "import",
+        "export",
+        "const",
+        "let",
+        "var",
+        "class",
+        "new",
+        "throw",
+        "case",
+    }
+)
 REACT_HOOKS = frozenset(
     {"useCallback", "useContext", "useEffect", "useMemo", "useReducer", "useRef", "useState"}
 )
 CLIENT_STORES = frozenset({"localStorage", "sessionStorage"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
+ORIGIN_LITERAL = re.compile(
+    r"^(?P<scheme>https?|wss?)://(?P<host>[A-Za-z0-9.\-]+)(?::\d+)?(?:[/?#]|$)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +270,42 @@ def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int
     return names, index
 
 
+def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Hosts named in string literals, and the assets fetched from elsewhere.
+
+    A page that pulls a font from `fonts.googleapis.com` sends every visitor's
+    address to a third party before any consent dialog renders. That is a
+    privacy and content-security question, and it is decided by a string in the
+    source rather than by anything in a dependency manifest — so nothing else
+    in this analysis would ever surface it.
+
+    Hosts are recorded, not full URLs: the path is usually a detail and the
+    origin is what a review is about.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for token in tokens:
+        if token.kind != "string":
+            continue
+        value = token.value.strip()
+        match = ORIGIN_LITERAL.match(value)
+        if match is None:
+            continue
+        host = match.group("host").casefold()
+        # A loopback address is the local process, not a third party. The
+        # hardcoded-endpoint claim already reports those. S104 is about
+        # binding a listener to a wildcard address; this is reading a host out
+        # of a string literal in order to exclude it.
+        if host in LOOPBACK_HOSTS or host.endswith(".local"):
+            continue
+        entry = found.setdefault(
+            host, {"count": 0, "first_line": token.line, "scheme": match.group("scheme").lower()}
+        )
+        entry["count"] = int(entry["count"]) + 1
+        entry["first_line"] = min(int(entry["first_line"]), token.line)
+    return found
+
+
 def _imported_names(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     """Which names each module contributes, not merely that it was imported.
 
@@ -385,6 +456,18 @@ def _references(tokens: list[Token], declared: frozenset[str]) -> dict[str, dict
             record(f"{token.value}.{member.value}", token.line, called)
             continue
         if previous == "new" and token.value not in declared:
+            record(token.value, token.line, True)
+            continue
+        # A bare call to a name this module neither declares nor binds is a
+        # global or an import: `setTimeout`, `encodeURIComponent`, `fetch`.
+        # Timers and `eval` are the reason this is worth naming separately
+        # from the member chains above.
+        if (
+            following == "("
+            and token.value not in declared
+            and token.value not in JS_KEYWORDS
+            and previous not in {".", "function", "class", "new"}
+        ):
             record(token.value, token.line, True)
     return found
 
@@ -701,6 +784,7 @@ class TypeScriptLexicalAnalyzer:
             file_state_fields = _state_fields(file_tokens)
             file_declarations = _declarations(file_tokens)
             file_imports = _imported_names(file_tokens)
+            file_origins = _external_origins(file_tokens)
             file_references = _references(
                 file_tokens,
                 frozenset(
@@ -735,6 +819,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"state_fields": file_state_fields} if file_state_fields else {}),
                         **({"external_references": file_references} if file_references else {}),
                         **({"imported_names": file_imports} if file_imports else {}),
+                        **({"external_origins": file_origins} if file_origins else {}),
                     },
                 )
             )

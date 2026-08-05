@@ -10,6 +10,7 @@ from unittest import TestCase
 from open_skeleton.analyzers.typescript_lexical import (
     TypeScriptLexicalAnalyzer,
     _declarations,
+    _external_origins,
     _imported_names,
     _parameter_names,
     _references,
@@ -237,3 +238,41 @@ class TypeScriptImportTests(TestCase):
     def test_a_relative_module_keeps_its_specifier(self) -> None:
         imports = _imported_names(_tokens('import styles from "./page.module.css";'))
         self.assertEqual(imports["./page.module.css"]["names"], ["styles"])
+
+
+class ExternalOriginTests(TestCase):
+    """A host in a string literal is a data-egress decision made in source."""
+
+    def test_a_third_party_host_is_recorded(self) -> None:
+        origins = _external_origins(_tokens('const f = "https://fonts.googleapis.com/css2?x=1";'))
+        self.assertEqual(origins["fonts.googleapis.com"]["scheme"], "https")
+
+    def test_a_loopback_host_is_not_a_third_party(self) -> None:
+        self.assertEqual(_external_origins(_tokens('const a = "http://localhost:8000/api";')), {})
+        self.assertEqual(_external_origins(_tokens('const a = "http://127.0.0.1:9/x";')), {})
+
+    def test_a_websocket_origin_is_recorded(self) -> None:
+        self.assertIn(
+            "stream.example.com",
+            _external_origins(_tokens('let s = "wss://stream.example.com/v1";')),
+        )
+
+    def test_a_string_that_merely_contains_a_url_is_not_an_origin(self) -> None:
+        # The pattern is anchored, so prose mentioning a URL is not a fetch.
+        self.assertEqual(
+            _external_origins(_tokens('const t = "see https://example.com for docs";')), {}
+        )
+
+    def test_a_bare_global_call_is_an_external_reference(self) -> None:
+        tokens = _tokens("setTimeout(run, 500);")
+        declared = frozenset(
+            {item.name.rsplit(".", 1)[-1] for item in _declarations(tokens)}
+            | _parameter_names(tokens)
+        )
+        self.assertTrue(_references(tokens, declared)["setTimeout"]["called"])
+
+    def test_control_flow_is_not_mistaken_for_a_call(self) -> None:
+        tokens = _tokens("if (ready) { while (x) { doThing(); } }")
+        refs = _references(tokens, frozenset())
+        self.assertNotIn("if", refs)
+        self.assertNotIn("while", refs)
