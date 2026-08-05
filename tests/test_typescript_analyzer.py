@@ -4,6 +4,7 @@
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer, _tokens
@@ -75,3 +76,36 @@ const nested = useRef<Map<string, Array<number>>>(new Map());
 
             self.assertIn("page.tsx calls React hook useState 2 times.", state_claims)
             self.assertIn("page.tsx calls React hook useRef 1 times.", state_claims)
+
+
+class StateValueDomainTests(TestCase):
+    def _fields(self, source: str) -> dict[str, Any]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "page.tsx").write_text(source, encoding="utf-8")
+            result = TypeScriptLexicalAnalyzer().analyze(scan_repository(root))
+        for symbol in result.symbols:
+            fields = symbol.metadata.get("state_fields")
+            if fields:
+                return dict(fields)
+        return {}
+
+    def test_strict_equality_comparisons_form_a_domain(self) -> None:
+        fields = self._fields('if (step === "intro") { a(); }\nif (step === "game") { b(); }\n')
+        self.assertEqual(fields["step"]["values"], ["game", "intro"])
+
+    def test_assignments_are_recorded_as_entries(self) -> None:
+        fields = self._fields('let mode = "light";\nmode = "dark";\n')
+        values = {value for value, _, _ in fields["mode"]["entries"]}
+        self.assertEqual(values, {"light", "dark"})
+
+    def test_a_single_value_is_not_a_domain(self) -> None:
+        self.assertEqual(self._fields('let only = "one";\n'), {})
+
+    def test_a_literal_in_a_comment_is_not_counted(self) -> None:
+        # The tokenizer drops comments, so the domain must not see them.
+        self.assertEqual(self._fields('// step === "ghost"\nlet x = "a";\n'), {})
+
+    def test_a_long_literal_is_not_treated_as_a_state_value(self) -> None:
+        long_value = "x" * 60
+        self.assertEqual(self._fields(f'let m = "a";\nm = "{long_value}";\n'), {})

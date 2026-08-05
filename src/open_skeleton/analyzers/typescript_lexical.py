@@ -8,6 +8,7 @@ import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
@@ -157,6 +158,54 @@ def _call_open_paren(tokens: list[Token], index: int) -> int | None:
     return None
 
 
+MIN_STATE_VALUES = 2
+
+
+def _state_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Value domains observable from a token stream.
+
+    A name assigned or compared against two or more distinct string literals has
+    an observable domain. This is lexical: it cannot distinguish a state variable
+    from any other string-valued name, and it records no transitions, because the
+    enclosing condition is not recoverable from tokens alone.
+    """
+
+    values: dict[str, set[str]] = {}
+    entries: dict[str, set[tuple[str, str, int]]] = {}
+
+    for index in range(1, len(tokens) - 1):
+        operator = tokens[index]
+        if operator.kind != "punctuation" or operator.value not in {"=", "!", "<", ">"}:
+            continue
+        name = tokens[index - 1]
+        if name.kind != "identifier":
+            continue
+        cursor = index + 1
+        while (
+            cursor < len(tokens)
+            and tokens[cursor].kind == "punctuation"
+            and tokens[cursor].value in {"=", "!"}
+        ):
+            cursor += 1
+        if cursor >= len(tokens) or tokens[cursor].kind != "string":
+            continue
+        literal = tokens[cursor].value
+        if not literal or len(literal) > 40:
+            continue
+        values.setdefault(name.value, set()).add(literal)
+        if operator.value == "=" and cursor == index + 1:
+            entries.setdefault(name.value, set()).add((literal, "", name.line))
+
+    return {
+        field: {
+            "values": sorted(observed),
+            "entries": sorted(entries.get(field, set())),
+        }
+        for field, observed in values.items()
+        if len(observed) >= MIN_STATE_VALUES
+    }
+
+
 class TypeScriptLexicalAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
@@ -258,6 +307,7 @@ class TypeScriptLexicalAnalyzer:
                 failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
                 continue
 
+            file_state_fields = _state_fields(file_tokens)
             module = _module_name(file_record.path)
             module_id = stable_id(
                 "symbol",
@@ -280,7 +330,10 @@ class TypeScriptLexicalAnalyzer:
                     end_line=max(1, file_record.line_count),
                     language=file_record.language,
                     analyzer=ANALYZER_VERSION,
-                    metadata={"analysis_level": "lexical"},
+                    metadata={
+                        "analysis_level": "lexical",
+                        **({"state_fields": file_state_fields} if file_state_fields else {}),
+                    },
                 )
             )
 
@@ -332,7 +385,14 @@ class TypeScriptLexicalAnalyzer:
                                 end_line=name_token.end_line,
                                 language=file_record.language,
                                 analyzer=ANALYZER_VERSION,
-                                metadata={"analysis_level": "lexical"},
+                                metadata={
+                                    "analysis_level": "lexical",
+                                    **(
+                                        {"state_fields": file_state_fields}
+                                        if file_state_fields
+                                        else {}
+                                    ),
+                                },
                             )
                         )
                         edges.append(
