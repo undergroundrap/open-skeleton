@@ -9,6 +9,8 @@ from unittest import TestCase
 from open_skeleton.analyzers.rust_lexical import (
     RustLexicalAnalyzer,
     _constants,
+    _impl_methods,
+    _mutable_statics,
     _name_index,
     _struct_fields,
     tokenize,
@@ -190,3 +192,30 @@ class RustDeclarationTests(TestCase):
         names = _name_index(tokenize("fn resolve_tick(delta: f32) -> f32 { delta }\n"))
         self.assertIn("resolve_tick", names)
         self.assertIn("delta", names)
+
+
+class RustSharedStateTests(TestCase):
+    """Rust's answer to a module-level dict is a static, and it was unread."""
+
+    def test_a_static_mut_is_shared_without_synchronisation(self) -> None:
+        found = _mutable_statics(tokenize("static mut COUNTER: usize = 0;\n"))
+        self.assertEqual(found[0][0], "COUNTER")
+        self.assertIn("no synchronisation", found[0][2])
+
+    def test_a_static_holding_a_lock_is_still_shared_state(self) -> None:
+        found = _mutable_statics(tokenize("static R: Mutex<Vec<u8>> = Mutex::new(Vec::new());\n"))
+        self.assertEqual(found[0][0], "R")
+        self.assertIn("Mutex", found[0][2])
+
+    def test_an_immutable_static_is_not_shared_state(self) -> None:
+        # A constant table is read-only. Reporting it as mutable state would
+        # be the same error as calling a lookup table a queue.
+        self.assertEqual(_mutable_statics(tokenize('static NAMES: [&str; 2] = ["a", "b"];\n')), [])
+
+    def test_impl_methods_are_attributed_to_the_type_not_the_trait(self) -> None:
+        found = _impl_methods(tokenize("impl Display for Machine {\n  fn fmt(&self) {}\n}\n"))
+        self.assertEqual(found, [("Machine", "fmt", 2)])
+
+    def test_an_inherent_impl_attributes_to_its_type(self) -> None:
+        found = _impl_methods(tokenize("impl Machine {\n  pub fn boot(&self) {}\n}\n"))
+        self.assertEqual(found, [("Machine", "boot", 2)])

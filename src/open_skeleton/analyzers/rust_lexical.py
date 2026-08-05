@@ -332,6 +332,103 @@ def _struct_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _mutable_statics(tokens: list[Token]) -> list[tuple[str, int, str]]:
+    """Statics that outlive a call, as `(name, line, why it is shared)`.
+
+    Rust's answer to a module-level dict is a `static`. A `static mut` is
+    process-local state that every thread shares with no synchronisation at
+    all, and an interior-mutability wrapper is the same state with a lock
+    around it — the sharing is the property worth reporting either way, since
+    a second process of this program observes none of it.
+    """
+
+    shared_wrappers = {"Mutex", "RwLock", "RefCell", "Cell", "OnceLock", "OnceCell", "Lazy"}
+    found: list[tuple[str, int, str]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "static":
+            continue
+        step = index + 1
+        mutable = step < total and tokens[step].value == "mut"
+        if mutable:
+            step += 1
+        if step >= total or tokens[step].kind != "identifier":
+            continue
+        name = tokens[step].value
+        wrapper = ""
+        scan = step
+        while scan < total and scan < step + 40 and tokens[scan].value != ";":
+            if tokens[scan].kind == "identifier" and tokens[scan].value in shared_wrappers:
+                wrapper = tokens[scan].value
+                break
+            scan += 1
+        if mutable:
+            found.append(
+                (
+                    name,
+                    token.line,
+                    "declared `static mut`, so every thread shares it with no synchronisation",
+                )
+            )
+        elif wrapper:
+            found.append(
+                (
+                    name,
+                    token.line,
+                    f"a `static` holding `{wrapper}`, so its contents change while the process runs",
+                )
+            )
+    return found
+
+
+def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Methods inside `impl` blocks, as `(type, method, line)`.
+
+    A Rust type's behaviour lives in its `impl` blocks, not beside its fields.
+    Recording only free functions describes the smaller half of most crates.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    index = 0
+    while index < total:
+        token = tokens[index]
+        if token.kind != "identifier" or token.value != "impl":
+            index += 1
+            continue
+        # `impl Trait for Type` and `impl Type` both name the type last.
+        header: list[str] = []
+        scan = index + 1
+        while scan < total and tokens[scan].value != "{":
+            if tokens[scan].kind == "identifier":
+                header.append(tokens[scan].value)
+            scan += 1
+        if scan >= total or not header:
+            index = scan + 1
+            continue
+        owner = header[header.index("for") + 1] if "for" in header else header[-1]
+        scan += 1
+        depth = 1
+        while scan < total and depth:
+            current = tokens[scan]
+            if current.value == "{":
+                depth += 1
+            elif current.value == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif (
+                current.kind == "identifier"
+                and current.value == "fn"
+                and scan + 1 < total
+                and tokens[scan + 1].kind == "identifier"
+            ):
+                found.append((owner, tokens[scan + 1].value, tokens[scan + 1].line))
+            scan += 1
+        index = scan + 1
+    return found
+
+
 def _module_name(path: str) -> str:
     parts = path.removesuffix(".rs").split("/")
     if parts[-1] in {"mod", "lib", "main"} and len(parts) > 1:
@@ -436,6 +533,8 @@ class RustLexicalAnalyzer:
             module = _module_name(file_record.path)
             tokens = tokenize(source)
             file_names = _name_index(tokens)
+            file_statics = _mutable_statics(tokens)
+            file_impls = _impl_methods(tokens)
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
@@ -614,6 +713,78 @@ class RustLexicalAnalyzer:
                     continue
 
                 index += 1
+
+            for static_name, static_line, reason in file_statics:
+                qualified = f"{module}::{static_name}"
+                static_receipt = receipt(
+                    file_record.path, static_line, "process_local_state", qualified, excerpt
+                )
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"{qualified} is {reason}; its contents are process-local, so a "
+                            "second instance of this program observes none of them."
+                        ),
+                        category="process_local_state",
+                        supporting=(static_receipt.evidence_id,),
+                        importance="high",
+                        path=file_record.path,
+                    )
+                )
+
+            for owner, method, method_line in file_impls:
+                qualified = f"{module}::{owner}::{method}"
+                method_receipt = receipt(
+                    file_record.path, method_line, "symbol", qualified, excerpt
+                )
+                symbols.append(
+                    SymbolRecord(
+                        symbol_id=stable_id(
+                            "symbol",
+                            (
+                                snapshot.snapshot_id,
+                                file_record.path,
+                                qualified,
+                                method_line,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        path=file_record.path,
+                        qualified_name=qualified,
+                        kind="method",
+                        start_line=method_line,
+                        end_line=method_line,
+                        language="Rust",
+                        analyzer=ANALYZER_VERSION,
+                        metadata={"analysis_level": "lexical", "implements_for": owner},
+                    )
+                )
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge",
+                            (
+                                snapshot.snapshot_id,
+                                module_symbol_id,
+                                "contains",
+                                qualified,
+                                method_receipt.evidence_id,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=module_symbol_id,
+                        source_path=file_record.path,
+                        relationship="contains",
+                        target_ref=qualified,
+                        target_symbol_id=None,
+                        evidence_id=method_receipt.evidence_id,
+                        analyzer=ANALYZER_VERSION,
+                    )
+                )
             analyzed_files += 1
 
         if unsafe_receipts:
