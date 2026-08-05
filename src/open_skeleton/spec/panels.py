@@ -728,6 +728,78 @@ def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _documented_values(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """What the documentation asserts, set beside what the code declares.
+
+    Documentation is the only artifact in a repository that states intent, and
+    the only one that goes stale in silence: nothing fails when a README keeps
+    claiming a limit the code stopped using. Every other panel here reports
+    what the code does. This one reports what the repository says it does, and
+    marks the rows where those disagree.
+    """
+
+    declared: dict[str, tuple[str, str]] = {}
+    for symbol in symbols:
+        metadata = symbol.get("metadata", {})
+        for name, entry in (metadata.get("tunables") or {}).items():
+            value = entry.get("value")
+            rendered = (
+                str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+            )
+            declared.setdefault(name, (rendered, f"{symbol['path']}:{entry.get('line', 1)}"))
+        for name, entry in (metadata.get("string_constants") or {}).items():
+            declared.setdefault(name, (str(entry["value"]), f"{symbol['path']}:{entry['line']}"))
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        facts = symbol.get("metadata", {}).get("documented_facts") or {}
+        for name, entry in sorted(facts.items()):
+            values = [str(item) for item in entry.get("values", [])]
+            match = declared.get(name) or declared.get(name.rsplit(".", 1)[-1])
+            if match is None:
+                agreement = "not a declared constant"
+                in_code = "—"
+            else:
+                in_code, _ = match
+                if not values:
+                    agreement = "no value documented"
+                elif in_code in values:
+                    agreement = "agrees"
+                else:
+                    agreement = "**disagrees**"
+            rows.append(
+                (
+                    name,
+                    ", ".join(f"`{item}`" for item in values[:4]) or "—",
+                    f"`{in_code}`" if in_code != "—" else "—",
+                    agreement,
+                    f"{symbol['path']}:{entry['line']}",
+                )
+            )
+    # Disagreements first: they are the reason to read the table at all.
+    rows.sort(key=lambda row: (row[3] != "**disagrees**", row[4], row[0]))
+    disagreements = sum(1 for row in rows if row[3] == "**disagrees**")
+    comparable = sum(1 for row in rows if row[3] in {"agrees", "**disagrees**"})
+    # Reporting only the disagreement count would read as a clean bill of
+    # health on a repository where nothing was comparable in the first place.
+    # How many could be checked is the number that qualifies the other one.
+    return Panel(
+        name="documented_values",
+        title="Values the documentation asserts",
+        columns=("Name", "Documented", "In code", "Agreement", "Stated at"),
+        alignments=("left", "left", "left", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            f"{len(rows):,} names are asserted by documentation. {comparable:,} of them "
+            f"also name a constant this code declares and could therefore be checked; "
+            f"{disagreements:,} of those disagree. The rest are functions, files and "
+            "types rather than values, and are left unjudged rather than called "
+            "wrong. A number is attributed to an identifier by proximity within a "
+            "line, so this reports what the document says, not what is true."
+        ),
+    )
+
+
 def _external_calls(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Calls made through an imported name: the runtime surface actually used.
 
@@ -953,6 +1025,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
+    if name == "documented_values":
+        return _documented_values(context.symbols)
     if name == "external_calls":
         return _external_calls(context.symbols)
     if name == "config_settings":

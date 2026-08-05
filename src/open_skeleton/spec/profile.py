@@ -43,6 +43,7 @@ PANEL_KINDS = frozenset(
         "external_api_surface",
         "external_origins",
         "external_calls",
+        "documented_values",
         "config_settings",
         "object_keys",
         "signatures",

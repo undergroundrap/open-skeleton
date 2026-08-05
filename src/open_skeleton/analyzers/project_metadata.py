@@ -56,6 +56,49 @@ DOCUMENTED_ROUTE_PATTERN = re.compile(
 NEGATION_PATTERN = re.compile(r"\b(?:no|not|without|doesn['’]?t)\b", re.IGNORECASE)  # noqa: RUF001
 
 
+DOC_CODE_SPAN = re.compile(r"`([^`\n]{2,80})`")
+DOC_IDENTIFIER = re.compile(r"^[A-Za-z_][\w.]*(?:\(\))?$")
+DOC_PATH = re.compile(r"^[\w./-]+\.[A-Za-z0-9]{1,5}$")
+DOC_NUMBER = re.compile(r"\b(\d[\d,]{0,8}(?:\.\d+)?)\b")
+# A bare common word in backticks is formatting, not an assertion about code.
+DOC_NOISE = frozenset(
+    {"true", "false", "none", "null", "get", "post", "put", "delete", "patch", "self", "the"}
+)
+
+
+def _documented_facts(source: str) -> dict[str, dict[str, Any]]:
+    """Identifiers and values a document asserts about the code beside it.
+
+    Documentation is the only artifact in a repository that states intent, and
+    it is the one that goes stale silently: nothing fails when a README keeps
+    claiming a limit the code stopped using. Recovering what it asserts is what
+    makes the disagreement visible later.
+
+    A number is attributed to an identifier only when it appears close to it,
+    which is a proximity heuristic and is why the result is reported as what
+    the document says rather than as what is true.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for number, line in enumerate(source.splitlines(), start=1):
+        for match in DOC_CODE_SPAN.finditer(line):
+            raw = match.group(1).split(":")[0].strip()
+            if not (DOC_IDENTIFIER.match(raw) or DOC_PATH.match(raw)):
+                continue
+            name = raw.rstrip("()")
+            lowered = name.casefold()
+            if lowered in DOC_NOISE or ("." not in name and len(name) < 4):
+                continue
+            entry = found.setdefault(name, {"line": number, "values": []})
+            entry["line"] = min(int(entry["line"]), number)
+            nearby = line[match.end() : match.end() + 90]
+            for value in DOC_NUMBER.findall(nearby):
+                cleaned = value.replace(",", "")
+                if cleaned not in entry["values"] and len(cleaned) <= 9:
+                    entry["values"].append(cleaned)
+    return found
+
+
 def _strip_json_comments(source: str) -> str:
     """Remove the comments a tsconfig is allowed to carry but JSON is not.
 
@@ -795,6 +838,42 @@ class ProjectMetadataAnalyzer:
                     verified_at=created_at,
                     supporting_evidence=(ci_census.evidence_id,),
                     invalidation_keys=("snapshot:file-set",),
+                )
+            )
+
+        # Documentation is the only artifact that states intent, and the one
+        # that goes stale silently: nothing fails when a README keeps claiming
+        # a limit the code stopped using. Recording what it asserts is what
+        # lets the disagreement be shown later.
+        for file_record in snapshot.files:
+            if file_record.language != "Markdown":
+                continue
+            source = file_sources.get(file_record.path)
+            if source is None:
+                continue
+            asserted = _documented_facts(source)
+            if not asserted:
+                continue
+            symbols.append(
+                SymbolRecord(
+                    symbol_id=stable_id(
+                        "symbol",
+                        (
+                            snapshot.snapshot_id,
+                            file_record.path,
+                            "documentation",
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    path=file_record.path,
+                    qualified_name=file_record.path,
+                    kind="documentation",
+                    start_line=1,
+                    end_line=max(1, file_record.line_count),
+                    language="Markdown",
+                    analyzer=ANALYZER_VERSION,
+                    metadata={"documented_facts": asserted},
                 )
             )
 

@@ -5,6 +5,7 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
@@ -527,3 +528,43 @@ class AppendixPanelTests(TestCase):
             panel = build_panel(name, PanelContext(symbols=self.SYMBOLS))
             assert panel.note is not None
             self.assertIn("not", panel.note.lower())
+
+
+class DocumentedValueTests(TestCase):
+    """Documentation is the artifact that goes stale in silence."""
+
+    def _panel(self, tunables: dict[str, Any], documented: dict[str, Any]) -> Any:
+        symbols = (
+            {"path": "app.py", "metadata": {"tunables": tunables}},
+            {"path": "README.md", "metadata": {"documented_facts": documented}},
+        )
+        return build_panel("documented_values", PanelContext(symbols=symbols))
+
+    def test_a_documented_value_that_differs_from_the_constant_is_flagged(self) -> None:
+        panel = self._panel(
+            {"BAG_SIZE": {"value": 16.0, "line": 4}},
+            {"BAG_SIZE": {"line": 9, "values": ["20"]}},
+        )
+        self.assertEqual(panel.rows[0][1], "`20`")
+        self.assertEqual(panel.rows[0][2], "`16`")
+        self.assertIn("disagrees", panel.rows[0][3])
+
+    def test_a_matching_value_agrees(self) -> None:
+        panel = self._panel(
+            {"BAG_SIZE": {"value": 16.0, "line": 4}},
+            {"BAG_SIZE": {"line": 9, "values": ["16"]}},
+        )
+        self.assertEqual(panel.rows[0][3], "agrees")
+
+    def test_a_name_the_code_does_not_declare_is_left_unjudged(self) -> None:
+        # Calling a function name wrong because it has no constant of that
+        # name would be a fabricated finding.
+        panel = self._panel({}, {"run_dungeon": {"line": 3, "values": []}})
+        self.assertEqual(panel.rows[0][3], "not a declared constant")
+
+    def test_the_note_says_how_many_could_be_checked_at_all(self) -> None:
+        # Reporting zero disagreements without saying zero were comparable
+        # reads as a clean bill of health that was never earned.
+        panel = self._panel({}, {"run_dungeon": {"line": 3, "values": []}})
+        assert panel.note is not None
+        self.assertIn("0 of them", panel.note)

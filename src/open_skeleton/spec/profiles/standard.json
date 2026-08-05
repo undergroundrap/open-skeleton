@@ -420,7 +420,10 @@
               "documentation_drift"
             ],
             "limit": 25
-          }
+          },
+          "panels": [
+            "documented_values"
+          ]
         },
         {
           "id": "stack.licensing",
