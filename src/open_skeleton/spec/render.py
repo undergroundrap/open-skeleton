@@ -342,6 +342,117 @@ def _escape(value: str) -> str:
 
 
 MAX_RENDERED_CITATIONS = 6
+MAX_SUMMARY_ROWS = 10
+THIN_YIELD_RATIO = 0.34
+
+
+def _first_citation(claim: RenderedClaim) -> str:
+    if not claim.citations:
+        return "—"
+    return f"`{_escape(claim.citations[0].location)}`"
+
+
+def _executive_summary(document: SpecDocument) -> list[str]:
+    """Lead with what a reader has to decide, not with what the tool measured.
+
+    A long specification is unusable if the reader has to find the important
+    parts themselves. Everything here is selected from claims already rendered
+    below, so the summary is a view rather than a second source of truth, and
+    every row points at the section that carries the receipts.
+    """
+
+    section_of: dict[str, RenderedSection] = {}
+    conflicts: list[RenderedClaim] = []
+    urgent: list[RenderedClaim] = []
+    for section in document.sections:
+        for claim in section.findings:
+            section_of[claim.claim_id] = section
+            if claim.status == "conflict":
+                conflicts.append(claim)
+            elif claim.importance in {"critical", "high"} and claim.status != "unknown":
+                urgent.append(claim)
+
+    untraced = [item for item in document.capabilities if not item.exercised_by]
+    absent = [item for item in document.sections if item.verdict == "absent"]
+    probed = [item for item in document.sections if item.verdict != "structural"]
+    thin = [
+        item
+        for item in document.coverage
+        if int(item["analyzed_files"]) > 0
+        and item.get("yield_ratio") is not None
+        and float(item["yield_ratio"]) < THIN_YIELD_RATIO
+    ]
+
+    lines = ["## Executive summary\n\n"]
+    decisions = len(conflicts) + len(untraced)
+    if decisions:
+        lines.append(
+            f"**{decisions} item(s) need a decision**: {len(conflicts):,} unresolved "
+            f"conflict(s) between sources, and {len(untraced):,} implemented "
+            "capability(ies) that no test or harness reaches.\n\n"
+        )
+    else:
+        lines.append(
+            "No unresolved conflicts, and every implemented capability is reached by a "
+            "test or harness.\n\n"
+        )
+
+    if conflicts:
+        lines.append("### Contradictions between sources\n\n")
+        lines.append("| Finding | Evidence | Section |\n|---|---|---|\n")
+        for claim in conflicts[:MAX_SUMMARY_ROWS]:
+            location = section_of[claim.claim_id]
+            lines.append(
+                f"| {_escape(claim.claim)} | {_first_citation(claim)} | §{location.number} |\n"
+            )
+        if len(conflicts) > MAX_SUMMARY_ROWS:
+            lines.append(f"\n_{len(conflicts) - MAX_SUMMARY_ROWS:,} further conflict(s) below._\n")
+        lines.append("\n")
+
+    if untraced:
+        names = ", ".join(f"`{item.label}`" for item in untraced[:MAX_SUMMARY_ROWS])
+        lines.append(
+            f"### Capabilities with no verifying reference\n\n"
+            f"{len(untraced):,} of {len(document.capabilities):,}: {names}. "
+            "Static resolution cannot see dynamic dispatch, so treat each as a "
+            "candidate for review rather than proof of absent testing.\n\n"
+        )
+
+    if urgent:
+        lines.append("### Highest-importance verified findings\n\n")
+        lines.append("| Finding | Evidence | Section |\n|---|---|---|\n")
+        for claim in urgent[:MAX_SUMMARY_ROWS]:
+            location = section_of[claim.claim_id]
+            lines.append(
+                f"| {_escape(claim.claim)} | {_first_citation(claim)} | §{location.number} |\n"
+            )
+        lines.append("\n")
+
+    if absent:
+        names = ", ".join(f"§{item.number} {item.title}" for item in absent[:MAX_SUMMARY_ROWS])
+        remainder = len(absent) - MAX_SUMMARY_ROWS
+        suffix = f", and {remainder:,} more" if remainder > 0 else ""
+        lines.append(
+            f"### Concerns this repository does not implement\n\n"
+            f"{len(absent):,} of {len(probed):,} probed concerns returned no matches: "
+            f"{names}{suffix}. Each prints the query that found nothing.\n\n"
+        )
+
+    if thin:
+        lines.append("### Where this analysis is thin\n\n")
+        lines.append("| Analyzer | Parsed | Produced a finding |\n|---|---:|---:|\n")
+        for item in thin:
+            lines.append(
+                f"| `{item['analyzer']}` | {int(item['analyzed_files']):,} files | "
+                f"{float(item['yield_ratio']):.0%} |\n"
+            )
+        lines.append(
+            "\nThese analyzers read every eligible file but had little to say about "
+            "them. Sections resting on them are correspondingly thin, and that is a "
+            "limit of this tool rather than a statement about the code.\n\n"
+        )
+
+    return lines
 
 
 def _claim_table(claims: tuple[RenderedClaim, ...]) -> Iterable[str]:
@@ -384,6 +495,8 @@ def render_spec_markdown(document: SpecDocument) -> str:
     lines.append(f"- Stale claims against this snapshot: {document.stale_claim_count:,}\n\n")
     if document.profile_lineage:
         lines.append(f"_Outline lineage: {document.profile_lineage}_\n\n")
+
+    lines.extend(_executive_summary(document))
 
     verdict_counts: dict[str, int] = {}
     for section in document.sections:

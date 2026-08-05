@@ -23,6 +23,29 @@ The packaged outline is `src/open_skeleton/spec/profiles/standard.json`. Its nin
 ISO/IEC/IEEE 29148 requirements structure, C4 architectural levels, and a standard
 operational-readiness checklist. Supply your own with `--profile`.
 
+## The report leads with decisions, not measurements
+
+A long specification is unusable if the reader has to locate the important parts
+themselves. The executive summary is rendered first and answers one question:
+what needs a decision.
+
+| Block | Contents |
+|---|---|
+| Decisions required | Unresolved conflicts, plus capabilities no test or harness reaches |
+| Contradictions between sources | Each conflict with its first receipt and the section that carries the rest |
+| Highest-importance verified findings | Critical and high claims, evidence-linked |
+| Concerns not implemented | Absent determinations, counted against the concerns actually probed |
+| Where this analysis is thin | Analyzers with full coverage and low yield |
+
+Everything in it is selected from claims rendered below, so it is a view rather
+than a second source of truth, and every row points at the section holding the
+receipts.
+
+The last block is the one competitors do not write. It names the analyzers that
+read every eligible file and produced almost nothing, so a reader knows which
+sections rest on a thin read. That is a limit of the tool, stated by the tool,
+in the document the tool produced.
+
 ## Determination: absence is a verdict, not a silence
 
 Each outline node declares **probes** — named, re-runnable queries over the pinned

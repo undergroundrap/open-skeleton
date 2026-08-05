@@ -406,8 +406,11 @@ class ClaimYieldTests(TestCase):
             for record in coverage:
                 self.assertIn("yield_ratio", record)
                 self.assertLessEqual(record["claimed_files"], record["analyzed_files"])
-                self.assertGreaterEqual(record["yield_ratio"], 0.0)
-                self.assertLessEqual(record["yield_ratio"], 1.0)
+                # None means "not recorded" — an analyzer with nothing eligible, or
+                # a row written before the column existed. It is not a yield of zero.
+                if record["yield_ratio"] is not None:
+                    self.assertGreaterEqual(record["yield_ratio"], 0.0)
+                    self.assertLessEqual(record["yield_ratio"], 1.0)
 
     def test_spec_coverage_table_distinguishes_reach_from_findings(self) -> None:
         with TemporaryDirectory() as temporary:

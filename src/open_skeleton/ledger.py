@@ -41,6 +41,28 @@ class EvidenceLedger:
         finally:
             connection.close()
 
+    # Columns added after a schema version shipped. `CREATE TABLE IF NOT EXISTS`
+    # leaves an existing table untouched, so a ledger written by an earlier
+    # version keeps its old shape and every read of a new column fails. Each
+    # entry must be nullable or carry a default; this path never rewrites or
+    # drops stored rows.
+    _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        # Nullable on purpose: a row written before this column existed has an
+        # unknown yield, which is not the same as a yield of zero. Backfilling a
+        # default would make a migrated ledger state a falsehood about itself.
+        ("analysis_coverage", "claimed_files", "INTEGER"),
+    )
+
+    def _apply_additive_migrations(self, connection: sqlite3.Connection) -> None:
+        for table, column, definition in self._ADDITIVE_COLUMNS:
+            existing = {
+                str(row["name"])
+                for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if not existing or column in existing:
+                continue
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._session() as connection:
@@ -243,6 +265,7 @@ class EvidenceLedger:
                 );
                 """
             )
+            self._apply_additive_migrations(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES ('schema_version', ?)",
                 (SCHEMA_VERSION,),
@@ -797,7 +820,10 @@ class EvidenceLedger:
             eligible = int(item["eligible_files"])
             analyzed = int(item["analyzed_files"])
             item["coverage_ratio"] = analyzed / eligible if eligible else 1.0
-            item["yield_ratio"] = int(item["claimed_files"]) / analyzed if analyzed else 0.0
+            claimed = item["claimed_files"]
+            item["yield_ratio"] = (
+                int(claimed) / analyzed if claimed is not None and analyzed else None
+            )
             results.append(item)
         return results
 

@@ -41,6 +41,10 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Changed
 
+- the specification opens with an executive summary that leads with decisions
+  required — conflicts, untraced capabilities, top findings, absent concerns,
+  and the analyzers whose coverage is high but whose yield is low
+
 - analyzer coverage now reports a claim-yield column beside it. Coverage means
   "the file parsed"; yield means "the file produced a finding". Reporting only
   the first overstated how much an analyzer understood
@@ -51,6 +55,10 @@ All notable changes will be documented here. This project follows Semantic Versi
 - mypy runs in strict mode over both `src` and `tests`
 
 ### Fixed
+
+- ledgers written by an earlier schema are migrated additively instead of
+  failing on a missing column; a migrated row reports unknown yield rather
+  than a fabricated zero
 
 - presence probes no longer count a claim that asserts a counted absence, which
   had inverted the verdict for CI, authentication, testing, and telemetry

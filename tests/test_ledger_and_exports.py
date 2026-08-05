@@ -105,3 +105,86 @@ class LedgerAndExportTests(TestCase):
             self.assertTrue(ledger.stale_claims(current.snapshot_id))
             historical = ledger.list_claims(previous.snapshot_id)
             self.assertTrue(all(item["status"] != "stale" for item in historical))
+
+
+class AdditiveMigrationTests(TestCase):
+    """A ledger written by an earlier version must keep working."""
+
+    def _schema_three_ledger(self, path: Path) -> None:
+        """Recreate the pre-migration analysis_coverage shape."""
+
+        with closing(sqlite3.connect(path)) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE analysis_runs (run_id TEXT PRIMARY KEY);
+                CREATE TABLE analysis_coverage (
+                    run_id TEXT NOT NULL,
+                    analyzer TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    eligible_files INTEGER NOT NULL,
+                    analyzed_files INTEGER NOT NULL,
+                    failed_files INTEGER NOT NULL,
+                    unsupported_files INTEGER NOT NULL,
+                    failures_json TEXT NOT NULL,
+                    PRIMARY KEY (run_id, analyzer, language)
+                );
+                INSERT INTO metadata VALUES ('schema_version', '3');
+                INSERT INTO analysis_runs VALUES ('run-1');
+                INSERT INTO analysis_coverage
+                    VALUES ('run-1', 'python-ast/v2', 'Python', 4, 4, 0, 0, '[]');
+                """
+            )
+            connection.commit()
+
+    def test_missing_column_is_added_without_dropping_rows(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "evidence.sqlite3"
+            self._schema_three_ledger(path)
+
+            EvidenceLedger(path).initialize()
+
+            with closing(sqlite3.connect(path)) as connection:
+                connection.row_factory = sqlite3.Row
+                columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(analysis_coverage)")
+                }
+                rows = connection.execute("SELECT * FROM analysis_coverage").fetchall()
+                version = connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'schema_version'"
+                ).fetchone()
+
+            self.assertIn("claimed_files", columns)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["analyzed_files"], 4)
+            self.assertEqual(version["value"], "4")
+
+    def test_a_migrated_row_reports_unknown_yield_rather_than_zero(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "evidence.sqlite3"
+            self._schema_three_ledger(path)
+            EvidenceLedger(path).initialize()
+
+            with closing(sqlite3.connect(path)) as connection:
+                connection.row_factory = sqlite3.Row
+                row = connection.execute("SELECT claimed_files FROM analysis_coverage").fetchone()
+
+            # Zero would assert the analyzer found nothing, which is not known.
+            self.assertIsNone(row["claimed_files"])
+
+    def test_migration_is_idempotent(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "evidence.sqlite3"
+            self._schema_three_ledger(path)
+
+            EvidenceLedger(path).initialize()
+            EvidenceLedger(path).initialize()
+
+            with closing(sqlite3.connect(path)) as connection:
+                connection.row_factory = sqlite3.Row
+                columns = [
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(analysis_coverage)")
+                ]
+            self.assertEqual(columns.count("claimed_files"), 1)
