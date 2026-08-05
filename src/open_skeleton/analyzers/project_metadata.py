@@ -26,6 +26,25 @@ from open_skeleton.models import (
 
 ANALYZER_NAME = "project-metadata"
 ANALYZER_VERSION = "project-metadata/v1"
+# A stylesheet reaches a third party through `@import`, `url()`, or a `<link>`
+# href. The scheme is required so a bare domain in a comment is not a request.
+STYLE_ORIGIN = re.compile(r"(?:https?:)?//(?P<host>[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z]{2,})")
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
+# Declared on inline SVG and XHTML elements as an identifier. Nothing is fetched
+# from these, and treating them as egress would flag every icon in the tree.
+NAMESPACE_HOSTS = frozenset(
+    {
+        "www.w3.org",
+        "w3.org",
+        "www.inkscape.org",
+        "sodipodi.sourceforge.net",
+        "creativecommons.org",
+        "purl.org",
+        "schema.org",
+        "www.opengis.net",
+        "xmlns.com",
+    }
+)
 TAILWIND_PATTERN = re.compile(r"\btailwind(?:\s+css)?\b", re.IGNORECASE)
 REQUIREMENT_PATTERN = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
 DOCUMENTED_ROUTE_PATTERN = re.compile(
@@ -689,6 +708,60 @@ class ProjectMetadataAnalyzer:
                     invalidation_keys=("snapshot:file-set",),
                 )
             )
+
+        # Stylesheets and markup fetch from third parties too, and neither is
+        # any language analyzer's territory. A font `@import` and a background
+        # `url()` reach the same third party as a script would, and the census
+        # that only read TypeScript reported neither.
+        for file_record in snapshot.files:
+            if Path(file_record.path).suffix.casefold() not in {".css", ".scss", ".html"}:
+                continue
+            source = file_sources.get(file_record.path)
+            if source is None:
+                continue
+            seen_here: dict[str, int] = {}
+            for index, line in enumerate(source.splitlines(), start=1):
+                for match in STYLE_ORIGIN.finditer(line):
+                    host = match.group("host").casefold()
+                    if host in LOOPBACK_HOSTS or host.endswith(".local"):
+                        continue
+                    # An XML namespace is an identifier, not a request. Inline
+                    # SVG declares one on every element and nothing is fetched.
+                    if host in NAMESPACE_HOSTS:
+                        continue
+                    seen_here.setdefault(host, index)
+            for host, line_number in sorted(seen_here.items()):
+                origin_receipt = receipt(
+                    file_record.path, line_number, line_number, "third_party_origin"
+                )
+                origin_text = (
+                    f"{file_record.path} loads from third-party origin {host}, so every "
+                    "visitor's address reaches that host when the page renders."
+                )
+                claims.append(
+                    ClaimRecord(
+                        claim_id=stable_id(
+                            "claim",
+                            (
+                                snapshot.snapshot_id,
+                                "third_party_origin",
+                                origin_text,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        claim=origin_text,
+                        category="third_party_origin",
+                        status="verified",
+                        confidence=1.0,
+                        importance="medium",
+                        produced_by=ANALYZER_VERSION,
+                        created_at=created_at,
+                        verified_at=created_at,
+                        supporting_evidence=(origin_receipt.evidence_id,),
+                        invalidation_keys=(f"file:{file_record.path}",),
+                    )
+                )
 
         coverage = CoverageRecord(
             analyzer=ANALYZER_VERSION,

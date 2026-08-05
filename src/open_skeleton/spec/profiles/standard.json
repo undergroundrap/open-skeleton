@@ -1502,7 +1502,32 @@
           "cross_references": [
             "security.boundaries",
             "integration.analytics"
-          ]
+          ],
+          "probes": [
+            {
+              "name": "Origins in stylesheets and markup",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "third_party_origin"
+              ]
+            },
+            {
+              "name": "Third-party host literals",
+              "kind": "import_target",
+              "terms": [
+                "https://fonts.googleapis.com",
+                "https://cdn.jsdelivr.net",
+                "https://unpkg.com",
+                "https://cdnjs.cloudflare.com"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "third_party_origin"
+            ],
+            "limit": 25
+          }
         }
       ]
     },

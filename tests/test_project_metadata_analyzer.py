@@ -166,3 +166,46 @@ mcp = ["mcp>=2,<3"]
         result = self._analyze('[tool.poetry.dependencies]\nrequests = "^2.0"\n')
         declared = [edge for edge in result.edges if edge.relationship == "declares_dependency"]
         self.assertEqual(declared, [])
+
+
+class ThirdPartyOriginTests(TestCase):
+    """A stylesheet reaches third parties too, and no language analyzer reads one."""
+
+    def _origins(self, name: str, source: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / name).write_text(source, encoding="utf-8")
+            result = ProjectMetadataAnalyzer().analyze(scan_repository(root))
+        return {
+            item.claim.split("third-party origin ")[1].split(",")[0]
+            for item in result.claims
+            if item.category == "third_party_origin"
+        }
+
+    def test_an_import_and_a_background_url_are_both_reported(self) -> None:
+        origins = self._origins(
+            "app.css",
+            "@import url('https://fonts.googleapis.com/css2?family=Lora');\n"
+            "body { background-image: url('https://www.transparenttextures.com/p/x.png'); }\n",
+        )
+        self.assertEqual(origins, {"fonts.googleapis.com", "www.transparenttextures.com"})
+
+    def test_an_xml_namespace_is_not_a_request(self) -> None:
+        # Inline SVG declares this on every element. Treating it as egress
+        # would flag every icon in the tree.
+        self.assertEqual(
+            self._origins("icon.css", 'a { content: url("http://www.w3.org/2000/svg"); }\n'), set()
+        )
+
+    def test_a_loopback_host_is_not_third_party(self) -> None:
+        self.assertEqual(
+            self._origins("dev.css", "@import url('http://localhost:3000/x.css');\n"), set()
+        )
+
+    def test_one_host_used_twice_is_reported_once(self) -> None:
+        origins = self._origins(
+            "twice.css",
+            "@import url('https://cdn.example.com/a.css');\n"
+            "body { background: url('https://cdn.example.com/b.png'); }\n",
+        )
+        self.assertEqual(origins, {"cdn.example.com"})
