@@ -122,14 +122,24 @@ def _coverage(expected: set[Any], haystack: str) -> tuple[int, list[Any]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
-    parser.add_argument("--candidate", required=True, type=Path)
+    parser.add_argument(
+        "--candidate",
+        required=True,
+        type=Path,
+        nargs="+",
+        help=(
+            "One or more files forming the candidate deliverable. Pass spec.md "
+            "and spec.json together to measure everything one run produces; "
+            "pass spec.md alone to measure only what a human reads."
+        ),
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--candidate-label", default="Open Skeleton")
     parser.add_argument("--sample", type=int, default=25)
     args = parser.parse_args()
 
     baseline = args.baseline.read_text(encoding="utf-8")
-    candidate = args.candidate.read_text(encoding="utf-8")
+    candidate = "\n".join(path.read_text(encoding="utf-8") for path in args.candidate)
     haystack = candidate.casefold()
 
     symbols = _symbols(baseline)
@@ -144,11 +154,13 @@ def main() -> int:
     def pct(part: int, whole: int) -> str:
         return f"{part / whole:.1%}" if whole else "n/a"
 
+    measured = ", ".join(f"`{path.name}`" for path in args.candidate)
     lines = [
         "# Fact coverage\n\n",
         (
             "Every distinct fact the baseline asserts, checked against "
             f"{args.candidate_label}. What is missing is value not extracted.\n\n"
+            f"Measured against {measured}.\n\n"
         ),
         f"| Fact family | Baseline asserts | {args.candidate_label} carries | Coverage |\n",
         "|---|---:|---:|---:|\n",
