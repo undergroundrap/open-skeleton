@@ -2401,6 +2401,19 @@
           "cross_references": [
             "maintenance.tunables"
           ]
+        },
+        {
+          "id": "maintenance.signatures",
+          "number": "9.12",
+          "title": "Function Signatures",
+          "concern": "How each function is called: parameters, types, defaults.",
+          "framing": "The symbol index names a function. It does not say what the function takes, which of those are required, or what a caller gets back — the three things that decide whether a call compiles.",
+          "panels": [
+            "signatures"
+          ],
+          "cross_references": [
+            "maintenance.symbol-index"
+          ]
         }
       ]
     }

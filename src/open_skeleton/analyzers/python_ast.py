@@ -377,6 +377,63 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _parameter_entry(argument: ast.arg, default: ast.expr | None, kind: str) -> dict[str, Any]:
+    """One parameter, with annotation and default rendered as written."""
+
+    entry: dict[str, Any] = {"name": argument.arg, "kind": kind}
+    if argument.annotation is not None:
+        entry["annotation"] = ast.unparse(argument.annotation)
+    if default is not None:
+        rendered = ast.unparse(default)
+        entry["default"] = rendered if len(rendered) <= 60 else "…"
+    return entry
+
+
+def _signatures(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Each function's parameters, with annotations and defaults as written.
+
+    A caller needs the signature, and until now the ledger held only the name.
+    Whether a parameter is required, what type it declares, and what it falls
+    back to are the three things that decide how a function is called, and
+    none of them were recorded anywhere.
+
+    Defaults are rendered from source rather than evaluated, so a mutable
+    default stays visible as the expression it is.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        arguments = node.args
+        positional = [*arguments.posonlyargs, *arguments.args]
+        # Defaults bind to the tail of the positional list.
+        offset = len(positional) - len(arguments.defaults)
+        entries: list[dict[str, Any]] = []
+
+        for index, argument in enumerate(positional):
+            default = (
+                arguments.defaults[index - offset]
+                if index >= offset and arguments.defaults
+                else None
+            )
+            entries.append(_parameter_entry(argument, default, "positional"))
+        if arguments.vararg is not None:
+            entries.append(_parameter_entry(arguments.vararg, None, "var_positional"))
+        for argument, default in zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True):
+            entries.append(_parameter_entry(argument, default, "keyword_only"))
+        if arguments.kwarg is not None:
+            entries.append(_parameter_entry(arguments.kwarg, None, "var_keyword"))
+
+        if entries:
+            found[node.name] = {
+                "parameters": entries,
+                "line": node.lineno,
+                "returns": ast.unparse(node.returns) if node.returns is not None else None,
+            }
+    return found
+
+
 def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Numeric literals written inside a function body.
 
@@ -778,6 +835,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.imported_names = _imported_names(tree)
         self.string_constants = _string_constants(tree)
         self.embedded_literals = _embedded_literals(tree)
+        self.signatures = _signatures(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1516,6 +1574,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["string_constants"] = self.string_constants
         if self.embedded_literals:
             payload["embedded_literals"] = self.embedded_literals
+        if self.signatures:
+            payload["signatures"] = self.signatures
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):

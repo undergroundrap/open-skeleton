@@ -43,6 +43,7 @@ PANEL_KINDS = frozenset(
         "external_api_surface",
         "external_origins",
         "object_keys",
+        "signatures",
         "payload_shapes",
         "model_fields",
         "imported_names",

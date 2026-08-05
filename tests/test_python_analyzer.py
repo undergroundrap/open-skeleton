@@ -17,6 +17,7 @@ from open_skeleton.analyzers.python_ast import (
     _imported_names,
     _model_fields,
     _payload_shapes,
+    _signatures,
     _string_constants,
 )
 from open_skeleton.ledger import EvidenceLedger
@@ -488,3 +489,42 @@ class EmbeddedLiteralTests(TestCase):
         found = self._literals("def outer():\n    def inner():\n        return 42\n    return 3\n")
         self.assertEqual([item["value"] for item in found["outer"]["values"]], ["3"])
         self.assertEqual([item["value"] for item in found["inner"]["values"]], ["42"])
+
+
+class SignatureTests(TestCase):
+    """A caller needs the shape of the call, not only the name."""
+
+    def _sig(self, source: str) -> dict[str, Any]:
+        return _signatures(ast.parse(source))
+
+    def test_annotations_defaults_and_return_are_recorded(self) -> None:
+        entry = self._sig('def f(a: int, b: str = "x") -> dict:\n    return {}\n')["f"]
+        self.assertEqual(entry["returns"], "dict")
+        self.assertEqual(
+            entry["parameters"][0], {"name": "a", "kind": "positional", "annotation": "int"}
+        )
+        self.assertEqual(entry["parameters"][1]["default"], "'x'")
+
+    def test_defaults_bind_to_the_tail_of_the_positional_list(self) -> None:
+        parameters = self._sig("def f(a, b, c=3):\n    pass\n")["f"]["parameters"]
+        self.assertNotIn("default", parameters[0])
+        self.assertNotIn("default", parameters[1])
+        self.assertEqual(parameters[2]["default"], "3")
+
+    def test_var_positional_and_var_keyword_keep_their_kinds(self) -> None:
+        kinds = {
+            p["name"]: p["kind"]
+            for p in self._sig("def f(*args, **kw):\n    pass\n")["f"]["parameters"]
+        }
+        self.assertEqual(kinds, {"args": "var_positional", "kw": "var_keyword"})
+
+    def test_a_keyword_only_parameter_without_a_default_has_none(self) -> None:
+        parameters = self._sig("def f(*, mode):\n    pass\n")["f"]["parameters"]
+        self.assertEqual(parameters[0]["kind"], "keyword_only")
+        self.assertNotIn("default", parameters[0])
+
+    def test_a_mutable_default_stays_visible_as_an_expression(self) -> None:
+        # Evaluating it would hide the bug; the expression is the finding.
+        self.assertEqual(
+            self._sig("def f(items=[]):\n    pass\n")["f"]["parameters"][0]["default"], "[]"
+        )

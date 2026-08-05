@@ -632,6 +632,63 @@ def _payload_shapes(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _signatures(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Function parameters, with the annotation and default as written.
+
+    Whether a parameter is required, what type it declares and what it falls
+    back to are the three things that decide how a function is called. The
+    symbol index carried the name and nothing else.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        signatures = symbol.get("metadata", {}).get("signatures") or {}
+        for name, entry in sorted(signatures.items()):
+            rendered: list[str] = []
+            for parameter in entry["parameters"]:
+                text = str(parameter["name"])
+                if parameter.get("kind") == "var_positional":
+                    text = f"*{text}"
+                elif parameter.get("kind") == "var_keyword":
+                    text = f"**{text}"
+                if parameter.get("annotation"):
+                    text += f": {parameter['annotation']}"
+                if "default" in parameter:
+                    text += f" = {parameter['default']}"
+                rendered.append(text)
+            required = sum(
+                1
+                for parameter in entry["parameters"]
+                if "default" not in parameter
+                and parameter.get("kind") not in {"var_positional", "var_keyword"}
+            )
+            rows.append(
+                (
+                    name,
+                    f"{len(entry['parameters']):,}",
+                    f"{required:,}",
+                    f"`({', '.join(rendered)})`",
+                    str(entry["returns"] or "—"),
+                    f"{symbol['path']}:{entry['line']}",
+                )
+            )
+    rows.sort(key=lambda row: (row[5], row[0]))
+    return Panel(
+        name="signatures",
+        title="Function signatures",
+        columns=("Function", "Params", "Required", "Signature", "Returns", "Defined at"),
+        alignments=("left", "right", "right", "left", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            "Annotations and defaults are rendered from source rather than "
+            "evaluated, so a mutable default stays visible as the expression "
+            "it is. A parameter counts as required when it declares no "
+            "default; *args and **kwargs are neither required nor optional "
+            "and are excluded from that count."
+        ),
+    )
+
+
 def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Field names coined as object literal keys.
 
@@ -827,6 +884,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _imported_names(context.symbols)
     if name == "payload_shapes":
         return _payload_shapes(context.symbols)
+    if name == "signatures":
+        return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
     if name == "external_origins":
