@@ -293,6 +293,16 @@
             }
           ],
           "framing": "Any client that retries a failed write needs the second attempt to be harmless. Where no idempotency key is accepted, that guarantee rests on the caller not retrying."
+        },
+        {
+          "id": "surface.payload-shapes",
+          "number": "2.10",
+          "title": "Returned Payload Fields",
+          "concern": "The response field names a caller has to code against.",
+          "framing": "Where responses are built as dictionaries rather than declared as models, the contract is not written down: storage sees a JSON blob and the symbol index sees a function. These are the field names recovered from the returned literals themselves.",
+          "panels": [
+            "payload_shapes"
+          ]
         }
       ]
     },
@@ -2306,6 +2316,16 @@
             "symbol_index"
           ],
           "framing": "A specification that discusses a module without naming its functions leaves a reader unable to search for them. This is the ledger's symbol inventory, rendered."
+        },
+        {
+          "id": "maintenance.external-api",
+          "number": "9.9",
+          "title": "Referenced External API",
+          "concern": "Platform and library surface the code reaches for at runtime.",
+          "framing": "The symbol index records what this repository declares. This records what it depends on and does not own: browser storage, network primitives, SDK call chains. A dependency manifest names the package; this names the call.",
+          "panels": [
+            "external_api_surface"
+          ]
         }
       ]
     }

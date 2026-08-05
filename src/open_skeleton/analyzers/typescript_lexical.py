@@ -235,6 +235,117 @@ def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int
     return names, index
 
 
+def _parameter_names(tokens: list[Token]) -> set[str]:
+    """Names bound by a parameter list, including arrow shorthand.
+
+    `mobs.map(m => m.respawn_at)` binds `m` locally. Without this, the receiver
+    `m` looks like a global and the reference census fills up with callback
+    parameters instead of the platform API it is meant to report.
+    """
+
+    names: set[str] = set()
+
+    def collect(open_index: int) -> None:
+        depth = 0
+        index = open_index
+        while index < len(tokens):
+            token = tokens[index]
+            if token.kind == "punctuation":
+                if token.value in {"(", "{", "["}:
+                    depth += 1
+                elif token.value in {")", "}", "]"}:
+                    depth -= 1
+                    if depth == 0:
+                        return
+            elif token.kind == "identifier":
+                previous = tokens[index - 1].value if index else ""
+                # A name opens the list or follows a separator or a modifier. A
+                # type annotation follows `:`, so only the name side counts.
+                starts_entry = previous in {"(", ",", "{", "["} or previous in MEMBER_MODIFIERS
+                if starts_entry and token.value not in MEMBER_MODIFIERS:
+                    names.add(token.value)
+            index += 1
+
+    for index, token in enumerate(tokens):
+        if token.kind != "punctuation" or token.value != "=":
+            continue
+        if index + 1 >= len(tokens) or tokens[index + 1].value != ">":
+            continue
+        previous = tokens[index - 1] if index else None
+        if previous is None:
+            continue
+        if previous.kind == "identifier":
+            names.add(previous.value)
+            continue
+        if previous.value == ")":
+            depth = 0
+            scan = index - 1
+            while scan >= 0:
+                value = tokens[scan].value
+                if tokens[scan].kind == "punctuation":
+                    if value in {")", "}", "]"}:
+                        depth += 1
+                    elif value in {"(", "{", "["}:
+                        depth -= 1
+                        if depth == 0:
+                            collect(scan)
+                            break
+                scan -= 1
+    # Ordinary and method signatures: an identifier directly followed by `(`
+    # that opens a block rather than a call argument list.
+    for index, token in enumerate(tokens):
+        if (
+            token.kind == "identifier"
+            and index
+            and index + 1 < len(tokens)
+            and tokens[index + 1].value == "("
+            and tokens[index - 1].value == "function"
+        ):
+            collect(index + 1)
+    return names
+
+
+def _references(tokens: list[Token], declared: frozenset[str]) -> dict[str, dict[str, Any]]:
+    """Platform and library API this module reaches for but does not define.
+
+    `localStorage.setItem`, `document.activeElement`, `new AbortController` and
+    `body.getReader` are not this module's symbols, and a symbol index will
+    never list them — but they are what a reviewer means by "what does this
+    code depend on at runtime". Storage and clipboard access are privacy
+    questions, and `eval` is a security one, so the surface is worth naming.
+
+    A name declared in this module is excluded: `engine.run()` where `engine` is
+    a local is internal wiring, not an external dependency.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+
+    def record(name: str, line: int, called: bool) -> None:
+        entry = found.setdefault(name, {"count": 0, "first_line": line, "called": False})
+        entry["count"] = int(entry["count"]) + 1
+        entry["first_line"] = min(int(entry["first_line"]), line)
+        entry["called"] = bool(entry["called"]) or called
+
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier":
+            continue
+        following = tokens[index + 1].value if index + 1 < total else ""
+        previous = tokens[index - 1].value if index else ""
+        if previous == ".":
+            continue
+        if following == "." and index + 2 < total and tokens[index + 2].kind == "identifier":
+            if token.value in declared:
+                continue
+            member = tokens[index + 2]
+            called = index + 3 < total and tokens[index + 3].value == "("
+            record(f"{token.value}.{member.value}", token.line, called)
+            continue
+        if previous == "new" and token.value not in declared:
+            record(token.value, token.line, True)
+    return found
+
+
 def _declarations(tokens: list[Token]) -> list[Declaration]:
     """Every name a module introduces at a position the tokens make unambiguous.
 
@@ -545,6 +656,14 @@ class TypeScriptLexicalAnalyzer:
                 continue
 
             file_state_fields = _state_fields(file_tokens)
+            file_declarations = _declarations(file_tokens)
+            file_references = _references(
+                file_tokens,
+                frozenset(
+                    {item.name.rsplit(".", 1)[-1] for item in file_declarations}
+                    | _parameter_names(file_tokens)
+                ),
+            )
             module = _module_name(file_record.path)
             module_id = stable_id(
                 "symbol",
@@ -570,6 +689,7 @@ class TypeScriptLexicalAnalyzer:
                     metadata={
                         "analysis_level": "lexical",
                         **({"state_fields": file_state_fields} if file_state_fields else {}),
+                        **({"external_references": file_references} if file_references else {}),
                     },
                 )
             )
@@ -580,7 +700,7 @@ class TypeScriptLexicalAnalyzer:
             store_evidence: dict[str, list[str]] = {name: [] for name in CLIENT_STORES}
             test_evidence: list[str] = []
 
-            for declaration in _declarations(file_tokens):
+            for declaration in file_declarations:
                 qualified = f"{module}.{declaration.name}"
                 receipt = add_evidence(
                     file_record.path,

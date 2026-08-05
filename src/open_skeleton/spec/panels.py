@@ -434,6 +434,92 @@ def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _payload_shapes(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Field names of the dictionaries functions return.
+
+    Where a service serialises dictionaries instead of declaring models, the
+    response contract is not written down anywhere: the storage schema sees a
+    JSON blob and the symbol index sees a function. These are the names a
+    caller has to code against, recovered from the returned literals.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        shapes = symbol.get("metadata", {}).get("payload_shapes") or {}
+        for name, entry in sorted(shapes.items()):
+            fields = [str(item) for item in entry["fields"]]
+            rows.append(
+                (
+                    name,
+                    f"{len(fields):,}",
+                    ", ".join(f"`{item}`" for item in fields[:12])
+                    + (f" +{len(fields) - 12:,} more" if len(fields) > 12 else ""),
+                    f"{symbol['path']}:{entry['line']}",
+                )
+            )
+    rows.sort(key=lambda row: (row[3], row[0]))
+    return Panel(
+        name="payload_shapes",
+        title="Returned payload fields",
+        columns=("Function", "Fields", "Field names", "Returns at"),
+        alignments=("left", "right", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            "Literal string keys of dictionaries returned by each function. A "
+            "key computed at runtime is absent rather than guessed at, so this "
+            "is a lower bound on the response shape, and a function returning "
+            "several shapes contributes the union of them."
+        ),
+    )
+
+
+def _external_api_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Platform and library API the code reaches for but does not define.
+
+    The symbol index answers "what does this repository declare". This answers
+    "what does it depend on at runtime" — `localStorage`, `AbortController`,
+    `EventSource`, an SDK's call chain. Those never appear in a symbol index
+    because they are nobody's symbol here, yet browser storage is a privacy
+    question and `eval` is a security one.
+    """
+
+    totals: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        references = symbol.get("metadata", {}).get("external_references") or {}
+        for name, entry in references.items():
+            running = totals.setdefault(
+                name,
+                {"count": 0, "called": False, "site": f"{symbol['path']}:{entry['first_line']}"},
+            )
+            running["count"] = int(running["count"]) + int(entry["count"])
+            running["called"] = bool(running["called"]) or bool(entry.get("called"))
+    rows = tuple(
+        (
+            name,
+            "call" if entry["called"] else "access",
+            f"{int(entry['count']):,}",
+            str(entry["site"]),
+        )
+        for name, entry in sorted(
+            totals.items(), key=lambda item: (-int(item[1]["count"]), item[0])
+        )
+    )
+    return Panel(
+        name="external_api_surface",
+        title="Referenced external API",
+        columns=("Reference", "Use", "Sites", "First seen"),
+        alignments=("left", "left", "right", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            f"Showing {min(len(rows), MAX_SYMBOL_ROWS):,} of {len(rows):,} references. "
+            "A name this repository declares is excluded, so what remains is "
+            "reached from outside the module. Resolution is lexical: the "
+            "receiver is the name as written, not the type it holds, so two "
+            "different objects sharing a variable name are counted together."
+        ),
+    )
+
+
 def _data_containers(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Module-level lookup tables with their sizes."""
 
@@ -485,6 +571,10 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _traceability_matrix(context.capabilities)
     if name == "symbol_index":
         return _symbol_index(context.symbols)
+    if name == "payload_shapes":
+        return _payload_shapes(context.symbols)
+    if name == "external_api_surface":
+        return _external_api_surface(context.symbols)
     if name == "data_containers":
         return _data_containers(context.symbols)
     if name == "tunable_index":

@@ -377,6 +377,48 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _payload_shapes(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Field names of dictionaries a function returns.
+
+    Where a service serialises dictionaries rather than declaring models, the
+    response contract exists only as the keys of the dict literals it returns.
+    A caller integrating against it needs those names, and no symbol index or
+    table schema contains them — the payload is a JSON blob as far as storage
+    is concerned.
+
+    Only literal string keys are recorded, so a key computed at runtime is
+    absent rather than guessed at.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        keys: set[str] = set()
+        line: int | None = None
+        for statement in ast.walk(node):
+            if not isinstance(statement, ast.Return) or statement.value is None:
+                continue
+            candidates = [statement.value]
+            # `return x if cond else y` returns whichever shape the branch picks.
+            if isinstance(statement.value, ast.IfExp):
+                candidates = [statement.value.body, statement.value.orelse]
+            for candidate in candidates:
+                if not isinstance(candidate, ast.Dict):
+                    continue
+                literal = {
+                    key.value
+                    for key in candidate.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+                if literal:
+                    keys |= literal
+                    line = statement.lineno if line is None else min(line, statement.lineno)
+        if keys and line is not None:
+            found[node.name] = {"fields": sorted(keys), "line": line}
+    return found
+
+
 def _module_mutable_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for statement in tree.body:
@@ -557,6 +599,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.state_fields = _state_fields(tree)
         self.instance_tunables = _instance_tunables(tree)
         self.data_containers = _data_containers(tree)
+        self.payload_shapes = _payload_shapes(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -1285,6 +1328,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["state_fields"] = self.state_fields
         if self.data_containers:
             payload["data_containers"] = self.data_containers
+        if self.payload_shapes:
+            payload["payload_shapes"] = self.payload_shapes
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):

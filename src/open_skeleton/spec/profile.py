@@ -40,6 +40,8 @@ PANEL_KINDS = frozenset(
         "failure_surface",
         "symbol_index",
         "data_containers",
+        "external_api_surface",
+        "payload_shapes",
     }
 )
 

@@ -4,13 +4,14 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
-from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
+from open_skeleton.analyzers.python_ast import PythonAstAnalyzer, _payload_shapes
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 
@@ -352,3 +353,34 @@ class StateValueExtractionTests(TestCase):
         fields = self._fields("def f(x, ok):\n    if ok:\n        x.s = 'a'\n    x.s = 'b'\n")
         lines = {line for _, _, line in fields["s"]["entries"]}
         self.assertEqual(lines, {3, 4})
+
+
+class PayloadShapeTests(TestCase):
+    """Where responses are dictionaries, the contract is only in the literals."""
+
+    def _shapes(self, source: str) -> dict[str, Any]:
+        return _payload_shapes(ast.parse(source))
+
+    def test_returned_literal_keys_are_recorded(self) -> None:
+        shapes = self._shapes("def act():\n    return {'success': True, 'gold': 5}\n")
+        self.assertEqual(shapes["act"]["fields"], ["gold", "success"])
+
+    def test_several_return_shapes_contribute_their_union(self) -> None:
+        shapes = self._shapes(
+            "def act(ok):\n"
+            "    if ok:\n"
+            "        return {'success': True}\n"
+            "    return {'success': False, 'message': 'no'}\n"
+        )
+        self.assertEqual(shapes["act"]["fields"], ["message", "success"])
+
+    def test_a_conditional_expression_contributes_both_branches(self) -> None:
+        shapes = self._shapes("def act(ok):\n    return {'a': 1} if ok else {'b': 2}\n")
+        self.assertEqual(shapes["act"]["fields"], ["a", "b"])
+
+    def test_a_computed_key_is_absent_rather_than_guessed(self) -> None:
+        shapes = self._shapes("def act(name):\n    return {name: 1, 'fixed': 2}\n")
+        self.assertEqual(shapes["act"]["fields"], ["fixed"])
+
+    def test_a_function_returning_no_dictionary_has_no_shape(self) -> None:
+        self.assertEqual(self._shapes("def act():\n    return 5\n"), {})
