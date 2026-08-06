@@ -43,3 +43,40 @@ The supplied baseline artifact scored 89.4% material recall/scoped precision, 95
 ## Limits
 
 This is a useful regression fixture, not evidence of universal superiority. It was authored and adjudicated with repository-author knowledge, not audited by an external laboratory. More languages, architectures, repository sizes, and independent reviewers are required before broad claims.
+
+## A measurement that was attempted and abandoned
+
+Three benchmarks here compare a document against a baseline: fact coverage
+compares the names both mention, the structure diff compares the subjects both
+organise around, and the question set compares answers to questions whose
+ground truth came from source. None of them answers the question a reader
+actually asks, which is whether the two documents *reached the same
+conclusions*.
+
+That measurement was built three times and discarded three times. The record
+is kept here so the next person does not spend the afternoon.
+
+**Attempt one — negation near a matched term.** A specification that reports
+absences well is full of the word *no*, so a negation test inside any useful
+window fires almost everywhere. It reported 41% disagreement, nearly all of it
+false: sections the baseline plainly covers at length were scored as absent
+because an unrelated negation sat within three hundred characters.
+
+**Attempt two — negation immediately before the term.** Tightening the window
+to the phrase level did not separate them either. On the baseline used here
+`Dockerfile` scores three immediate negations against fourteen plain mentions,
+while the document states outright that no Dockerfile exists — because it also
+lists `Dockerfile` among the paths it searched.
+
+**Attempt three — presence only, using each section's own probe terms.** This
+inverted the error. Probe terms are library names and file globs, because that
+is what a probe queries; a baseline discusses the *concept* in English. So
+Collection Pagination and Health and Readiness both read as never raised while
+the baseline says "readiness" eight times and "liveness" fourteen.
+
+The common cause is that comparing conclusions between two prose documents is
+a semantic matching problem, and this engine's deterministic path has no model
+in it by design. A keyword comparison can tell you what two documents *name*;
+it cannot tell you what they *concluded*. Shipping a number that claims
+otherwise would be the true-but-misleading failure `open-skeleton audit`
+exists to catch, applied to our own benchmarks.
