@@ -548,8 +548,14 @@ def analyze_snapshot(
     for file_record in snapshot.files:
         if file_record.role not in {"source", "test"} or file_record.line_count < 1_000:
             continue
+        # A long test file concentrates the suite, not the architecture.
+        # Both are worth knowing and they answer different questions, so the
+        # claim says which one it is rather than presenting them as one list.
+        in_test = str(file_record.role) == "test"
         text = (
-            f"{file_record.path} is an architectural concentration point at "
+            f"{file_record.path} concentrates {file_record.line_count} lines of test code."
+            if in_test
+            else f"{file_record.path} is an architectural concentration point at "
             f"{file_record.line_count} lines."
         )
         evidence_id = stable_id(
@@ -577,10 +583,10 @@ def analyze_snapshot(
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 claim=text,
-                category="concentration",
+                category="test_concentration" if in_test else "concentration",
                 status="verified",
                 confidence=1.0,
-                importance="high",
+                importance="medium" if in_test else "high",
                 produced_by=PIPELINE_VERSION,
                 created_at=created_at,
                 verified_at=created_at,

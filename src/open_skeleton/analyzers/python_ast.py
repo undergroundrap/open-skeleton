@@ -74,6 +74,18 @@ STRING_MATCH_METHODS = frozenset(
 )
 # Mapping keys whose value names a vocabulary rather than a host to contact.
 IDENTIFIER_KEYS = frozenset({"$schema", "$id", "xmlns", "namespace", "schema"})
+# Categories that describe the system when the evidence is source and describe
+# the suite when it is a test. Nothing is dropped: a fixture's shape is a real
+# fact about the suite, and a reader deciding what the system stores needs to
+# know which of the two they are looking at.
+TEST_SCOPED_CATEGORIES = {
+    "storage": "test_storage",
+    "storage_schema": "test_storage_schema",
+    "configuration_read": "test_configuration_read",
+    "schema_migration": "test_schema_migration",
+    "http_route": "test_route",
+    "external_call": "test_external_call",
+}
 INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
     re.IGNORECASE,
@@ -1145,6 +1157,15 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         invalidation_keys: tuple[str, ...] = (),
         alternatives: tuple[str, ...] = (),
     ) -> ClaimRecord:
+        # Re-filing happens here rather than at each call site because doing it
+        # per category is how the same mistake kept reappearing: routes were
+        # fixed, then schemas, and durable storage was still six-sevenths test
+        # fixtures. One table, one place, and a category added later inherits
+        # the behaviour instead of having to remember it.
+        if str(self.file_record.role) == "test":
+            category = TEST_SCOPED_CATEGORIES.get(category, category)
+            if category.startswith("test_") and importance == "high":
+                importance = "medium"
         claim_id = stable_id(
             "claim",
             (self.snapshot.snapshot_id, category, text, ANALYZER_VERSION),
@@ -1744,10 +1765,10 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                                 if in_test
                                 else f"{self.current_qualified_name} creates SQLite table {table}."
                             ),
-                            category="test_storage_schema" if in_test else "storage_schema",
+                            category="storage_schema",
                             status="verified",
                             confidence=1.0,
-                            importance="medium" if in_test else "high",
+                            importance="high",
                             supporting=(evidence.evidence_id,),
                         )
                     insert_match = INSERT_TABLE_PATTERN.search(sql)

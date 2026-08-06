@@ -15,7 +15,12 @@ from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, v
 from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
-from open_skeleton.spec.render import render_spec_index_json, render_spec_json
+from open_skeleton.spec.render import (
+    RenderedClaim,
+    _spread_by_category,
+    render_spec_index_json,
+    render_spec_json,
+)
 from open_skeleton.spec.substitutes import derive_substitutes
 from tests.helpers import create_sample_repository
 
@@ -1027,3 +1032,46 @@ class PreconditionTests(TestCase):
             )
             checked += 1
         self.assertTrue(checked, "expected the sample repository to excuse at least one concern")
+
+
+class SummarySpreadTests(TestCase):
+    """The summary shows the most important findings, not the most numerous.
+
+    Found by reading the specification this tool writes about its own
+    repository. Six of ten headline rows said a file was long, while the
+    storage schema, the migration behaviour and the entry points -- all equally
+    high importance -- never appeared. Taking the first N by rank lets whichever
+    high-importance category happens to be largest fill the summary.
+    """
+
+    def _claim(self, category: str, name: str) -> RenderedClaim:
+        return RenderedClaim(
+            claim_id=name,
+            claim=name,
+            category=category,
+            status="verified",
+            confidence=1.0,
+            importance="high",
+            citations=(),
+        )
+
+    def test_one_category_cannot_fill_the_summary(self) -> None:
+        crowded = [self._claim("concentration", f"long-{index}") for index in range(20)]
+        crowded += [self._claim("storage_schema", "table"), self._claim("entry", "main")]
+        chosen = _spread_by_category(crowded, 10)
+        self.assertEqual(len(chosen), 10)
+        self.assertIn("storage_schema", {item.category for item in chosen})
+        self.assertIn("entry", {item.category for item in chosen})
+
+    def test_ranking_within_a_category_is_preserved(self) -> None:
+        # Presentation order changes; which claim outranks which does not.
+        ordered = [self._claim("a", f"a{index}") for index in range(4)]
+        chosen = [item.claim for item in _spread_by_category(ordered, 4)]
+        self.assertEqual(chosen, ["a0", "a1", "a2", "a3"])
+
+    def test_a_short_list_is_returned_whole(self) -> None:
+        few = [self._claim("a", "one"), self._claim("b", "two")]
+        self.assertEqual(len(_spread_by_category(few, 10)), 2)
+
+    def test_an_empty_list_yields_nothing(self) -> None:
+        self.assertEqual(_spread_by_category([], 10), [])

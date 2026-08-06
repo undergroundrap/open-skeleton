@@ -518,6 +518,40 @@ def _escape(value: str) -> str:
 
 MAX_RENDERED_CITATIONS = 6
 MAX_SUMMARY_ROWS = 10
+
+
+def _spread_by_category(claims: list[RenderedClaim], limit: int) -> list[RenderedClaim]:
+    """The most important findings, one category at a time.
+
+    Taking the first N by importance means the most *numerous* high-importance
+    category fills the summary. On this repository that produced a headline
+    reading "this file is long" six times out of ten while the storage schema,
+    the entry points, and the migration behaviour never appeared.
+
+    Ranking is unchanged; only the order of presentation is. Categories are
+    visited round-robin so the first row of each is seen before the second row
+    of any, which surfaces breadth without inventing a new notion of severity.
+    """
+
+    grouped: dict[str, list[RenderedClaim]] = {}
+    for claim in claims:
+        grouped.setdefault(claim.category, []).append(claim)
+    spread: list[RenderedClaim] = []
+    depth = 0
+    while len(spread) < limit:
+        added = False
+        for bucket in grouped.values():
+            if depth < len(bucket):
+                spread.append(bucket[depth])
+                added = True
+                if len(spread) == limit:
+                    return spread
+        if not added:
+            break
+        depth += 1
+    return spread
+
+
 THIN_YIELD_RATIO = 0.34
 
 
@@ -596,7 +630,7 @@ def _executive_summary(document: SpecDocument) -> list[str]:
     if urgent:
         lines.append("### Highest-importance verified findings\n\n")
         lines.append("| Finding | Evidence | Section |\n|---|---|---|\n")
-        for claim in urgent[:MAX_SUMMARY_ROWS]:
+        for claim in _spread_by_category(urgent, MAX_SUMMARY_ROWS):
             location = section_of[claim.claim_id]
             lines.append(
                 f"| {_escape(claim.claim)} | {_first_citation(claim)} | §{location.number} |\n"
