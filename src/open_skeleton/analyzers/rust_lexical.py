@@ -62,6 +62,9 @@ HTTP_METHOD_NAMES = frozenset({"get", "post", "put", "delete", "patch", "head", 
 # sub-router under a prefix, which is a mount point rather than an endpoint.
 MOUNT_BUILDERS = frozenset({"nest", "scope", "nest_service"})
 ROUTE_BUILDERS = frozenset({"route", "resource"}) | MOUNT_BUILDERS
+# `get("/x")` means a request only if one of these is in scope; otherwise it is
+# axum's method router and reading it as a call would invent outbound traffic.
+HTTP_CLIENT_CRATES = frozenset({"reqwest", "ureq", "surf", "isahc", "hyper"})
 IDENTIFIER_START = re.compile(r"[A-Za-z_]")
 IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_]")
 
@@ -590,6 +593,43 @@ def _http_routes(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
+def _client_calls(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Outbound HTTP requests this module makes, as `(method, target, line)`.
+
+    The mirror of `_http_routes`: one names what the program answers, this
+    names what it asks of something else, and a system is only described once
+    both halves are present.
+
+    `get("/x")` is ambiguous in Rust -- axum uses it for a method router and
+    every client crate uses it for a request -- so extraction is gated on a
+    client crate being named in the file. Without that, the same tokens would
+    turn every route definition into a phantom outbound call.
+    """
+
+    present = {
+        token.value
+        for token in tokens
+        if token.kind == "identifier" and token.value in HTTP_CLIENT_CRATES
+    }
+    if not present:
+        return []
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in HTTP_METHOD_NAMES:
+            continue
+        if index + 2 >= total or tokens[index + 1].value != "(":
+            continue
+        argument = tokens[index + 2]
+        if argument.kind != "string":
+            continue
+        target = argument.value
+        if not target.startswith(("http://", "https://", "/")):
+            continue
+        found.append((token.value.upper(), target, token.line))
+    return found
+
+
 def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """Methods inside `impl` blocks, as `(type, method, line)`.
 
@@ -750,6 +790,7 @@ class RustLexicalAnalyzer:
             file_errors = _error_surface(tokens)
             file_traits = _trait_implementations(tokens)
             file_routes = _http_routes(tokens)
+            file_calls = _client_calls(tokens)
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
@@ -989,6 +1030,25 @@ class RustLexicalAnalyzer:
                         category=category,
                         supporting=(route_receipt.evidence_id,),
                         importance="high" if category == "http_route" else "medium",
+                        path=file_record.path,
+                    )
+                )
+
+            for method, target, call_line in file_calls:
+                call_receipt = receipt(
+                    file_record.path, call_line, "external_call", f"{method} {target}", excerpt
+                )
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"{module} issues a {method} request to {target}; that endpoint is "
+                            "served by something outside this module."
+                        ),
+                        category="external_call",
+                        supporting=(call_receipt.evidence_id,),
+                        importance="high",
                         path=file_record.path,
                     )
                 )

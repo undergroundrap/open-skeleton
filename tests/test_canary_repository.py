@@ -256,3 +256,93 @@ class CrossLanguageCanaryTests(TestCase):
 
     def test_typescript_ignores_a_fetch_inside_a_string_literal(self) -> None:
         self.assertNotIn("/api/literal-trap", self._text())
+
+
+SERVER_CANARY = """\
+import express from "express";
+import axios from "axios";
+const app = express();
+const router = express.Router();
+
+app.get("/served", handler);
+app.use("/v1", router);
+router.post("/nested", handler);
+
+// app.get("/commented-served", handler)
+axios.get("/api/outbound");
+client.get("/ambiguous-receiver");
+"""
+
+RUST_CLIENT_CANARY = """\
+use reqwest::Client;
+async fn fetch_it(c: &Client) {
+    c.get("https://api.example.com/v1/items").send().await;
+}
+"""
+
+RUST_ROUTER_CANARY = """\
+use axum::{Router, routing::get};
+pub fn build() -> Router { Router::new().route("/no-client-here", get(h)) }
+"""
+
+
+class ReceiverResolutionTests(TestCase):
+    """Which side of a call a path belongs to, when the syntax cannot say.
+
+    `app.get("/x", handler)` and `axios.get("/x")` are the same four tokens.
+    One registers a route and the other calls somebody else's, and a system
+    described with those two confused is worse than one missing both. The
+    receiver is therefore resolved to what constructed it, and a receiver whose
+    origin is not visible yields nothing in either direction — `client.get(...)`
+    could be either, and picking one would be a coin flip reported as a fact.
+    """
+
+    _directory: ClassVar[TemporaryDirectory[str]]
+    _claims: ClassVar[tuple[Any, ...]]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._directory = TemporaryDirectory()
+        root = Path(cls._directory.name)
+        (root / "server.ts").write_text(SERVER_CANARY, encoding="utf-8")
+        (root / "client.rs").write_text(RUST_CLIENT_CANARY, encoding="utf-8")
+        (root / "router.rs").write_text(RUST_ROUTER_CANARY, encoding="utf-8")
+        api = root / "app" / "api" / "users"
+        api.mkdir(parents=True)
+        (api / "route.ts").write_text("export async function GET() { return null; }\n", "utf-8")
+        cls._claims = tuple(analyze_snapshot(scan_repository(root)).claims)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._directory.cleanup()
+
+    def _categorised(self, path: str) -> set[str]:
+        return {claim.category for claim in self._claims if path in claim.claim}
+
+    def test_a_route_on_a_server_receiver_is_served(self) -> None:
+        self.assertIn("http_route", self._categorised("/served"))
+
+    def test_a_call_on_a_client_receiver_is_outbound(self) -> None:
+        # Same shape, opposite direction: axios was imported, express was called.
+        self.assertIn("http_client_route", self._categorised("/api/outbound"))
+        self.assertNotIn("http_route", self._categorised("/api/outbound"))
+
+    def test_an_unresolved_receiver_yields_nothing(self) -> None:
+        # `client` is bound nowhere visible. Both answers would be guesses.
+        self.assertEqual(self._categorised("/ambiguous-receiver"), set())
+
+    def test_a_mount_is_distinguished_from_an_endpoint(self) -> None:
+        self.assertIn("route_mount", self._categorised("/v1"))
+
+    def test_a_file_convention_route_is_read_from_its_location(self) -> None:
+        # `app/api/users/route.ts` is registered by where it sits, so no call
+        # site declares it and only the path can report it.
+        self.assertIn("http_route", self._categorised("/api/users"))
+
+    def test_rust_client_calls_are_recorded_as_outbound(self) -> None:
+        self.assertIn("external_call", self._categorised("https://api.example.com/v1/items"))
+
+    def test_a_rust_method_router_is_not_read_as_an_outbound_call(self) -> None:
+        # `get(h)` is axum's method router. Without a client crate in the file
+        # there is no request here, and reading one would invent traffic.
+        self.assertEqual(self._categorised("/no-client-here"), {"http_route"})

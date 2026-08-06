@@ -83,6 +83,17 @@ REACT_HOOKS = frozenset(
     {"useCallback", "useContext", "useEffect", "useMemo", "useReducer", "useRef", "useState"}
 )
 CLIENT_STORES = frozenset({"localStorage", "sessionStorage"})
+# Calls that return something requests are registered on. A name is treated as
+# a server only by being bound to one of these, never by being called `app`.
+SERVER_FACTORIES = frozenset(
+    {"express", "Router", "fastify", "Hono", "Koa", "polka", "restify", "connect"}
+)
+# Modules whose default export issues requests. A local name counts as a
+# client only by being imported from one of these.
+CLIENT_MODULES = frozenset({"axios", "ky", "got", "superagent", "node-fetch", "undici"})
+SERVER_METHOD_NAMES = frozenset(
+    {"get", "post", "put", "delete", "patch", "head", "options", "all", "use"}
+)
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})  # noqa: S104
 ORIGIN_LITERAL = re.compile(
     r"^(?P<scheme>https?|wss?)://(?P<host>[A-Za-z0-9.\-]+)(?::\d+)?(?:[/?#]|$)"
@@ -491,6 +502,94 @@ def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
         entry["count"] = int(entry["count"]) + 1
         entry["first_line"] = min(int(entry["first_line"]), token.line)
     return found
+
+
+def _server_receivers(tokens: list[Token]) -> set[str]:
+    """Names bound to something that serves requests.
+
+    `app.get("/x", handler)` and `axios.get("/x")` are the same four tokens.
+    What separates a served route from an outbound call is not the syntax but
+    what the receiver is, so the receiver is resolved to its constructor rather
+    than guessed at from its name. A receiver whose origin is not visible in
+    this file yields no claim in either direction, which is the honest outcome:
+    `client.get("/x")` could be either, and asserting one would be a coin flip
+    reported as a fact.
+    """
+
+    receivers: set[str] = set()
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in SERVER_FACTORIES:
+            continue
+        # The factory must be called: `express` alone is the module.
+        call = index + 1
+        if call < total and tokens[call].value == ".":
+            # `express.Router()` — step over the member access.
+            call = index + 3 if index + 2 < total else call
+        if call >= total or tokens[call].value != "(":
+            continue
+        # Walk back over `=`, an optional type annotation, and the binding
+        # keyword to reach the name being defined.
+        scan = index - 1
+        while scan >= 0 and tokens[scan].value != "=":
+            if tokens[scan].value in {";", "{", "}"}:
+                scan = -1
+                break
+            scan -= 1
+        name = scan - 1
+        while name >= 0 and tokens[name].kind != "identifier":
+            name -= 1
+        if name >= 0 and tokens[name].value not in BINDING_KEYWORDS:
+            receivers.add(tokens[name].value)
+    return receivers
+
+
+def _served_routes(tokens: list[Token], receivers: set[str]) -> list[tuple[str, str, int]]:
+    """`(method, path, line)` for routes this module registers on a server."""
+
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in receivers:
+            continue
+        if index + 4 >= total or tokens[index + 1].value != ".":
+            continue
+        method = tokens[index + 2]
+        if method.kind != "identifier" or method.value not in SERVER_METHOD_NAMES:
+            continue
+        if tokens[index + 3].value != "(" or tokens[index + 4].kind != "string":
+            continue
+        path, exact = _request_path(tokens[index + 4].value)
+        if not path.startswith("/") or not exact:
+            continue
+        label = "MOUNT" if method.value == "use" else method.value.upper()
+        found.append((label, path, token.line))
+    return found
+
+
+def _next_route_path(path: str) -> str:
+    """The URL a Next.js file-convention route answers on, or an empty string.
+
+    Both router generations map a file location to a served path. This is a
+    convention rather than a call, so it is the only place a route is read
+    from a filename -- and it is restricted to the two directory shapes that
+    define it, so an ordinary `api.ts` helper is not mistaken for an endpoint.
+    """
+
+    parts = path.split("/")
+    for marker in ("pages", "app", "src"):
+        if marker in parts:
+            parts = parts[parts.index(marker) + 1 :]
+            break
+    if not parts or parts[0] != "api":
+        return ""
+    stem = parts[-1].rsplit(".", 1)[0]
+    # `route.ts` and `index.ts` name the directory's own path rather than a
+    # child of it, which is what makes `app/api/users/route.ts` serve /api/users.
+    segments = parts[:-1] if stem in {"route", "index"} else [*parts[:-1], stem]
+    if not segments:
+        return ""
+    return "/" + "/".join(segments)
 
 
 def _import_aliases(tokens: list[Token]) -> dict[str, str]:
@@ -1010,6 +1109,14 @@ class TypeScriptLexicalAnalyzer:
             file_declarations = _declarations(file_tokens)
             file_imports = _imported_names(file_tokens)
             file_aliases = _import_aliases(file_tokens)
+            file_servers = _server_receivers(file_tokens)
+            file_clients = {
+                name
+                for module_name, entry in file_imports.items()
+                if module_name in CLIENT_MODULES
+                for name in entry["names"]
+            }
+            file_served = _served_routes(file_tokens, file_servers)
             file_origins = _external_origins(file_tokens)
             file_name_index = _name_index(file_tokens)
             file_state = _module_state(file_tokens, file_declarations)
@@ -1194,6 +1301,30 @@ class TypeScriptLexicalAnalyzer:
                         called, exact = _request_path(argument.value)
                         if called.startswith(("/", "http://", "https://")):
                             requested.append((called, exact, token.line, receipt.evidence_id))
+
+                # `axios.get("/x")` is the same shape as `app.get("/x")`, so the
+                # receiver decides again: a client module named in an import is
+                # an outbound call, a server factory is a route, and anything
+                # else is left alone.
+                if (
+                    token.value in file_clients
+                    and index + 4 < len(file_tokens)
+                    and file_tokens[index + 1].value == "."
+                    and file_tokens[index + 2].value in SERVER_METHOD_NAMES
+                    and file_tokens[index + 3].value == "("
+                    and file_tokens[index + 4].kind == "string"
+                ):
+                    called, exact = _request_path(file_tokens[index + 4].value)
+                    if called.startswith(("/", "http://", "https://")):
+                        receipt = add_evidence(
+                            file_record.path,
+                            token.line,
+                            token.end_line,
+                            module,
+                            "http_client_call",
+                            file_record.sha256,
+                        )
+                        requested.append((called, exact, token.line, receipt.evidence_id))
                     edges.append(
                         EdgeRecord(
                             edge_id=stable_id(
@@ -1275,6 +1406,41 @@ class TypeScriptLexicalAnalyzer:
                     "http_client_inventory",
                     "high",
                     fetch_evidence,
+                    file_record.path,
+                )
+
+            for method, served_path, served_line in file_served:
+                mounted = method == "MOUNT"
+                served_receipt = add_evidence(
+                    file_record.path,
+                    served_line,
+                    served_line,
+                    module,
+                    "route_mount" if mounted else "http_route",
+                    file_record.sha256,
+                )
+                add_claim(
+                    f"{served_path} mounts a sub-router in {module}, so paths it contains are "
+                    "served beneath this prefix."
+                    if mounted
+                    else f"{method} {served_path} is registered as a route in {module}.",
+                    "route_mount" if mounted else "http_route",
+                    "medium" if mounted else "high",
+                    [served_receipt.evidence_id],
+                    file_record.path,
+                )
+
+            next_path = _next_route_path(file_record.path)
+            if next_path:
+                convention_receipt = add_evidence(
+                    file_record.path, 1, 1, module, "http_route", file_record.sha256
+                )
+                add_claim(
+                    f"{next_path} is served by file convention: this module's location under an "
+                    "api directory is what registers it, so no call site declares it.",
+                    "http_route",
+                    "high",
+                    [convention_receipt.evidence_id],
                     file_record.path,
                 )
 
