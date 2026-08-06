@@ -791,6 +791,21 @@
       "concern": "External processes this system expects, and how it behaves when they are absent.",
       "children": [
         {
+          "id": "integration.data-flow",
+          "number": "5.0",
+          "title": "Data Flow by Module",
+          "concern": "Where data enters each module, where it rests, and where it leaves.",
+          "framing": "A dependency diagram shows which modules reference which. It does not show which are reachable from outside, which write something that outlives a request, and which send bytes to another host — the three facts needed to answer where sensitive data can go.",
+          "panels": [
+            "data_flow"
+          ],
+          "cross_references": [
+            "state.durable",
+            "security.third-party-origins",
+            "surface.http"
+          ]
+        },
+        {
           "id": "integration.topology",
           "number": "5.1",
           "title": "Runtime Topology",

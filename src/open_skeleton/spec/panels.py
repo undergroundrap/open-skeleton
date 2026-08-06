@@ -762,6 +762,105 @@ SECURITY_CONTROLS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
+def _data_flow(context: PanelContext) -> Panel:
+    """Where data enters each module, where it rests, and where it leaves.
+
+    A dependency diagram shows which modules reference which. It does not show
+    which of them are reachable from outside, which write something that
+    outlives the request, and which send bytes to another host — the three
+    facts a reader needs to answer "if this data is sensitive, where does it
+    go".
+
+    Granularity is the module, deliberately. Call edges here record a module
+    and a called name rather than a resolved function, so a claim about which
+    route reaches which table would be a guess dressed as a trace. What a
+    module does is knowable; which of its handlers did it is not, and the note
+    says so.
+    """
+
+    modules: dict[str, dict[str, Any]] = {}
+
+    def entry(name: str, path: str) -> dict[str, Any]:
+        return modules.setdefault(
+            name,
+            {"path": path, "routes": 0, "stores": set(), "hosts": set(), "state": 0, "imports": 0},
+        )
+
+    for symbol in context.symbols:
+        metadata = symbol.get("metadata") or {}
+        name = str(symbol.get("qualified_name", ""))
+        path = str(symbol.get("path", ""))
+        if not name:
+            continue
+        if metadata.get("routes"):
+            record = entry(name.rsplit(".", 1)[0] if "." in name else name, path)
+            record["routes"] += len(metadata["routes"])
+        if metadata.get("external_origins"):
+            entry(name, path)["hosts"].update(metadata["external_origins"])
+        if metadata.get("imported_names"):
+            entry(name, path)["imports"] += len(metadata["imported_names"])
+
+    for category, key in (("storage_schema", "stores"), ("process_local_state", "state")):
+        for claim in context.claims_by_category.get(category, ()):
+            location = context.claim_locations.get(str(claim.get("claim_id", "")), "")
+            text = str(claim.get("claim", ""))
+            owner = text.split(" ", 1)[0].rsplit(".", 1)[0]
+            if not owner:
+                continue
+            record = entry(owner, location.split(":")[0] if location else "")
+            if key == "stores":
+                table = text.rsplit("table ", 1)[-1].rstrip(".") if "table " in text else ""
+                if table:
+                    record["stores"].add(table)
+            else:
+                record["state"] = int(record["state"]) + 1
+
+    rows = tuple(
+        (
+            name,
+            f"{record['routes']:,}" if record["routes"] else "—",
+            ", ".join(sorted(record["stores"])) or "—",
+            f"{record['state']:,}" if record["state"] else "—",
+            ", ".join(sorted(record["hosts"])) or "—",
+            f"{record['imports']:,}" if record["imports"] else "—",
+        )
+        for name, record in sorted(
+            modules.items(),
+            key=lambda item: (
+                -item[1]["routes"],
+                -len(item[1]["stores"]),
+                -len(item[1]["hosts"]),
+                item[0],
+            ),
+        )
+        if record["routes"] or record["stores"] or record["hosts"] or record["state"]
+    )
+    return Panel(
+        name="data_flow",
+        title="Where data enters, rests, and leaves each module",
+        columns=(
+            "Module or type",
+            "Routes served",
+            "Durable tables",
+            "Process-local state",
+            "External hosts",
+            "Imported modules",
+        ),
+        alignments=("left", "right", "left", "right", "left", "right"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Granularity is the module on purpose. Call edges record a module "
+            "and a called name rather than a resolved function, so naming which "
+            "route reaches which table would be a guess presented as a trace. "
+            "A row listed with both a route and a table is one where those "
+            "two facts are true together, not one where a path from the first "
+            "to the second has been demonstrated. Storage is attributed to the "
+            "owner named in the claim, which is a class where a class owns the "
+            "connection."
+        ),
+    )
+
+
 def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Every served route with what its own handler does before answering.
 
@@ -1231,6 +1330,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
+    if name == "data_flow":
+        return _data_flow(context)
     if name == "endpoint_catalog":
         return _endpoint_catalog(context.symbols)
     if name == "security_matrix":

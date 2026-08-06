@@ -868,3 +868,77 @@ class EndpointCatalogTests(TestCase):
 
     def test_a_symbol_without_routes_contributes_no_row(self) -> None:
         self.assertEqual(self._catalog(({"path": "x.py", "metadata": {}},)).rows, ())
+
+
+class DataFlowTests(TestCase):
+    """Where data enters, rests, and leaves — at a granularity that is knowable."""
+
+    def _flow(
+        self, symbols: tuple[Any, ...], claims: dict[str, Any], locations: dict[str, str]
+    ) -> Any:
+        return build_panel(
+            "data_flow",
+            PanelContext(symbols=symbols, claims_by_category=claims, claim_locations=locations),
+        )
+
+    def test_a_module_serving_routes_is_an_entry_point(self) -> None:
+        panel = self._flow(
+            (
+                {
+                    "path": "main.py",
+                    "qualified_name": "app.main.act",
+                    "metadata": {"routes": [{"method": "GET", "path": "/x"}]},
+                },
+            ),
+            {},
+            {},
+        )
+        self.assertEqual(panel.rows[0][0], "app.main")
+        self.assertEqual(panel.rows[0][1], "1")
+
+    def test_a_module_naming_a_third_party_host_is_an_egress_point(self) -> None:
+        panel = self._flow(
+            (
+                {
+                    "path": "layout.tsx",
+                    "qualified_name": "app.layout",
+                    "metadata": {"external_origins": {"cdn.example.com": {"count": 1}}},
+                },
+            ),
+            {},
+            {},
+        )
+        self.assertEqual(panel.rows[0][4], "cdn.example.com")
+
+    def test_durable_tables_are_attributed_to_the_owner_in_the_claim(self) -> None:
+        panel = self._flow(
+            (),
+            {
+                "storage_schema": (
+                    {"claim_id": "c1", "claim": "db.DBManager._init creates SQLite table players."},
+                )
+            },
+            {"c1": "db.py:12"},
+        )
+        self.assertEqual(panel.rows[0][0], "db.DBManager")
+        self.assertEqual(panel.rows[0][2], "players")
+
+    def test_a_module_with_nothing_to_report_is_omitted(self) -> None:
+        # A row of dashes is noise; the file census already lists every module.
+        panel = self._flow(
+            (
+                {
+                    "path": "x.py",
+                    "qualified_name": "app.x",
+                    "metadata": {"imported_names": {"os": {}}},
+                },
+            ),
+            {},
+            {},
+        )
+        self.assertEqual(panel.rows, ())
+
+    def test_the_note_refuses_to_claim_a_traced_path(self) -> None:
+        panel = self._flow((), {}, {})
+        assert panel.note is not None
+        self.assertIn("not one where a path", panel.note)
