@@ -126,6 +126,9 @@
           "cross_references": [
             "surface.interface-drift",
             "security.authentication"
+          ],
+          "panels": [
+            "endpoint_catalog"
           ]
         },
         {

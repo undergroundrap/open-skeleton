@@ -762,6 +762,82 @@ SECURITY_CONTROLS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
+def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Every served route with what its own handler does before answering.
+
+    The route census says a path exists. It does not say what the handler
+    checks first, how it can refuse, or what comes back — which is everything
+    a caller needs and everything an operator asks about during an incident.
+    All three already sit on the handler symbol; nothing here is derived
+    beyond joining them.
+    """
+
+    # Payload shapes are recorded against the module that declares the
+    # function, not against the handler symbol, so the join is by function
+    # name rather than by symbol identity.
+    shapes_by_function: dict[str, list[str]] = {}
+    for symbol in symbols:
+        for name, entry in ((symbol.get("metadata") or {}).get("payload_shapes") or {}).items():
+            shapes_by_function.setdefault(str(name), []).extend(
+                str(item) for item in entry.get("fields", ())
+            )
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        metadata = symbol.get("metadata") or {}
+        routes = metadata.get("routes") or []
+        if not routes:
+            continue
+        flow = metadata.get("control_flow") or []
+        guards = sum(1 for event in flow if event.get("kind") == "guard")
+        refusals = sorted(
+            {
+                str(event.get("label", ""))
+                for event in flow
+                if event.get("kind") == "raise" and str(event.get("label", "")).startswith("HTTP")
+            }
+        )
+        handler = str(symbol.get("qualified_name", ""))
+        fields = shapes_by_function.get(handler.rsplit(".", 1)[-1], [])
+        for route in routes:
+            rows.append(
+                (
+                    str(route.get("method", "")),
+                    f"`{route.get('path', '')}`",
+                    short_form(handler),
+                    f"{guards:,}",
+                    ", ".join(refusals) or "—",
+                    ", ".join(f"`{item}`" for item in sorted(set(fields))[:6]) or "—",
+                    f"{symbol['path']}:{route.get('start_line', 1)}",
+                )
+            )
+    rows.sort(key=lambda row: (row[1], row[0]))
+    unguarded = sum(1 for row in rows if row[3] == "0")
+    return Panel(
+        name="endpoint_catalog",
+        title="Endpoint catalog and response conventions",
+        columns=(
+            "Method",
+            "Path",
+            "Handler",
+            "Guards",
+            "Refuses with",
+            "Response fields",
+            "Declared at",
+        ),
+        alignments=("left", "left", "left", "right", "left", "left", "left"),
+        rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        note=(
+            f"{len(rows):,} routes, of which {unguarded:,} reach their body with no guard "
+            "recorded in the handler itself. Guards and refusals are counted inside the "
+            "handler only: a rejection produced by framework validation, by middleware, "
+            "or by a helper the handler calls is real and does not appear here. Response "
+            "fields are the literal keys of dictionaries the handler returns, so a "
+            "response assembled elsewhere shows none."
+        ),
+    )
+
+
 def _security_matrix(context: PanelContext) -> Panel:
     """Every security control in one table, with the verdict already reached.
 
@@ -1155,6 +1231,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
+    if name == "endpoint_catalog":
+        return _endpoint_catalog(context.symbols)
     if name == "security_matrix":
         return _security_matrix(context)
     if name == "substitute_analysis":

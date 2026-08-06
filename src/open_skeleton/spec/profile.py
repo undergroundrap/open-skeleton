@@ -46,6 +46,7 @@ PANEL_KINDS = frozenset(
         "documented_values",
         "substitute_analysis",
         "security_matrix",
+        "endpoint_catalog",
         "config_settings",
         "object_keys",
         "signatures",

@@ -813,3 +813,58 @@ class SecurityMatrixTests(TestCase):
         panel = self._matrix({}, {})
         for row in panel.rows:
             self.assertTrue(row[4])
+
+
+class EndpointCatalogTests(TestCase):
+    """A route census says a path exists; this says what the handler does."""
+
+    def _catalog(self, symbols: tuple[dict[str, Any], ...]) -> Any:
+        return build_panel("endpoint_catalog", PanelContext(symbols=symbols))
+
+    def _handler(self, **metadata: Any) -> dict[str, Any]:
+        base = {"routes": [{"method": "POST", "path": "/x", "start_line": 9}]}
+        base.update(metadata)
+        return {"path": "main.py", "qualified_name": "app.main.act", "metadata": base}
+
+    def test_a_route_reports_its_handler_and_declaration_site(self) -> None:
+        panel = self._catalog((self._handler(),))
+        self.assertEqual(panel.rows[0][0], "POST")
+        self.assertEqual(panel.rows[0][2], "main.act")
+        self.assertEqual(panel.rows[0][6], "main.py:9")
+
+    def test_guards_are_counted_and_http_refusals_are_named(self) -> None:
+        panel = self._catalog(
+            (
+                self._handler(
+                    control_flow=[
+                        {"kind": "guard", "label": "not player", "line": 10},
+                        {"kind": "raise", "label": "HTTP 404", "line": 11},
+                        {"kind": "raise", "label": "ValueError", "line": 12},
+                    ]
+                ),
+            )
+        )
+        self.assertEqual(panel.rows[0][3], "1")
+        # A non-HTTP raise is a failure but not a refusal a caller sees as a status.
+        self.assertEqual(panel.rows[0][4], "HTTP 404")
+
+    def test_response_fields_join_by_function_name_not_symbol(self) -> None:
+        # Payload shapes are recorded against the declaring module, so a join
+        # by symbol identity finds nothing and every row reads as fieldless.
+        module = {
+            "path": "main.py",
+            "qualified_name": "app.main",
+            "metadata": {"payload_shapes": {"act": {"fields": ["ok", "message"], "line": 9}}},
+        }
+        panel = self._catalog((self._handler(), module))
+        self.assertIn("`ok`", panel.rows[0][5])
+        self.assertIn("`message`", panel.rows[0][5])
+
+    def test_a_handler_with_no_guard_is_reported_as_such(self) -> None:
+        panel = self._catalog((self._handler(),))
+        self.assertEqual(panel.rows[0][3], "0")
+        assert panel.note is not None
+        self.assertIn("no guard recorded", panel.note)
+
+    def test_a_symbol_without_routes_contributes_no_row(self) -> None:
+        self.assertEqual(self._catalog(({"path": "x.py", "metadata": {}},)).rows, ())
