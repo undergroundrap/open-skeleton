@@ -600,3 +600,37 @@ class ExternalCallTests(TestCase):
         calls = self._calls("import time\ntime.time()\ntime.time()\n")
         self.assertEqual(calls["time.time"]["count"], 2)
         self.assertEqual(calls["time.time"]["first_line"], 2)
+
+
+class RouteRoleTests(TestCase):
+    """A route registered inside a test is not part of the served surface."""
+
+    def _claims(self, filename: str) -> dict[str, list[str]]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / filename).write_text(
+                "from fastapi import FastAPI\n"
+                "app = FastAPI()\n"
+                "@app.get('/health')\n"
+                "def health():\n"
+                "    return {'ok': True}\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        grouped: dict[str, list[str]] = {}
+        for item in result.claims:
+            grouped.setdefault(item.category, []).append(item.claim)
+        return grouped
+
+    def test_a_route_in_application_code_is_served(self) -> None:
+        grouped = self._claims("app.py")
+        self.assertIn("http_route", grouped)
+        self.assertNotIn("test_route", grouped)
+
+    def test_a_route_in_a_test_file_is_categorised_separately(self) -> None:
+        # Flask's own suite registers sixteen routes inside tests. Reporting
+        # them as endpoints misdescribes what the system exposes.
+        grouped = self._claims("test_app.py")
+        self.assertIn("test_route", grouped)
+        self.assertNotIn("http_route", grouped)
+        self.assertIn("exercises the framework", grouped["test_route"][0])

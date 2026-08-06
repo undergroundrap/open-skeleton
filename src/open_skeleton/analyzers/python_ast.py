@@ -1156,6 +1156,9 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                         decorator, "end_lineno", getattr(decorator, "lineno", None)
                     ),
                     "owner": _expr_name(decorator.func.value),
+                    # Carried so the endpoint catalog can separate the served
+                    # surface from routes a test registers to exercise it.
+                    "role": str(self.file_record.role),
                 }
             )
         return routes
@@ -1247,12 +1250,24 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     evidence_kind="typed_route_signature",
                 )
                 self.typed_route_evidence.append(signature_evidence.evidence_id)
+            # A route registered inside a test is real syntax and not part of
+            # the served surface. On a repository whose routes all live in one
+            # application module the distinction never shows; on a library with
+            # a large test suite it is most of the census, and reporting a test
+            # fixture as an endpoint misdescribes what the system exposes.
+            in_test = str(self.file_record.role) == "test"
             self._claim(
-                text=f"{route['method']} {route['path']} is handled by {qualified}.",
-                category="http_route",
+                text=(
+                    f"{route['method']} {route['path']} is registered by {qualified} "
+                    "inside a test file, so it exercises the framework rather than "
+                    "forming part of the served surface."
+                    if in_test
+                    else f"{route['method']} {route['path']} is handled by {qualified}."
+                ),
+                category="test_route" if in_test else "http_route",
                 status="verified",
                 confidence=1.0,
-                importance="medium",
+                importance="low" if in_test else "medium",
                 supporting=(route_evidence.evidence_id,),
                 invalidation_keys=(f"file:{self.path}", f"symbol:{qualified}"),
             )

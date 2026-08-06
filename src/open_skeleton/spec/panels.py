@@ -899,6 +899,9 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
         handler = str(symbol.get("qualified_name", ""))
         fields = shapes_by_function.get(handler.rsplit(".", 1)[-1], [])
         for route in routes:
+            if str(route.get("role", "")) == "test":
+                # Registered to exercise the framework, not to serve traffic.
+                continue
             rows.append(
                 (
                     str(route.get("method", "")),
@@ -927,12 +930,15 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
         alignments=("left", "left", "left", "right", "left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
         note=(
-            f"{len(rows):,} routes, of which {unguarded:,} reach their body with no guard "
+            f"{len(rows):,} served routes, of which {unguarded:,} reach their body with no guard "
             "recorded in the handler itself. Guards and refusals are counted inside the "
             "handler only: a rejection produced by framework validation, by middleware, "
             "or by a helper the handler calls is real and does not appear here. Response "
             "fields are the literal keys of dictionaries the handler returns, so a "
-            "response assembled elsewhere shows none."
+            "response assembled elsewhere shows none. Routes registered inside "
+            "test files are excluded: they exercise the framework rather than "
+            "forming part of the served surface, and they are reported "
+            "separately as `test_route` claims."
         ),
     )
 
