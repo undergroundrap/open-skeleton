@@ -194,7 +194,7 @@ whether this engine's output carries it.
 ```powershell
 python benchmarks\comparison\run_fact_coverage.py `
   --baseline C:\path\to\baseline\tech_spec.md `
-  --candidate spec-output\spec.md spec-output\spec.json `
+  --candidate spec-output\spec.md spec-output\spec.json spec-output\spec.index.json `
   --repo C:\path\to\fixture `
   --output-dir coverage-output
 ```

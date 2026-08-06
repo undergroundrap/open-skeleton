@@ -36,6 +36,7 @@ from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import (
     build_spec,
     load_profile,
+    render_spec_index_json,
     render_spec_json,
     render_spec_markdown,
     verify_spec,
@@ -192,7 +193,10 @@ def _parser() -> argparse.ArgumentParser:
     spec.add_argument(
         "--output-dir",
         type=Path,
-        help="Where to write spec.md and spec.json. Defaults to the state directory.",
+        help=(
+            "Where to write spec.md, spec.json and spec.index.json. "
+            "Defaults to the state directory."
+        ),
     )
     spec.add_argument(
         "--verify",
@@ -500,8 +504,13 @@ def _spec(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     markdown_path = output_dir / "spec.md"
     json_path = output_dir / "spec.json"
+    # The symbol inventory and name concordance scale with the repository
+    # rather than with what is interesting in it, and they were 37% of a
+    # six-megabyte file a consumer had to parse in full to read one section.
+    index_path = output_dir / "spec.index.json"
     markdown_path.write_text(render_spec_markdown(document), encoding="utf-8", newline="\n")
     json_path.write_text(render_spec_json(document), encoding="utf-8", newline="\n")
+    index_path.write_text(render_spec_index_json(document), encoding="utf-8", newline="\n")
 
     verdicts: dict[str, int] = {}
     for section in document.sections:
@@ -520,6 +529,7 @@ def _spec(args: argparse.Namespace) -> int:
         "stale_claim_count": document.stale_claim_count,
         "markdown": str(markdown_path),
         "json": str(json_path),
+        "index": str(index_path),
     }
 
     report = None

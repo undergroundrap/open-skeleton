@@ -15,7 +15,7 @@ from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, v
 from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
-from open_skeleton.spec.render import render_spec_json
+from open_skeleton.spec.render import render_spec_index_json, render_spec_json
 from open_skeleton.spec.substitutes import derive_substitutes
 from tests.helpers import create_sample_repository
 
@@ -232,10 +232,16 @@ class SpecDocumentTests(TestCase):
                 str(item["qualified_name"])
                 for item in ledger.list_symbols(snapshot["snapshot_id"], limit=5_000)
             }
+            index = json.loads(render_spec_index_json(document))
 
             self.assertTrue(expected)
-            self.assertEqual({item["qualified_name"] for item in payload["symbols"]}, expected)
-            for item in payload["symbols"]:
+            self.assertEqual({item["qualified_name"] for item in index["symbols"]}, expected)
+            # The document itself must stay free of both inventories: they
+            # scale with the repository and a reader of one section should not
+            # have to parse them.
+            self.assertNotIn("symbols", payload)
+            self.assertNotIn("name_index", payload)
+            for item in index["symbols"]:
                 self.assertTrue(item["path"])
                 self.assertTrue(item["kind"])
                 self.assertTrue(item["short_form"])
@@ -583,7 +589,7 @@ class NameIndexTests(TestCase):
             ledger = _analyzed(root, workspace / "state")
 
             document = build_spec(ledger, load_profile())
-            payload = json.loads(render_spec_json(document))
+            payload = json.loads(render_spec_index_json(document))
             index = payload["name_index"]
 
             self.assertTrue(index, "expected at least one file to contribute names")
@@ -609,7 +615,7 @@ class NameIndexTests(TestCase):
             ledger = _analyzed(root, workspace / "state")
 
             document = build_spec(ledger, load_profile())
-            payload = json.loads(render_spec_json(document))
+            payload = json.loads(render_spec_index_json(document))
             every_name = {name for names in payload["name_index"].values() for name in names}
             self.assertIn("scratch_local_value", every_name)
             self.assertNotIn(

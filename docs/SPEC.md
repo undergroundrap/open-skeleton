@@ -10,7 +10,15 @@ open-skeleton analyze C:\path\to\repository
 open-skeleton spec C:\path\to\repository --verify
 ```
 
-This writes `spec.md` and `spec.json` into the state directory.
+This writes three files into the state directory. `spec.md` is the readable
+document, `spec.json` is the same document as data, and `spec.index.json`
+carries the complete symbol inventory and name concordance.
+
+The inventories are split out because they scale with the repository rather
+than with what is interesting in it: on a 523-file tree they were 37% of a
+six-megabyte file that a consumer had to parse in full to read one section.
+An agent that wants every name still gets it; one that wants the document is
+no longer charged for it.
 
 ## Why a profile instead of a prompt
 

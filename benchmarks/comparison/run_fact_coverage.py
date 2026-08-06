@@ -191,9 +191,9 @@ def main() -> int:
         type=Path,
         nargs="+",
         help=(
-            "One or more files forming the candidate deliverable. Pass spec.md "
-            "and spec.json together to measure everything one run produces; "
-            "pass spec.md alone to measure only what a human reads."
+            "One or more files forming the candidate deliverable. Pass spec.md, "
+            "spec.json and spec.index.json together to measure everything one "
+            "run produces; pass spec.md alone to measure only what a human reads."
         ),
     )
     parser.add_argument("--output-dir", required=True, type=Path)

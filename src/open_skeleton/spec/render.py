@@ -21,6 +21,7 @@ from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
 from open_skeleton.spec.substitutes import Substitute, derive_substitutes
 
 SPEC_SCHEMA_VERSION = "open-skeleton.spec.v1"
+SPEC_INDEX_SCHEMA_VERSION = "open-skeleton.spec_index.v1"
 # A section resting on a whole package would otherwise print a paragraph of
 # paths. The complete list stays in the JSON projection.
 MAX_EXAMINED_FILES = 12
@@ -180,16 +181,30 @@ class SpecDocument:
             "stale_claim_count": self.stale_claim_count,
             "total_claims": self.total_claims,
             "cited_claims": self.cited_claims,
-            # Complete and untruncated on purpose. The markdown index is a
-            # readable selection; a consumer that needs every name the analyzers
-            # found reads this instead of re-deriving it from the repository.
-            "symbols": [dict(item) for item in self.symbols],
-            # A concordance, not analysis: every name each file mentions and the
-            # line it first appears on. It is JSON-only because a local loop
-            # variable sits beside a public function here, and presenting those
-            # as equals to a reader would bury the surface under the noise.
-            "name_index": {path: dict(names) for path, names in sorted(self.name_index.items())},
             "sections": [item.to_dict() for item in self.sections],
+        }
+
+    def index_to_dict(self) -> dict[str, Any]:
+        """The two complete inventories, kept out of the document itself.
+
+        Both are untruncated on purpose and both scale with the repository
+        rather than with what is interesting in it: on a 523-file tree they
+        were 37% of a six-megabyte file that a consumer had to parse in full
+        to read a section. Splitting them means an agent that wants every name
+        still gets it, and one that wants the document is not charged for it.
+        """
+
+        return {
+            "schema": SPEC_INDEX_SCHEMA_VERSION,
+            "snapshot_id": self.snapshot_id,
+            "generated_at": self.generated_at,
+            # Complete and untruncated. The markdown index is a readable
+            # selection; a consumer needing every name the analyzers found
+            # reads this instead of re-deriving it from the repository.
+            "symbols": [dict(item) for item in self.symbols],
+            # A concordance, not analysis: every name each file mentions and
+            # the line it first appears on.
+            "name_index": {path: dict(names) for path, names in sorted(self.name_index.items())},
         }
 
 
@@ -787,3 +802,9 @@ def render_spec_markdown(document: SpecDocument) -> str:
 
 def render_spec_json(document: SpecDocument) -> str:
     return json.dumps(document.to_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def render_spec_index_json(document: SpecDocument) -> str:
+    """The symbol inventory and name concordance, as their own document."""
+
+    return json.dumps(document.index_to_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
