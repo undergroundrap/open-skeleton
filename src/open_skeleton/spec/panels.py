@@ -18,6 +18,7 @@ from typing import Any
 
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.consequences import Consequence
+from open_skeleton.spec.roles import MultiRole
 from open_skeleton.spec.substitutes import Substitute
 
 MAX_PANEL_ROWS = 15
@@ -62,6 +63,7 @@ class PanelContext:
     substitutes: tuple[Substitute, ...] = ()
     section_verdicts: dict[str, str] = field(default_factory=dict)
     claims_by_category: dict[str, tuple[dict[str, Any], ...]] = field(default_factory=dict)
+    roles: tuple[MultiRole, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1010,6 +1012,44 @@ def _security_matrix(context: PanelContext) -> Panel:
     )
 
 
+def _multi_role(roles: tuple[MultiRole, ...]) -> Panel:
+    """Structures carrying concerns from more than one family.
+
+    The useful sentences in a long specification are rarely single facts; they
+    are coincidences. A cache that is also the work queue means a zone never
+    loaded is never simulated, and neither claim carries that alone. This is
+    the mechanical half of that observation: which structures turn out to do
+    two jobs, so a reader knows where a change will not do only what its
+    author intended.
+    """
+
+    rows = tuple(
+        (
+            item.structure,
+            f"{len(item.families)}",
+            ", ".join(item.families),
+            ", ".join(f"`{name}`" for name in item.categories),
+            item.location,
+        )
+        for item in roles
+    )
+    return Panel(
+        name="multi_role_structures",
+        title="Structures carrying more than one concern",
+        columns=("Structure", "Concerns", "Families", "Claim categories", "Declared at"),
+        alignments=("left", "right", "left", "left", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Nothing here is asserted that a claim did not already say; what is "
+            "added is that two of them are about the same object. Facets of one "
+            "concern are excluded — every route also produces an inventory and a "
+            "framework-behaviour claim, and counting those would report taxonomy "
+            "as coincidence. A census claim attaches to everything it surveyed "
+            "and is excluded for the same reason."
+        ),
+    )
+
+
 def _substitute_analysis(substitutes: tuple[Substitute, ...]) -> Panel:
     """What plays each absent concern's part, since the work happens regardless.
 
@@ -1342,6 +1382,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _endpoint_catalog(context.symbols)
     if name == "security_matrix":
         return _security_matrix(context)
+    if name == "multi_role_structures":
+        return _multi_role(context.roles)
     if name == "substitute_analysis":
         return _substitute_analysis(context.substitutes)
     if name == "documented_values":

@@ -45,6 +45,7 @@ PANEL_KINDS = frozenset(
         "external_calls",
         "documented_values",
         "substitute_analysis",
+        "multi_role_structures",
         "security_matrix",
         "endpoint_catalog",
         "data_flow",
@@ -59,7 +60,7 @@ PANEL_KINDS = frozenset(
     }
 )
 
-VERDICTS = ("applicable", "degenerate", "absent", "structural")
+VERDICTS = ("applicable", "degenerate", "absent", "structural", "not_applicable")
 
 _IMPORTANCE_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
