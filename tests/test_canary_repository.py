@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any, ClassVar
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
@@ -84,6 +85,11 @@ def never_called():
 class CanaryRepositoryTests(TestCase):
     """Precision on hostile input: a false route is worse than a missing one."""
 
+    # Declared so strict typing can see what setUpClass binds.
+    _directory: ClassVar[TemporaryDirectory[str]]
+    _routes: ClassVar[set[str]]
+    _claims: ClassVar[tuple[Any, ...]]
+
     @classmethod
     def setUpClass(cls) -> None:
         cls._directory = TemporaryDirectory()
@@ -93,7 +99,7 @@ class CanaryRepositoryTests(TestCase):
         cls._routes = {
             item.claim for item in result.claims if item.category in {"http_route", "test_route"}
         }
-        cls._claims = result.claims
+        cls._claims = tuple(result.claims)
 
     @classmethod
     def tearDownClass(cls) -> None:
