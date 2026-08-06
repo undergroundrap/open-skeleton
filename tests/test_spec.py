@@ -767,3 +767,49 @@ class ExaminedFileTests(TestCase):
             for section in document.sections:
                 counts = [count for _, count in section.examined_files]
                 self.assertEqual(counts, sorted(counts, reverse=True))
+
+
+class SecurityMatrixTests(TestCase):
+    """One table a reviewer can act on, restating verdicts already reached."""
+
+    def _matrix(self, verdicts: dict[str, str], claims: dict[str, Any]) -> Any:
+        return build_panel(
+            "security_matrix",
+            PanelContext(section_verdicts=verdicts, claims_by_category=claims),
+        )
+
+    def test_a_present_section_is_reported_present(self) -> None:
+        panel = self._matrix(
+            {"security.boundaries": "applicable"},
+            {"security_boundary": ({"claim_id": "c1"},)},
+        )
+        row = next(item for item in panel.rows if item[4] == "security.boundaries")
+        self.assertEqual(row[1], "present")
+        self.assertEqual(row[2], "1")
+
+    def test_an_absent_control_does_not_count_its_absence_claims_as_evidence(self) -> None:
+        # An authentication census reporting that no route declares one is not
+        # a point in authentication's favour. Counting it would repeat the
+        # inversion the sourced-claim probe exists to prevent.
+        panel = self._matrix(
+            {"security.authentication": "absent"},
+            {"auth_control_census": ({"claim_id": "c1"},)},
+        )
+        row = next(item for item in panel.rows if item[4] == "security.authentication")
+        self.assertEqual(row[1], "**absent**")
+        self.assertEqual(row[2], "—")
+
+    def test_a_section_the_profile_never_probes_is_distinguished_from_absent(self) -> None:
+        panel = self._matrix({}, {})
+        states = {item[1] for item in panel.rows}
+        self.assertEqual(states, {"not probed"})
+
+    def test_a_degenerate_verdict_reads_as_partial(self) -> None:
+        panel = self._matrix({"security.data-protection": "degenerate"}, {})
+        row = next(item for item in panel.rows if item[4] == "security.data-protection")
+        self.assertEqual(row[1], "partial")
+
+    def test_every_row_names_the_section_that_evidences_it(self) -> None:
+        panel = self._matrix({}, {})
+        for row in panel.rows:
+            self.assertTrue(row[4])

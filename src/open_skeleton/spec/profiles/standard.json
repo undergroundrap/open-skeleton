@@ -1269,6 +1269,16 @@
       "concern": "Access controls present in the implementation, and the boundaries they assume.",
       "children": [
         {
+          "id": "security.control-matrix",
+          "number": "6.0",
+          "title": "Security Control Matrix",
+          "concern": "Every control this profile checks for, and what was found.",
+          "framing": "A reviewer asking what protects this system should read one table, not nine sections. Each row restates the determination its own section reached and links back to it, so nothing is asserted here that is not already evidenced there.",
+          "panels": [
+            "security_matrix"
+          ]
+        },
+        {
           "id": "security.authentication",
           "number": "6.1",
           "title": "Authentication and Authorization Controls",

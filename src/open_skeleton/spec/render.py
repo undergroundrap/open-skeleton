@@ -193,6 +193,15 @@ class SpecDocument:
         }
 
 
+def _by_category(claims: Iterable[dict[str, Any]]) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Group claims by category so a panel can consolidate across sections."""
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for claim in claims:
+        grouped.setdefault(str(claim.get("category", "")), []).append(claim)
+    return {name: tuple(items) for name, items in grouped.items()}
+
+
 def _examined_files(
     findings: tuple[RenderedClaim, ...],
     constraints: tuple[RenderedClaim, ...],
@@ -408,6 +417,8 @@ def build_spec(
         consequences=consequences,
         claim_locations=claim_locations,
         substitutes=substitutes,
+        section_verdicts={item.section_id: item.verdict for item in rendered},
+        claims_by_category=_by_category(claims),
     )
     for index, item in enumerate(rendered):
         if not item.panels:

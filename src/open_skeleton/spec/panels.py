@@ -60,6 +60,8 @@ class PanelContext:
     symbols: tuple[dict[str, Any], ...] = ()
     claim_locations: dict[str, str] = field(default_factory=dict)
     substitutes: tuple[Substitute, ...] = ()
+    section_verdicts: dict[str, str] = field(default_factory=dict)
+    claims_by_category: dict[str, tuple[dict[str, Any], ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -739,6 +741,94 @@ def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+# Each row is a control a security reviewer expects to find, the profile
+# section that probes for it, and the claim categories that evidence it. The
+# matrix asserts nothing itself: it consolidates verdicts that already exist,
+# because a reviewer should not have to read nine sections to answer one
+# question.
+SECURITY_CONTROLS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("Request authentication", "security.authentication", ("auth_control", "auth_control_census")),
+    ("Transport and origin boundary", "security.boundaries", ("security_boundary",)),
+    ("Credential and token handling", "security.session-handling", ("session_control",)),
+    ("Delegated identity", "security.identity-provider", ()),
+    ("Cryptography in use", "security.data-protection", ("data_protection",)),
+    ("Secret management", "integration.secrets", ()),
+    ("Dependency vulnerability scanning", "security.vulnerability-management", ()),
+    ("Third-party data egress", "security.third-party-origins", ("third_party_origin",)),
+    ("Abuse and rate control", "integration.request-throttling", ("rate_limit",)),
+    ("Audit and compliance artifacts", "operations.audit-trail", ()),
+    ("Memory safety surface", "security.memory-safety", ("unsafe_surface",)),
+    ("Governance artifacts", "security.governance", ()),
+)
+
+
+def _security_matrix(context: PanelContext) -> Panel:
+    """Every security control in one table, with the verdict already reached.
+
+    Nothing here is new: each row restates a section's own determination and
+    counts the claims that evidence it. What it adds is that a reviewer asking
+    "what protects this system" reads one table instead of nine sections, and
+    can see at a glance which rows were checked and found nothing versus which
+    were never applicable.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for label, section_id, categories in SECURITY_CONTROLS:
+        verdict = context.section_verdicts.get(section_id)
+        evidence = [
+            claim
+            for category in categories
+            for claim in context.claims_by_category.get(category, ())
+        ]
+        if verdict is None:
+            state = "not probed"
+        elif verdict == "absent":
+            state = "**absent**"
+        elif verdict == "degenerate":
+            state = "partial"
+        elif verdict == "structural":
+            state = "not probed"
+        else:
+            state = "present"
+        located = ""
+        for claim in evidence:
+            location = context.claim_locations.get(str(claim.get("claim_id", "")))
+            if location:
+                located = location
+                break
+        # A control found absent often has claims attached, and they document
+        # the absence rather than evidence the control — an authentication
+        # census reporting that no route declares one is not a point in
+        # authentication's favour. Counting them here would repeat, in a new
+        # place, the inversion the sourced-claim probe exists to prevent.
+        supported = state not in {"**absent**", "not probed"}
+        rows.append(
+            (
+                label,
+                state,
+                f"{len(evidence):,}" if supported else "—",
+                (located or "—") if supported else "—",
+                section_id,
+            )
+        )
+    absent = sum(1 for row in rows if row[1] == "**absent**")
+    return Panel(
+        name="security_matrix",
+        title="Security control matrix",
+        columns=("Control", "Determination", "Evidencing claims", "First evidence", "Section"),
+        alignments=("left", "left", "right", "left", "left"),
+        rows=tuple(rows),
+        note=(
+            f"{absent:,} of {len(rows):,} controls were probed and found absent. Each "
+            "row restates the determination its own section reached, so nothing is "
+            "asserted here that is not already evidenced there — a row marked absent "
+            "prints its queries in that section. `not probed` means this profile "
+            "declares no probe for the concern, which is different from having "
+            "checked and found nothing."
+        ),
+    )
+
+
 def _substitute_analysis(substitutes: tuple[Substitute, ...]) -> Panel:
     """What plays each absent concern's part, since the work happens regardless.
 
@@ -1065,6 +1155,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _signatures(context.symbols)
     if name == "object_keys":
         return _object_keys(context.symbols)
+    if name == "security_matrix":
+        return _security_matrix(context)
     if name == "substitute_analysis":
         return _substitute_analysis(context.substitutes)
     if name == "documented_values":
