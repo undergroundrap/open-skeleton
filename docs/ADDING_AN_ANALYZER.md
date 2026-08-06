@@ -111,7 +111,7 @@ cannot find one score the same. Run the generalization benchmark, which measures
 each analyzer against the files it actually read:
 
 ```powershell
-python benchmarks\generalizationun_generalization.py `
+python benchmarks\generalization\run_generalization.py `
   --repo C:\path\to\one --repo C:\path\to\two --output-dir generalization-output
 ```
 

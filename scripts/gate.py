@@ -49,6 +49,7 @@ def _checks(fix: bool) -> tuple[Check, ...]:
     linter = ("ruff", "check", "--fix") if fix else ("ruff", "check")
     return (
         Check("compile", (python, "-m", "compileall", "-q", "src", "tests")),
+        Check("docs", (python, "scripts/check_docs.py")),
         Check("format", (python, "-m", *formatter, *TARGETS)),
         Check("lint", (python, "-m", *linter, *TARGETS)),
         Check("types", (python, "-m", "mypy")),

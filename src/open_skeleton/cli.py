@@ -13,6 +13,7 @@ from pathlib import Path
 
 from open_skeleton import __version__
 from open_skeleton.analysis import analyze_snapshot
+from open_skeleton.audit import audit_claims
 from open_skeleton.benchmark import run_benchmark
 from open_skeleton.dashboard import serve_dashboard
 from open_skeleton.exports import (
@@ -123,6 +124,20 @@ def _parser() -> argparse.ArgumentParser:
     claims.add_argument("--category")
     claims.add_argument("--limit", type=int, default=200)
     claims.add_argument("--json", action="store_true", help="Print complete claim objects as JSON.")
+
+    audit = subparsers.add_parser(
+        "audit",
+        help="Flag claim groups shaped like a past mistake, on any repository.",
+    )
+    audit.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    audit.add_argument("--state-dir", type=Path, help="State directory.")
+    audit.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
+    audit.add_argument("--json", action="store_true", help="Print findings as JSON.")
+    audit.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when any finding is reported.",
+    )
 
     search = subparsers.add_parser("search", help="Search accepted and unresolved claims.")
     search.add_argument("query", help="FTS5 query or fallback substring.")
@@ -377,6 +392,28 @@ def _claims(args: argparse.Namespace) -> int:
     return 0
 
 
+def _audit(args: argparse.Namespace) -> int:
+    ledger, snapshot_id = _ledger_and_snapshot(args)
+    findings = audit_claims(
+        tuple(ledger.list_claims(snapshot_id, limit=5_000)),
+        tuple(ledger.list_evidence(snapshot_id)),
+        tuple(ledger.list_files(snapshot_id)),
+    )
+    if args.json:
+        print(json.dumps([item.to_dict() for item in findings], indent=2, sort_keys=True))
+    else:
+        for finding in findings:
+            print(f"[{finding.check}] {finding.category}: {finding.detail}")
+        if findings:
+            print(f"\n{len(findings):,} claim groups worth reading before publishing a number.")
+        else:
+            print("No claim group matches a known mistake shape.")
+    # A finding is a place to look, not a defect, so this is opt-in: wiring it
+    # into CI as a hard gate would make the honest response to an unusual
+    # repository a red build.
+    return 1 if (findings and args.strict) else 0
+
+
 def _search(args: argparse.Namespace) -> int:
     ledger, snapshot_id = _ledger_and_snapshot(args)
     results = ledger.search_claims(snapshot_id, args.query, limit=args.limit)
@@ -582,6 +619,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _status(args)
         if args.command == "claims":
             return _claims(args)
+        if args.command == "audit":
+            return _audit(args)
         if args.command == "search":
             return _search(args)
         if args.command == "evidence":

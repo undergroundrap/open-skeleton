@@ -102,6 +102,7 @@ open-skeleton serve       run the read-only local dashboard
 open-skeleton synthesize  explicitly invoke an optional provider
 open-skeleton benchmark   score a pinned fixture and baseline artifact
 open-skeleton spec        render a long-form specification from an outline profile
+open-skeleton audit       flag claim groups shaped like a known mistake
 ```
 
 ## Long-form specifications
@@ -116,6 +117,24 @@ concern the repository does not implement is reported as an explicit `absent`
 verdict next to the exact queries that returned nothing — not omitted. `--verify`
 re-resolves every citation against current source bytes and exits non-zero if any
 receipt no longer holds. See [docs/SPEC.md](docs/SPEC.md).
+
+## Auditing the analysis itself
+
+Every wrong answer this engine has produced was a true statement in the wrong
+frame — routes registered inside a test suite reported as the served surface,
+a constant lookup table reported as a queue, callback parameters reported as
+platform API. Each analyzer was correct in isolation, so no unit test caught
+any of them.
+
+```powershell
+open-skeleton audit C:\path\to\repository
+```
+
+This looks for the *shape* of that mistake rather than for particular
+instances: a production finding evidenced only by test files, a category with
+no file-level evidence at all, a category concentrated in a file that carries
+little else. A finding is a place to read before publishing a number, not a
+defect — `--strict` exits non-zero if you want it as a gate.
 
 ## Agent access with MCP
 
