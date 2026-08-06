@@ -130,6 +130,10 @@ class SpecSection:
     diagrams: tuple[str, ...] = ()
     panels: tuple[str, ...] = ()
     cross_references: tuple[str, ...] = ()
+    # Section ids this concern presupposes. Pagination is meaningless
+    # without an HTTP surface, and reporting it as absent in a compiler
+    # states a true fact about a thing that could never have been there.
+    requires: tuple[str, ...] = ()
     degenerate_below: int = 0
     children: tuple[SpecSection, ...] = ()
 
@@ -243,6 +247,7 @@ def _parse_section(payload: dict[str, Any], context: str, seen: set[str]) -> Spe
         diagrams=_string_tuple(payload.get("diagrams"), node_context),
         panels=panels,
         cross_references=_string_tuple(payload.get("cross_references"), node_context),
+        requires=_string_tuple(payload.get("requires"), node_context),
         degenerate_below=degenerate_below,
         children=children,
     )
@@ -272,12 +277,29 @@ def parse_profile(payload: dict[str, Any]) -> SpecProfile:
     )
 
     known = {section.section_id for section in profile.walk()}
+    ordered = [section.section_id for section in profile.walk()]
+    position = {name: index for index, name in enumerate(ordered)}
     for section in profile.walk():
         for reference in section.cross_references:
             if reference not in known:
                 raise ProfileError(
                     f"section '{section.section_id}': cross reference "
                     f"'{reference}' does not name a section in this profile"
+                )
+        for requirement in section.requires:
+            if requirement not in known:
+                raise ProfileError(
+                    f"section '{section.section_id}': requires "
+                    f"'{requirement}' does not name a section in this profile"
+                )
+            # A requirement is read during a single ordered pass, so it has to
+            # be decided before the section that depends on it. Rejecting a
+            # forward reference here turns a silently wrong verdict into a
+            # profile that refuses to load.
+            if position[requirement] >= position[section.section_id]:
+                raise ProfileError(
+                    f"section '{section.section_id}': requires "
+                    f"'{requirement}', which is not evaluated before it"
                 )
     return profile
 

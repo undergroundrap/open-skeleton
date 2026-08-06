@@ -268,7 +268,10 @@
               ]
             }
           ],
-          "framing": "An unpaginated collection endpoint returns a response whose size is set by the data, not by the contract. It works until the table grows."
+          "framing": "An unpaginated collection endpoint returns a response whose size is set by the data, not by the contract. It works until the table grows.",
+          "requires": [
+            "surface.http"
+          ]
         },
         {
           "id": "surface.idempotency",
@@ -295,7 +298,10 @@
               ]
             }
           ],
-          "framing": "Any client that retries a failed write needs the second attempt to be harmless. Where no idempotency key is accepted, that guarantee rests on the caller not retrying."
+          "framing": "Any client that retries a failed write needs the second attempt to be harmless. Where no idempotency key is accepted, that guarantee rests on the caller not retrying.",
+          "requires": [
+            "surface.http"
+          ]
         },
         {
           "id": "surface.payload-shapes",
@@ -305,6 +311,9 @@
           "framing": "Where responses are built as dictionaries rather than declared as models, the contract is not written down: storage sees a JSON blob and the symbol index sees a function. These are the field names recovered from the returned literals themselves.",
           "panels": [
             "payload_shapes"
+          ],
+          "requires": [
+            "surface.http"
           ]
         },
         {
@@ -650,6 +659,9 @@
           },
           "cross_references": [
             "state.process-local"
+          ],
+          "requires": [
+            "state.durable"
           ]
         },
         {
@@ -702,6 +714,9 @@
             "limit": 6
           },
           "cross_references": [
+            "state.durable"
+          ],
+          "requires": [
             "state.durable"
           ]
         },
@@ -1169,7 +1184,10 @@
               ]
             }
           ],
-          "framing": "An unbounded endpoint is a capacity risk that no amount of horizontal scaling fixes, because the caller sets the rate. Absence here is a finding, not a gap in the audit."
+          "framing": "An unbounded endpoint is a capacity risk that no amount of horizontal scaling fixes, because the caller sets the rate. Absence here is a finding, not a gap in the audit.",
+          "requires": [
+            "surface.http"
+          ]
         },
         {
           "id": "integration.resilience",
@@ -1261,7 +1279,10 @@
               ]
             }
           ],
-          "framing": "Without a correlation identifier, a distributed failure is read one log file at a time and reconstructed by timestamp. This records whether that identifier exists, not whether it is used."
+          "framing": "Without a correlation identifier, a distributed failure is read one log file at a time and reconstructed by timestamp. This records whether that identifier exists, not whether it is used.",
+          "requires": [
+            "surface.http"
+          ]
         },
         {
           "id": "integration.substitutes",
@@ -1317,7 +1338,10 @@
             ],
             "limit": 15
           },
-          "framing": "A census counts controls present in route signatures. It does not prove that no protection exists elsewhere, such as in a reverse proxy this repository does not contain."
+          "framing": "A census counts controls present in route signatures. It does not prove that no protection exists elsewhere, such as in a reverse proxy this repository does not contain.",
+          "requires": [
+            "surface.http"
+          ]
         },
         {
           "id": "security.boundaries",
@@ -1338,7 +1362,10 @@
               "security_boundary"
             ],
             "limit": 20
-          }
+          },
+          "requires": [
+            "surface.http"
+          ]
         },
         {
           "id": "security.data-protection",
@@ -1521,6 +1548,9 @@
           ],
           "cross_references": [
             "security.authentication"
+          ],
+          "requires": [
+            "surface.http"
           ]
         },
         {
@@ -1568,6 +1598,9 @@
           "cross_references": [
             "security.authentication",
             "security.identity-provider"
+          ],
+          "requires": [
+            "surface.http"
           ]
         },
         {

@@ -948,3 +948,82 @@ class DataFlowTests(TestCase):
         panel = self._flow((), {}, {})
         assert panel.note is not None
         self.assertIn("not one where a path", panel.note)
+
+
+class PreconditionTests(TestCase):
+    """A concern that presupposes another is not a gap when the other is absent."""
+
+    def _profile(self, requires: list[str], order: str = "before") -> Any:
+        first = {
+            "id": "a.surface",
+            "number": "1",
+            "title": "Surface",
+            "probes": [{"name": "p", "kind": "path_glob", "terms": ["never-matches-*"]}],
+        }
+        second = {
+            "id": "a.derived",
+            "number": "2",
+            "title": "Derived",
+            "probes": [{"name": "q", "kind": "path_glob", "terms": ["also-never-*"]}],
+            "requires": requires,
+        }
+        pair = [first, second] if order == "before" else [second, first]
+        return parse_profile(
+            {
+                "schema": "open-skeleton.spec_profile.v1",
+                "profile_id": "p",
+                "profile_version": "v1",
+                "title": "t",
+                "sections": pair,
+            }
+        )
+
+    def _verdicts(self, profile: Any) -> dict[str, str]:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, profile)
+        return {item.section_id: item.verdict for item in document.sections}
+
+    def test_an_unmet_precondition_turns_absent_into_not_applicable(self) -> None:
+        verdicts = self._verdicts(self._profile(["a.surface"]))
+        self.assertEqual(verdicts["a.surface"], "absent")
+        self.assertEqual(verdicts["a.derived"], "not_applicable")
+
+    def test_without_a_precondition_the_same_section_is_a_gap(self) -> None:
+        verdicts = self._verdicts(self._profile([]))
+        self.assertEqual(verdicts["a.derived"], "absent")
+
+    def test_a_forward_requirement_is_rejected_rather_than_silently_wrong(self) -> None:
+        # Requirements are read in one ordered pass, so a section depending on
+        # a later one would be judged against a verdict not yet decided.
+        with self.assertRaises(ProfileError):
+            self._profile(["a.surface"], order="after")
+
+    def test_an_unknown_requirement_is_rejected(self) -> None:
+        with self.assertRaises(ProfileError):
+            self._profile(["does.not.exist"])
+
+    def test_the_standard_profile_ties_each_precondition_to_its_own_verdict(self) -> None:
+        # The relationship is the invariant, not any one verdict: a concern
+        # that presupposes an HTTP surface may only be excused when that
+        # surface is itself missing. Asserting a fixed verdict here would pass
+        # or fail on what the sample repository happens to contain.
+        verdicts = self._verdicts(load_profile())
+        profile = load_profile()
+        by_id = {section.section_id: section for section in profile.walk()}
+        checked = 0
+        for section_id, verdict in verdicts.items():
+            if verdict != "not_applicable":
+                continue
+            requires = by_id[section_id].requires
+            self.assertTrue(requires, f"{section_id} is not applicable but requires nothing")
+            self.assertTrue(
+                any(verdicts.get(name) not in {"applicable", "degenerate"} for name in requires),
+                f"{section_id} was excused while every precondition it names was met",
+            )
+            checked += 1
+        self.assertTrue(checked, "expected the sample repository to excuse at least one concern")

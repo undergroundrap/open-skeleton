@@ -44,6 +44,12 @@ _VERDICT_SENTENCE = {
     "structural": (
         "This section organizes the subsections below and makes no presence claim of its own."
     ),
+    "not_applicable": (
+        "**Determination: not applicable.** This concern presupposes {requires}, which "
+        "this repository does not have, so its absence here is not a gap. The probes "
+        "ran and are listed below, because a reader who disagrees with the "
+        "precondition should be able to see what they would have matched."
+    ),
 }
 
 
@@ -118,6 +124,7 @@ class RenderedSection:
     depth: int
     degenerate_threshold: int = 0
     examined_files: tuple[tuple[str, int], ...] = ()
+    unmet_requirements: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -138,6 +145,7 @@ class RenderedSection:
             "examined_files": [
                 {"path": path, "receipts": count} for path, count in self.examined_files
             ],
+            "unmet_requirements": list(self.unmet_requirements),
         }
 
 
@@ -329,10 +337,25 @@ def build_spec(
     )
 
     used: set[str] = set()
+    # Verdicts as they are decided, so a section can read what it presupposes.
+    decided: dict[str, str] = {}
     rendered: list[RenderedSection] = []
 
     def render_node(section: SpecSection, depth: int) -> None:
         verdict, probe_results = evaluate_section(section, corpus)
+        # A concern can presuppose another. Pagination without an HTTP surface
+        # is not a gap in the system, it is a question that does not arise —
+        # and reporting fifty of those buries the handful that do. The
+        # requirement is read from verdicts already decided this pass.
+        unmet = [
+            name
+            for name in section.requires
+            if decided.get(name) not in {"applicable", "degenerate"}
+        ]
+        if unmet and verdict == "absent":
+            verdict = "not_applicable"
+        decided[section.section_id] = verdict
+        unmet_requirements = tuple(unmet) if verdict == "not_applicable" else ()
         selected, omitted = _select(section.findings, claims, used)
         used.update(str(item["claim_id"]) for item in selected)
         constraint_claims, _ = _select(section.constraints, claims, set())
@@ -393,6 +416,7 @@ def build_spec(
                 depth=depth,
                 degenerate_threshold=section.degenerate_below,
                 examined_files=_examined_files(findings, constraints),
+                unmet_requirements=unmet_requirements,
             )
         )
         for child in section.children:
@@ -669,6 +693,9 @@ def render_spec_markdown(document: SpecDocument) -> str:
             total=total,
             snapshot=document.snapshot_id,
             threshold=section.degenerate_threshold,
+            requires=", ".join(
+                section_titles.get(item, item) for item in section.unmet_requirements
+            ),
         )
         lines.append(f"{sentence}\n\n")
         if section.framing:

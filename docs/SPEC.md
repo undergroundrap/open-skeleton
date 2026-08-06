@@ -65,6 +65,20 @@ snapshot. The verdict follows from counted matches alone:
 | `degenerate` | Probes matched, but below the node's `degenerate_below` threshold. |
 | `absent` | Every declared probe returned zero matches. |
 | `structural` | The node declares no probes; it only organizes its children. |
+| `not_applicable` | Probes matched nothing **and** a concern this node declares it presupposes is itself missing. |
+
+A node may declare `requires`, naming concerns it only arises from. Pagination
+presupposes an HTTP surface; schema migration presupposes durable storage.
+Without that precondition a zero match is not a gap, and reporting it as one
+buries the real findings: a Rust game engine scored fifty-one absent
+determinations, ten of which were questions that could never have arisen.
+
+A requirement must name a section evaluated earlier, and the profile refuses
+to load otherwise — verdicts are read during a single ordered pass, so a
+forward reference would be judged against a verdict not yet decided. The
+probes still run and are still printed under a `not_applicable` verdict,
+because a reader who disagrees with the precondition should be able to see
+what they would have matched.
 
 An `absent` section still prints its probe table, so a reader can re-run the query
 that found nothing instead of trusting the conclusion. This is the difference
