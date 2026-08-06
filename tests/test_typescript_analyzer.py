@@ -19,6 +19,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _references,
     _throw_sites,
     _tokens,
+    _tunables,
 )
 from open_skeleton.scanner import scan_repository
 
@@ -354,3 +355,40 @@ class TypeScriptClaimFamilyTests(TestCase):
             )
         )
         self.assertEqual(sorted(found), ["ConfigError", "TypeError"])
+
+
+class TunableTests(TestCase):
+    """Named literal constants, including inside an IIFE wrapper.
+
+    Found by running against a physics-heavy browser game. Its 16 modules
+    produced 4 claims while the constants deciding how the whole thing behaves
+    -- gravity, friction, acceleration caps -- sat in plain sight in every file
+    and were recorded nowhere, because the Rust analyzer had carried tunables
+    since it was written and this one never did.
+    """
+
+    def test_a_module_constant_is_recorded_with_its_value(self) -> None:
+        found = _tunables(_tokens("const GRAVITY = 16.0;\n"))
+        self.assertEqual(found["GRAVITY"]["value"], "16.0")
+
+    def test_a_constant_inside_an_iife_is_recorded(self) -> None:
+        # Buildless browser code wraps everything one level deep. Requiring
+        # depth zero finds nothing in an entire category of real JavaScript.
+        source = "(function (global) {\n  const AIR_ACCEL = 12.0;\n})(window);\n"
+        self.assertIn("AIR_ACCEL", _tunables(_tokens(source)))
+
+    def test_a_negative_constant_keeps_its_sign(self) -> None:
+        self.assertEqual(_tunables(_tokens("const FLOOR = -9.8;\n"))["FLOOR"]["value"], "-9.8")
+
+    def test_a_string_constant_is_recorded(self) -> None:
+        found = _tunables(_tokens('const MODE = "surf";\n'))
+        self.assertEqual(found["MODE"]["value"], "surf")
+
+    def test_a_function_local_is_not_a_tunable(self) -> None:
+        # Depth is what separates a knob from a scratch variable.
+        source = "function step() {\n  if (true) {\n    const scratch = 3;\n  }\n}\n"
+        self.assertEqual(_tunables(_tokens(source)), {})
+
+    def test_a_computed_initializer_is_not_recorded(self) -> None:
+        # `const X = a * b` has no literal value to report without evaluating it.
+        self.assertEqual(_tunables(_tokens("const SPEED = base * 2;\n")), {})

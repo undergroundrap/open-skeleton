@@ -504,6 +504,53 @@ def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Named literal constants: the numbers a reader would change to retune.
+
+    The Rust analyzer has carried these since it was written and this one did
+    not, which showed up the first time both ran against a physics-heavy game.
+    Its 16 modules yielded 4 claims while the tuning constants that decide how
+    the whole thing feels -- gravity, friction, acceleration caps -- were
+    visible in every file and recorded nowhere.
+
+    Depth is what separates a tunable from a loop variable. A `const` at brace
+    depth 0 is a module constant in an ES module, and one at depth 1 is the
+    same thing inside the IIFE wrapper that buildless browser code still uses;
+    below that it is a local, and this makes no claim about it.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    depth = 0
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind == "punctuation":
+            if token.value == "{":
+                depth += 1
+            elif token.value == "}":
+                depth -= 1
+            continue
+        if token.kind != "identifier" or token.value != "const" or depth > 1:
+            continue
+        if index + 3 >= total:
+            continue
+        name = tokens[index + 1]
+        if name.kind != "identifier" or tokens[index + 2].value != "=":
+            continue
+        value = tokens[index + 3]
+        sign = ""
+        if value.value == "-" and index + 4 < total:
+            sign, value = "-", tokens[index + 4]
+        if value.kind not in {"number", "string"}:
+            continue
+        found[name.value] = {
+            "line": name.line,
+            "kind": "const",
+            "value": f"{sign}{value.value}" if value.kind == "number" else value.value,
+            "literal": value.kind,
+        }
+    return found
+
+
 def _server_receivers(tokens: list[Token]) -> set[str]:
     """Names bound to something that serves requests.
 
@@ -1110,6 +1157,7 @@ class TypeScriptLexicalAnalyzer:
             file_imports = _imported_names(file_tokens)
             file_aliases = _import_aliases(file_tokens)
             file_servers = _server_receivers(file_tokens)
+            file_tunables = _tunables(file_tokens)
             file_clients = {
                 name
                 for module_name, entry in file_imports.items()
@@ -1162,6 +1210,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"imported_names": file_imports} if file_imports else {}),
                         **({"external_origins": file_origins} if file_origins else {}),
                         **({"object_keys": file_object_keys} if file_object_keys else {}),
+                        **({"tunables": file_tunables} if file_tunables else {}),
                         **({"name_index": file_name_index} if file_name_index else {}),
                     },
                 )
