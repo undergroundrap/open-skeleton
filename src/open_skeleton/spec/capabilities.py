@@ -84,15 +84,26 @@ def verifying_paths(
 ) -> frozenset[str]:
     """Paths whose calls count as exercising a capability.
 
-    Two sources, both evidence-backed: files the scanner assigned the ``test``
-    role, and files cited by ``operator_harness`` claims. The second matters for
-    repositories whose real quality gate is a hand-run script rather than a
-    conventional suite.
+    Three sources, all evidence-backed: files the scanner assigned the ``test``
+    role, files cited by ``operator_harness`` claims, and files cited by
+    ``testing`` claims. The second matters for repositories whose real quality
+    gate is a hand-run script rather than a conventional suite.
+
+    The third exists because whole-file role is the wrong unit for some
+    languages. Rust's convention puts tests in a ``#[cfg(test)] mod tests``
+    block inside the file they cover, so the file's role is ``source`` and the
+    tests inside it were invisible here. A 52-module crate with 178 passing
+    tests reported every capability as having no verifying reference -- a
+    statement about this tracer, presented as a statement about the code.
+
+    Granularity is still the whole file, the same limitation the role-based
+    source has always had: a file is treated as exercising what it calls, and
+    the tests inside it are not separated from the rest.
     """
 
     paths = {str(item["path"]) for item in files if str(item["role"]) == "test"}
     for claim in claims:
-        if str(claim["category"]) != "operator_harness":
+        if str(claim["category"]) not in {"operator_harness", "testing"}:
             continue
         for evidence_id in claim.get("supporting_evidence", ()):
             record = evidence_by_id.get(evidence_id)
@@ -175,8 +186,29 @@ def build_capabilities(
     exercising = verifying_paths(files, claims, evidence_by_id)
 
     # Index call edges that originate in a verifying file, by callee short name.
-    # A verifying file calling its own helpers is self-reference, not coverage,
-    # so edges whose target is defined in the calling file are dropped.
+    # A dedicated test file calling its own helpers is self-reference rather
+    # than coverage, so edges whose target it also defines are dropped.
+    #
+    # That rule inverts for a source file carrying inline tests. Rust puts a
+    # `#[cfg(test)] mod tests` block in the file it covers, so a same-file call
+    # is not a helper -- it is the test calling the thing under test, which is
+    # the whole convention. Applying the dedicated-file rule to it discarded
+    # every inline test in the repository and reported a crate with 178 passing
+    # tests as having no verifying reference anywhere.
+    #
+    # The predicate is not the file's role. A hand-run harness under `scripts/`
+    # is a whole verification artifact too, and its self-calls are helpers just
+    # as a test file's are. What differs is a source file that merely contains
+    # tests, so those are the only ones exempted.
+    inline_only = {
+        str(record["path"])
+        for claim in claims
+        if str(claim["category"]) == "testing"
+        for evidence_id in claim.get("supporting_evidence", ())
+        if (record := evidence_by_id.get(evidence_id)) is not None
+        and str(record["path"]) not in {".", ""}
+    } - {str(item["path"]) for item in files if str(item["role"]) == "test"}
+    dedicated = exercising - inline_only
     calls_from_verifiers: dict[str, set[str]] = defaultdict(set)
     references_from_verifiers: dict[str, set[str]] = defaultdict(set)
     for edge in edges:
@@ -190,7 +222,7 @@ def build_capabilities(
             defined_in = {
                 path for name, path in symbol_paths.items() if _short_name(name) == callee
             }
-            if defined_in and defined_in <= {source}:
+            if source in dedicated and defined_in and defined_in <= {source}:
                 continue
             calls_from_verifiers[callee].add(source)
         elif relationship == "references_route_path":
