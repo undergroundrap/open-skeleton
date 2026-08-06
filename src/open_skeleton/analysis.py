@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from open_skeleton.analyzers.base import Analyzer
 from open_skeleton.analyzers.hum_semantic_index import HumSemanticIndexAnalyzer
 from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
 from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
@@ -465,6 +466,25 @@ def _attribute_claim_yield(
 AnalysisEventCallback = Callable[[str, int, int], None]
 
 
+def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Analyzer, ...]:
+    """The analyzers a run consults, in the order their claims are merged.
+
+    Declared at module scope and annotated with the protocol so conformance is
+    checked rather than assumed. As a tuple built inside the run function the
+    annotation had nowhere to attach, and `Analyzer` went unimported by
+    anything -- a contract five classes were expected to satisfy and none was
+    measured against.
+    """
+
+    return (
+        PythonAstAnalyzer(),
+        TypeScriptLexicalAnalyzer(),
+        RustLexicalAnalyzer(),
+        ProjectMetadataAnalyzer(),
+        HumSemanticIndexAnalyzer(hum_index),
+    )
+
+
 def analyze_snapshot(
     snapshot: Snapshot,
     *,
@@ -476,14 +496,7 @@ def analyze_snapshot(
     started = time.perf_counter()
     created_at = utc_now()
     results = []
-    analyzers = (
-        PythonAstAnalyzer(),
-        TypeScriptLexicalAnalyzer(),
-        RustLexicalAnalyzer(),
-        ProjectMetadataAnalyzer(),
-        HumSemanticIndexAnalyzer(hum_index),
-    )
-    for analyzer in analyzers:
+    for analyzer in build_analyzers(hum_index):
         result = analyzer.analyze(snapshot)
         results.append(result)
         if on_event is not None:

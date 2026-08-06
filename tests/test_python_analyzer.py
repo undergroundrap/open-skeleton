@@ -634,3 +634,76 @@ class RouteRoleTests(TestCase):
         self.assertIn("test_route", grouped)
         self.assertNotIn("http_route", grouped)
         self.assertIn("exercises the framework", grouped["test_route"][0])
+
+
+class EndpointPositionTests(TestCase):
+    """A URL-shaped string is only an endpoint if the program dials it.
+
+    Found by running this analyzer on its own repository. It reported five
+    hardcoded network endpoints in a tool whose design guarantee is that it
+    makes no network calls at all. Every one was a string in a position that
+    means something else, including the detector literal the TypeScript
+    analyzer searches for -- the analyzer reporting its own search term as an
+    address it contacts.
+    """
+
+    def _endpoints(self, source: str, role: str = "source") -> set[str]:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = "test_sample.py" if role == "test" else "sample.py"
+            (root / name).write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        found: set[str] = set()
+        for claim in result.claims:
+            if claim.category == "hardcoded_endpoint":
+                found.add(claim.claim)
+        return found
+
+    def test_a_dialled_endpoint_is_still_reported(self) -> None:
+        found = self._endpoints('import x\nURL = "https://api.example.com/v1"\nx.get(URL)\n')
+        self.assertTrue(found, "a genuine hardcoded endpoint must still be reported")
+
+    def test_a_searched_for_literal_is_not_an_endpoint(self) -> None:
+        # The exact shape that produced the false claim: a detector string.
+        self.assertEqual(
+            self._endpoints('def f(t):\n    return "http://localhost:8000" in t\n'), set()
+        )
+
+    def test_a_match_method_argument_is_not_an_endpoint(self) -> None:
+        self.assertEqual(
+            self._endpoints('def f(t):\n    return t.count("http://a.test/b")\n'), set()
+        )
+
+    def test_a_schema_identifier_is_not_an_endpoint(self) -> None:
+        # `$schema` names a vocabulary. Nothing fetches it.
+        self.assertEqual(
+            self._endpoints('S = {"$schema": "https://json-schema.org/draft/2020-12/schema"}\n'),
+            set(),
+        )
+
+    def test_a_fixture_endpoint_is_not_the_systems_endpoint(self) -> None:
+        source = 'import x\ndef test_it():\n    x.get("https://fixture.test/a")\n'
+        self.assertEqual(self._endpoints(source, role="test"), set())
+
+
+class AnalyzerContractTests(TestCase):
+    """Every analyzer satisfies the protocol that describes one.
+
+    `Analyzer` was flagged as an orphan by this tool running on its own
+    repository: nothing imported it, so a Protocol meant to constrain five
+    implementations constrained none of them. Structural typing does not
+    require the import, which is exactly why an unreferenced Protocol is
+    documentation wearing a type's clothes. Asserting conformance here is what
+    turns it back into a contract.
+    """
+
+    def test_every_registered_analyzer_satisfies_the_protocol(self) -> None:
+        from open_skeleton.analysis import build_analyzers
+        from open_skeleton.analyzers.base import Analyzer
+
+        registry = build_analyzers()
+        self.assertTrue(registry, "the registry must not be empty")
+        for analyzer in registry:
+            checked: Analyzer = analyzer
+            self.assertTrue(checked.name, f"{analyzer!r} declares no name")
+            self.assertTrue(checked.version, f"{analyzer!r} declares no version")

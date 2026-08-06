@@ -51,6 +51,29 @@ CREATE_TABLE_PATTERN = re.compile(
 )
 ROUTE_PATH_LITERAL = re.compile(r"^/[A-Za-z0-9_\-./{}]*$")
 ENDPOINT_LITERAL = re.compile(r"^(?:https?|ws|wss)://[^\s'\"]+$", re.IGNORECASE)
+# String methods whose argument is something being looked for, not dialed.
+STRING_MATCH_METHODS = frozenset(
+    {
+        "count",
+        "find",
+        "rfind",
+        "index",
+        "startswith",
+        "endswith",
+        "split",
+        "rsplit",
+        "partition",
+        "replace",
+        "strip",
+        "lstrip",
+        "rstrip",
+        "match",
+        "search",
+        "compile",
+    }
+)
+# Mapping keys whose value names a vocabulary rather than a host to contact.
+IDENTIFIER_KEYS = frozenset({"$schema", "$id", "xmlns", "namespace", "schema"})
 INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
     re.IGNORECASE,
@@ -563,6 +586,47 @@ def _signatures(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _reference_literals(tree: ast.Module) -> set[int]:
+    """Constant nodes that name a string rather than address a service.
+
+    A URL-shaped literal is not automatically an endpoint the program calls.
+    Three positions make it something else, and all three occur in this
+    repository:
+
+    * **A pattern being matched.** `"http://localhost:8000" in token.value`
+      is a detector. Reporting it as a hardcoded endpoint says the analyzer
+      dials the address it was written to find.
+    * **A schema or namespace identifier.** A `$schema` value is a name that
+      happens to look like a location; nothing fetches it.
+    * **A comparison operand.** `if host == "https://x.test/y"` tests a value
+      rather than contacting one.
+
+    Returned as node identities because `ast` exposes no parent links, so
+    position has to be recorded while the parent is still in hand.
+    """
+
+    found: set[int] = set()
+
+    def mark(node: ast.expr | None) -> None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.add(id(node))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            mark(node.left)
+            for operand in node.comparators:
+                mark(operand)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr in STRING_MATCH_METHODS:
+                for argument in node.args:
+                    mark(argument)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=False):
+                if isinstance(key, ast.Constant) and key.value in IDENTIFIER_KEYS:
+                    mark(value)
+    return found
+
+
 def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Numeric literals written inside a function body.
 
@@ -945,6 +1009,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.route_evidence: list[str] = []
         self.route_path_literals: set[str] = set()
         self.endpoint_literals: set[str] = set()
+        self.reference_literals = _reference_literals(tree)
         self.endpoint_evidence: list[str] = []
         self.route_auth_control_evidence: list[str] = []
         self.typed_route_evidence: list[str] = []
@@ -1543,7 +1608,14 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
     def visit_Constant(self, node: ast.Constant) -> None:
         if isinstance(node.value, str) and ENDPOINT_LITERAL.match(node.value):
-            if node.value not in self.endpoint_literals:
+            # A literal in a test states what the fixture uses, not what the
+            # system contacts, and one in a match position is a pattern. Both
+            # were being reported as endpoints this program dials.
+            if (
+                str(self.file_record.role) != "test"
+                and id(node) not in self.reference_literals
+                and node.value not in self.endpoint_literals
+            ):
                 self.endpoint_literals.add(node.value)
                 receipt = self._evidence(
                     start_line=node.lineno,
