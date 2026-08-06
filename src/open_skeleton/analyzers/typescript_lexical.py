@@ -270,6 +270,121 @@ def _pattern_bindings(tokens: list[Token], start: int) -> tuple[list[Token], int
     return names, index
 
 
+MUTABLE_CONSTRUCTORS = frozenset({"Map", "Set", "WeakMap", "WeakSet", "Array"})
+MUTATING_METHODS = frozenset(
+    {"set", "add", "delete", "push", "pop", "shift", "unshift", "splice", "clear", "sort"}
+)
+
+
+def _module_state(tokens: list[Token], declarations: list[Declaration]) -> list[tuple[str, int]]:
+    """Module-scope containers that something writes to while the process runs.
+
+    This is the same property the Python analyzer reports as process-local
+    state and the Rust one reports for a shared static: a container declared
+    once at module scope and mutated at runtime holds values that live in one
+    process and are invisible to a second. Naming it the same way in every
+    language is the point — a reader should not have to learn three vocabularies
+    for one fact.
+
+    A container that is never mutated is a lookup table, and calling it state
+    would repeat an error this codebase has already made twice.
+    """
+
+    module_level = {
+        item.name: item.start_line
+        for item in declarations
+        if "." not in item.name and item.kind in {"binding", "constant"}
+    }
+    if not module_level:
+        return []
+
+    # A declaration only counts as a container if it is built like one.
+    containers: dict[str, int] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in module_level:
+            continue
+        following = tokens[index + 1].value if index + 1 < total else ""
+        if following != "=":
+            continue
+        scan = index + 2
+        while scan < total and tokens[scan].value in {"new", "await"}:
+            scan += 1
+        if scan >= total:
+            continue
+        candidate = tokens[scan]
+        if candidate.value in {"{", "["} or (
+            candidate.kind == "identifier" and candidate.value in MUTABLE_CONSTRUCTORS
+        ):
+            containers[token.value] = module_level[token.value]
+
+    mutated: dict[str, int] = {}
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in containers:
+            continue
+        following = tokens[index + 1].value if index + 1 < total else ""
+        after = tokens[index + 2] if index + 2 < total else None
+        if following == "." and after is not None and after.value in MUTATING_METHODS:
+            mutated.setdefault(token.value, containers[token.value])
+        elif following == "[":
+            # `cache[key] = value` is a write; `cache[key]` alone is a read.
+            scan = index + 2
+            depth = 1
+            while scan < total and depth:
+                if tokens[scan].value == "[":
+                    depth += 1
+                elif tokens[scan].value == "]":
+                    depth -= 1
+                scan += 1
+            if scan < total and tokens[scan].value == "=":
+                mutated.setdefault(token.value, containers[token.value])
+    return sorted(mutated.items(), key=lambda pair: pair[1])
+
+
+def _environment_reads(tokens: list[Token]) -> dict[str, int]:
+    """Names read from `process.env`, where configuration enters a Node process."""
+
+    found: dict[str, int] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "env":
+            continue
+        if index == 0 or tokens[index - 1].value != ".":
+            continue
+        if index < 2 or tokens[index - 2].value != "process":
+            continue
+        following = tokens[index + 1].value if index + 1 < total else ""
+        if index + 2 >= total:
+            continue
+        # `process.env.NAME` and `process.env["NAME"]` are the same read.
+        subscripted = following == "[" and tokens[index + 2].kind == "string"
+        attributed = following == "." and tokens[index + 2].kind == "identifier"
+        if subscripted or attributed:
+            found.setdefault(tokens[index + 2].value, token.line)
+    return found
+
+
+def _throw_sites(tokens: list[Token]) -> dict[str, int]:
+    """Exception types this module throws, with the line each first appears.
+
+    The Python analyzer records what a handler raises and Rust records what a
+    signature can return. This is the same question for a language that throws:
+    what can come out of a call that is not a value.
+    """
+
+    found: dict[str, int] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "throw":
+            continue
+        scan = index + 1
+        if scan < total and tokens[scan].value == "new":
+            scan += 1
+        if scan < total and tokens[scan].kind == "identifier":
+            found.setdefault(tokens[scan].value, token.line)
+    return found
+
+
 def _name_index(tokens: list[Token]) -> dict[str, int]:
     """Every identifier this module mentions, with the line it first appears.
 
@@ -858,6 +973,9 @@ class TypeScriptLexicalAnalyzer:
             file_imports = _imported_names(file_tokens)
             file_origins = _external_origins(file_tokens)
             file_name_index = _name_index(file_tokens)
+            file_state = _module_state(file_tokens, file_declarations)
+            file_env = _environment_reads(file_tokens)
+            file_throws = _throw_sites(file_tokens)
             file_object_keys = _object_keys(
                 file_tokens,
                 frozenset(item.name.rsplit(".", 1)[-1] for item in file_declarations),
@@ -1108,6 +1226,65 @@ class TypeScriptLexicalAnalyzer:
                     "http_client_inventory",
                     "high",
                     fetch_evidence,
+                    file_record.path,
+                )
+
+            for state_name, state_line in file_state:
+                state_receipt = add_evidence(
+                    file_record.path,
+                    state_line,
+                    state_line,
+                    f"{module}.{state_name}",
+                    "process_local_state",
+                    file_record.sha256,
+                )
+                add_claim(
+                    (
+                        f"{module}.{state_name} is a module-scope container written to while "
+                        "the process runs; its contents are process-local, so a second "
+                        "instance of this program observes none of them."
+                    ),
+                    "process_local_state",
+                    "high",
+                    [state_receipt.evidence_id],
+                    file_record.path,
+                )
+
+            for setting, setting_line in sorted(file_env.items(), key=lambda pair: pair[1]):
+                env_receipt = add_evidence(
+                    file_record.path,
+                    setting_line,
+                    setting_line,
+                    module,
+                    "environment_setting",
+                    file_record.sha256,
+                )
+                add_claim(
+                    f"{module} reads environment setting {setting}.",
+                    "environment_setting",
+                    "medium",
+                    [env_receipt.evidence_id],
+                    file_record.path,
+                )
+
+            if file_throws:
+                thrown = ", ".join(sorted(file_throws))
+                throw_receipt = add_evidence(
+                    file_record.path,
+                    min(file_throws.values()),
+                    min(file_throws.values()),
+                    module,
+                    "failure_surface",
+                    file_record.sha256,
+                )
+                add_claim(
+                    (
+                        f"{module} throws {len(file_throws)} distinct type(s): {thrown}. "
+                        "A caller that does not catch them sees them propagate."
+                    ),
+                    "failure_surface",
+                    "medium",
+                    [throw_receipt.evidence_id],
                     file_record.path,
                 )
             if localhost_evidence:

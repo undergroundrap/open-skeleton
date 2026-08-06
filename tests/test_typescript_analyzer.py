@@ -10,11 +10,14 @@ from unittest import TestCase
 from open_skeleton.analyzers.typescript_lexical import (
     TypeScriptLexicalAnalyzer,
     _declarations,
+    _environment_reads,
     _external_origins,
     _imported_names,
+    _module_state,
     _object_keys,
     _parameter_names,
     _references,
+    _throw_sites,
     _tokens,
 )
 from open_skeleton.scanner import scan_repository
@@ -306,3 +309,48 @@ class ObjectKeyTests(TestCase):
         declared = self._keys("const hp = 3; const o = { hp };")
         self.assertIn("hp", declared)
         self.assertEqual(self._keys("const o = { unknownName };"), {})
+
+
+class TypeScriptClaimFamilyTests(TestCase):
+    """The same facts Python and Rust report, named the same way."""
+
+    def _state(self, source: str) -> list[Any]:
+        tokens = _tokens(source)
+        return _module_state(tokens, _declarations(tokens))
+
+    def test_a_mutated_module_container_is_process_local_state(self) -> None:
+        found = self._state("const cache = new Map();\nexport function put(k){ cache.set(k, 1); }")
+        self.assertEqual([name for name, _ in found], ["cache"])
+
+    def test_an_array_written_by_push_counts(self) -> None:
+        found = self._state("const queue = [];\nfunction add(v){ queue.push(v); }")
+        self.assertEqual([name for name, _ in found], ["queue"])
+
+    def test_a_container_that_is_never_mutated_is_a_lookup_table(self) -> None:
+        # Calling a constant table state would repeat an error this codebase
+        # has already made twice.
+        self.assertEqual(self._state("const lookup = { a: 1 };\nconst x = lookup.a;"), [])
+
+    def test_a_subscript_read_is_not_a_write(self) -> None:
+        self.assertEqual(self._state("const m = {};\nconst v = m[key];"), [])
+
+    def test_a_subscript_assignment_is_a_write(self) -> None:
+        found = self._state("const m = {};\nfunction set(k, v){ m[k] = v; }")
+        self.assertEqual([name for name, _ in found], ["m"])
+
+    def test_environment_reads_cover_both_access_forms(self) -> None:
+        found = _environment_reads(
+            _tokens('const a = process.env.API_KEY;\nconst b = process.env["REGION"];')
+        )
+        self.assertEqual(sorted(found), ["API_KEY", "REGION"])
+
+    def test_an_unrelated_env_property_is_not_a_setting(self) -> None:
+        self.assertEqual(_environment_reads(_tokens("const e = config.env.mode;")), {})
+
+    def test_thrown_types_are_recorded(self) -> None:
+        found = _throw_sites(
+            _tokens(
+                'function f(){ throw new ConfigError("x"); }\nfunction g(){ throw new TypeError("y"); }'
+            )
+        )
+        self.assertEqual(sorted(found), ["ConfigError", "TypeError"])
