@@ -173,10 +173,13 @@ class RustDeclarationTests(TestCase):
         found = _constants(tokenize('const NAMES: [&str; 2] = ["a", "b"];\n'))
         self.assertEqual(found["NAMES"]["type"], "[&str;2]")
 
-    def test_an_unrecoverable_value_is_omitted_rather_than_mangled(self) -> None:
-        # String contents are discarded by the tokenizer, so what survives is
-        # punctuation. Printing "[,]" would be worse than printing nothing.
-        self.assertNotIn("value", _constants(tokenize('static V: &str = "1.0";\n'))["V"])
+    def test_a_string_valued_constant_recovers_its_contents(self) -> None:
+        # This once asserted the opposite: the tokenizer discarded string
+        # bodies, so `"1.0"` survived only as punctuation and the value was
+        # dropped rather than printed as garbage. Keeping literals as typed
+        # tokens makes the real value available, which is what a reader of a
+        # configuration constant actually wants.
+        self.assertEqual(_constants(tokenize('static V: &str = "1.0";\n'))["V"]["value"], "1.0")
 
     def test_struct_fields_are_recorded_with_their_types(self) -> None:
         found = _struct_fields(

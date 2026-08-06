@@ -57,6 +57,11 @@ ITEM_KEYWORDS = {
 # call site. `unwrap_or*` variants are excluded: they supply a fallback.
 PANIC_MACROS = frozenset({"panic", "unreachable", "todo", "unimplemented", "assert", "assert_eq"})
 PANIC_METHODS = frozenset({"unwrap", "expect", "unwrap_err", "expect_err"})
+HTTP_METHOD_NAMES = frozenset({"get", "post", "put", "delete", "patch", "head", "options"})
+# Calls whose first string argument is a served path. `nest` and `scope` mount a
+# sub-router under a prefix, which is a mount point rather than an endpoint.
+MOUNT_BUILDERS = frozenset({"nest", "scope", "nest_service"})
+ROUTE_BUILDERS = frozenset({"route", "resource"}) | MOUNT_BUILDERS
 IDENTIFIER_START = re.compile(r"[A-Za-z_]")
 IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_]")
 
@@ -132,11 +137,15 @@ def tokenize(source: str) -> list[Token]:
         if character in {"r", "b"} and index + 1 < length and source[index + 1] in {'"', "#"}:
             end = _read_raw_string(source, index, length)
             if end > index + 1:
+                opening = source.find('"', index)
+                body = source[opening + 1 : end].rstrip("#").rstrip('"')
+                tokens.append(Token("string", body, line))
                 line += source[index:end].count("\n")
                 index = end
                 continue
         if character == '"':
             cursor = index + 1
+            start_line = line
             while cursor < length:
                 if source[cursor] == "\\":
                     cursor += 2
@@ -145,6 +154,11 @@ def tokenize(source: str) -> list[Token]:
                     break
                 line += source[cursor] == "\n"
                 cursor += 1
+            # The contents are kept as a `string` token rather than discarded.
+            # Consumers that walk identifiers filter on kind and are unaffected,
+            # but a route path only exists inside a literal, so throwing the
+            # literal away made every served path unreachable by construction.
+            tokens.append(Token("string", source[index + 1 : cursor], start_line))
             index = cursor + 1
             continue
         if character == "'":
@@ -514,6 +528,68 @@ def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
+def _http_routes(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Served paths and their methods, as `(method, path, line)`.
+
+    Two forms cover the common Rust web frameworks. A builder call names the
+    path and its handlers together, as in `.route("/x", get(h).post(h2))`, and
+    an attribute macro puts the method in the attribute itself, as in
+    `#[get("/x")]`. Both are recognised; `nest`/`scope` are recorded as mounts
+    because a prefix is not itself a served path.
+
+    A path built from a variable — `.route($path, ...)` inside a macro, or a
+    `format!` call — yields no string token, so nothing is recorded. That is
+    the intended outcome: the value is not knowable without running the
+    program, and naming a guess would be a fabrication.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier":
+            continue
+        value = token.value
+
+        # `#[get("/path")]` — the attribute macro form used by actix and rocket.
+        if (
+            value in HTTP_METHOD_NAMES
+            and index >= 2
+            and tokens[index - 2].value == "#"
+            and tokens[index - 1].value == "["
+            and index + 2 < total
+            and tokens[index + 1].value == "("
+            and tokens[index + 2].kind == "string"
+        ):
+            found.append((value.upper(), tokens[index + 2].value, token.line))
+            continue
+
+        if value not in ROUTE_BUILDERS or index + 2 >= total:
+            continue
+        if tokens[index + 1].value != "(" or tokens[index + 2].kind != "string":
+            continue
+        path = tokens[index + 2].value
+        if value in MOUNT_BUILDERS:
+            found.append(("MOUNT", path, token.line))
+            continue
+        # Collect every method named inside this call: axum chains them onto
+        # one path, so `get(h).post(h2)` serves two.
+        methods: list[str] = []
+        depth = 1
+        scan = index + 3
+        while scan < total and depth:
+            current = tokens[scan]
+            if current.value == "(":
+                depth += 1
+            elif current.value == ")":
+                depth -= 1
+            elif current.kind == "identifier" and current.value in HTTP_METHOD_NAMES:
+                methods.append(current.value.upper())
+            scan += 1
+        for method in methods or ["ANY"]:
+            found.append((method, path, token.line))
+    return found
+
+
 def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """Methods inside `impl` blocks, as `(type, method, line)`.
 
@@ -673,6 +749,7 @@ class RustLexicalAnalyzer:
             file_impls = _impl_methods(tokens)
             file_errors = _error_surface(tokens)
             file_traits = _trait_implementations(tokens)
+            file_routes = _http_routes(tokens)
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
@@ -881,6 +958,37 @@ class RustLexicalAnalyzer:
                         category="error_surface",
                         supporting=(error_receipt.evidence_id,),
                         importance="medium",
+                        path=file_record.path,
+                    )
+                )
+
+            for method, route_path, route_line in file_routes:
+                # A route declared in a test file describes the fixture, not the
+                # served surface. Filing both under one category is how a suite
+                # of test doubles gets counted as an API.
+                mounted = method == "MOUNT"
+                category = "http_route"
+                if file_record.role == "test":
+                    category = "test_route"
+                elif mounted:
+                    category = "route_mount"
+                route_receipt = receipt(
+                    file_record.path, route_line, category, f"{method} {route_path}", excerpt
+                )
+                text = (
+                    f"{route_path} mounts a sub-router, so every path it contains is served "
+                    f"beneath this prefix."
+                    if mounted
+                    else f"{method} {route_path} is registered as a route in {module}."
+                )
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=text,
+                        category=category,
+                        supporting=(route_receipt.evidence_id,),
+                        importance="high" if category == "http_route" else "medium",
                         path=file_record.path,
                     )
                 )

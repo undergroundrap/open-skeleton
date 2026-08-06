@@ -493,6 +493,44 @@ def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _import_aliases(tokens: list[Token]) -> dict[str, str]:
+    """Local binding to original name for `import { a as b }` forms.
+
+    `_imported_names` records the local binding, which is the right answer for
+    "what does this module contribute". It is the wrong answer for counting
+    hook calls: `import { useState as useLocal }` then `useLocal(0)` is a
+    `useState` call, and matching the literal name undercounts it.
+    """
+
+    aliases: dict[str, str] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "as":
+            continue
+        if index == 0 or index + 1 >= total:
+            continue
+        original = tokens[index - 1]
+        local = tokens[index + 1]
+        if original.kind == "identifier" and local.kind == "identifier":
+            aliases[local.value] = original.value
+    return aliases
+
+
+def _request_path(value: str) -> tuple[str, bool]:
+    """A request path and whether it is fully known.
+
+    A template literal such as `/api/player/${id}` is only knowable up to its
+    first substitution. Returning the static prefix marked inexact lets the
+    path be reported as a pattern; returning the whole string would assert a
+    literal `${id}` segment that no server ever sees.
+    """
+
+    marker = value.find("${")
+    if marker < 0:
+        return value, True
+    return value[:marker], False
+
+
 def _imported_names(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     """Which names each module contributes, not merely that it was imported.
 
@@ -971,6 +1009,7 @@ class TypeScriptLexicalAnalyzer:
             file_state_fields = _state_fields(file_tokens)
             file_declarations = _declarations(file_tokens)
             file_imports = _imported_names(file_tokens)
+            file_aliases = _import_aliases(file_tokens)
             file_origins = _external_origins(file_tokens)
             file_name_index = _name_index(file_tokens)
             file_state = _module_state(file_tokens, file_declarations)
@@ -1022,6 +1061,7 @@ class TypeScriptLexicalAnalyzer:
             )
 
             fetch_evidence: list[str] = []
+            requested: list[tuple[str, bool, int, str]] = []
             localhost_evidence: list[str] = []
             hook_evidence: dict[str, list[str]] = {name: [] for name in REACT_HOOKS}
             store_evidence: dict[str, list[str]] = {name: [] for name in CLIENT_STORES}
@@ -1146,6 +1186,14 @@ class TypeScriptLexicalAnalyzer:
                         file_record.sha256,
                     )
                     fetch_evidence.append(receipt.evidence_id)
+                    # The call site was already counted. What was missing is
+                    # *which* endpoint it calls, which is the half that lets a
+                    # caller be joined to the route that serves it.
+                    argument = file_tokens[index + 2] if index + 2 < len(file_tokens) else None
+                    if argument is not None and argument.kind == "string":
+                        called, exact = _request_path(argument.value)
+                        if called.startswith(("/", "http://", "https://")):
+                            requested.append((called, exact, token.line, receipt.evidence_id))
                     edges.append(
                         EdgeRecord(
                             edge_id=stable_id(
@@ -1183,7 +1231,8 @@ class TypeScriptLexicalAnalyzer:
                         [receipt.evidence_id] * token.value.count("http://localhost:8000")
                     )
 
-                if token.value in REACT_HOOKS and _call_open_paren(file_tokens, index) is not None:
+                hook_name = file_aliases.get(token.value, token.value)
+                if hook_name in REACT_HOOKS and _call_open_paren(file_tokens, index) is not None:
                     receipt = add_evidence(
                         file_record.path,
                         token.line,
@@ -1192,7 +1241,7 @@ class TypeScriptLexicalAnalyzer:
                         "react_hook_call",
                         file_record.sha256,
                     )
-                    hook_evidence[token.value].append(receipt.evidence_id)
+                    hook_evidence[hook_name].append(receipt.evidence_id)
 
                 if token.value in CLIENT_STORES and next_value == ".":
                     receipt = add_evidence(
@@ -1226,6 +1275,28 @@ class TypeScriptLexicalAnalyzer:
                     "http_client_inventory",
                     "high",
                     fetch_evidence,
+                    file_record.path,
+                )
+
+            # One claim per distinct endpoint, not per call site: the same path
+            # requested from three components is one edge of the system, and
+            # three claims saying so would inflate the count without adding a
+            # fact.
+            by_path: dict[tuple[str, bool], list[str]] = {}
+            for called, exact, _line, evidence_id in requested:
+                by_path.setdefault((called, exact), []).append(evidence_id)
+            for (called, exact), receipts in sorted(by_path.items()):
+                shape = (
+                    f"{called} is requested by {module}"
+                    if exact
+                    else f"{called} begins a request path built by {module}, whose remaining "
+                    "segments are interpolated at run time"
+                )
+                add_claim(
+                    f"{shape}; the server side of this call is whichever route matches it.",
+                    "http_client_route" if exact else "http_client_route_prefix",
+                    "high" if exact else "medium",
+                    receipts,
                     file_record.path,
                 )
 

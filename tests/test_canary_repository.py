@@ -148,3 +148,111 @@ class CanaryRepositoryTests(TestCase):
         for claim in self._claims:
             self.assertTrue(claim.claim, "a claim with empty text is not a claim")
         self.assertGreater(line_count, 0)
+
+
+RUST_CANARY = """\
+use axum::{Router, routing::get};
+
+// .route("/commented-rust", get(trap_handler))
+const DOCUMENTED: &str = ".route(\\"/literal-rust\\", get(x))";
+
+pub fn build() -> Router {
+    Router::new()
+        .route("/real-rust", get(real_handler).post(create_handler))
+        .nest("/api", api_router())
+}
+
+#[post("/attribute-rust")]
+async fn attribute_handler() {}
+
+macro_rules! make_route {
+    ($path:expr) => { Router::new().route($path, get(real_handler)) };
+}
+"""
+
+TS_CANARY = """\
+import { useState } from "react";
+import { useState as useLocal } from "react";
+
+// const [commented, setCommented] = useState(0);
+const DOCUMENTED = 'fetch("/api/literal-trap")';
+
+export function App() {
+  const [real, setReal] = useState(0);
+  const [aliased, setAliased] = useLocal(0);
+  const id = "abc";
+  fetch(`/api/dynamic/${id}`);
+  fetch("/api/real");
+  return null;
+}
+"""
+
+
+class CrossLanguageCanaryTests(TestCase):
+    """The same six traps, in the two languages analyzed lexically.
+
+    The first version of this fixture only covered Python and passed cleanly,
+    which was misleading: Rust and TypeScript passed every false-positive test
+    by extracting nothing at all. An analyzer that finds no routes cannot find
+    a wrong one. Every case below therefore asserts a true positive alongside
+    the trap it is paired with.
+    """
+
+    _claims: ClassVar[tuple[Any, ...]]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._directory = TemporaryDirectory()
+        root = Path(cls._directory.name)
+        (root / "main.rs").write_text(RUST_CANARY, encoding="utf-8")
+        (root / "app.tsx").write_text(TS_CANARY, encoding="utf-8")
+        cls._claims = tuple(analyze_snapshot(scan_repository(root)).claims)
+
+    _directory: ClassVar[TemporaryDirectory[str]]
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._directory.cleanup()
+
+    def _text(self) -> str:
+        return " ".join(claim.claim for claim in self._claims)
+
+    def test_rust_extracts_a_real_route_with_every_method_it_serves(self) -> None:
+        # axum chains methods onto one path, so a single `.route` call can
+        # serve two. Recording only the first understates the surface.
+        self.assertIn("GET /real-rust", self._text())
+        self.assertIn("POST /real-rust", self._text())
+
+    def test_rust_resolves_an_attribute_macro_route(self) -> None:
+        self.assertIn("POST /attribute-rust", self._text())
+
+    def test_rust_records_a_mount_as_a_prefix_not_an_endpoint(self) -> None:
+        # `/api` is where a sub-router attaches. Listing it as a served path
+        # would put an endpoint in the catalog that answers nothing.
+        self.assertIn("/api mounts a sub-router", self._text())
+
+    def test_rust_ignores_routes_in_comments_and_string_literals(self) -> None:
+        self.assertNotIn("/commented-rust", self._text())
+        self.assertNotIn("/literal-rust", self._text())
+
+    def test_rust_does_not_invent_a_macro_parameter_path(self) -> None:
+        # `.route($path, ...)` names no literal, so there is nothing to report.
+        self.assertNotIn("$path", self._text())
+
+    def test_typescript_extracts_the_endpoint_a_fetch_calls(self) -> None:
+        # Counting call sites says the frontend talks to something. Naming the
+        # path is what lets a caller be joined to the route that serves it.
+        self.assertIn("/api/real is requested", self._text())
+
+    def test_typescript_reports_an_interpolated_path_as_a_prefix(self) -> None:
+        text = self._text()
+        self.assertIn("/api/dynamic/ begins a request path", text)
+        self.assertNotIn("/api/dynamic/abc", text)
+
+    def test_typescript_resolves_an_aliased_hook_import(self) -> None:
+        # `useState as useLocal` is still a useState call. Matching the literal
+        # name reported one where there are two.
+        self.assertIn("useState 2 times", self._text())
+
+    def test_typescript_ignores_a_fetch_inside_a_string_literal(self) -> None:
+        self.assertNotIn("/api/literal-trap", self._text())
