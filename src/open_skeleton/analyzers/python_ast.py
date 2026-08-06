@@ -1730,14 +1730,24 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                             supporting=(evidence.evidence_id,),
                         )
                 if sql:
+                    # A table built inside a test is the fixture's shape, not
+                    # the system's. Filing both under one category is how a
+                    # schema-three ledger written to exercise a migration ends
+                    # up listed beside the production tables it stands in for.
+                    in_test = str(self.file_record.role) == "test"
                     for match in CREATE_TABLE_PATTERN.finditer(sql):
                         table = match.group(1)
                         self._claim(
-                            text=f"{self.current_qualified_name} creates SQLite table {table}.",
-                            category="storage_schema",
+                            text=(
+                                f"{self.current_qualified_name} creates SQLite table {table} "
+                                "as a test fixture."
+                                if in_test
+                                else f"{self.current_qualified_name} creates SQLite table {table}."
+                            ),
+                            category="test_storage_schema" if in_test else "storage_schema",
                             status="verified",
                             confidence=1.0,
-                            importance="high",
+                            importance="medium" if in_test else "high",
                             supporting=(evidence.evidence_id,),
                         )
                     insert_match = INSERT_TABLE_PATTERN.search(sql)
