@@ -8,7 +8,7 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 - `open-skeleton spec`: outline-driven long-form specifications projected from the
   claim ledger, with user-editable JSON profiles and no model in the path
-- 85-section standard profile covering functional surface, state ownership,
+- 90-section standard profile covering functional surface, state ownership,
   integration, security posture, verification, and enterprise delivery concerns,
   with roughly 700 technology terms across APM, cloud, provisioning, CI,
   brokers, identity, payments, analytics, and feature-flag ecosystems
@@ -26,6 +26,30 @@ All notable changes will be documented here. This project follows Semantic Versi
   matching the spelling imports and stack traces use
 - deeper TypeScript extraction: value bindings, destructuring, class and
   interface members, enum members, and object literal keys
+- Rust extraction brought to the same families: `const`/`static` tunables with
+  their declared types, struct fields, impl methods attributed to the type
+  rather than the trait, shared statics as process-local state, the Result and
+  `?` error surface, and trait implementations as satisfied contracts
+- TypeScript claim families matching Python and Rust by name rather than by
+  language: module-scope state written at runtime, `process.env` reads in both
+  access forms, and thrown types
+- substitute analysis: an absent concern names the structure doing its job,
+  with two caveats printed every time — a substitute is a structural
+  resemblance rather than an equivalence, and nothing recommends adopting the
+  product it stands in for
+- a security control matrix consolidating twelve controls into one table, which
+  distinguishes a control checked and found missing from one never checked
+- an endpoint catalog giving each route its handler's guard count, HTTP
+  refusals, and response field names
+- module-level data flow: where data enters, rests, and leaves, stated at the
+  granularity the call edges actually support
+- per-section provenance naming the files each section's conclusions were read
+  out of
+- `benchmarks/generalization/run_generalization.py`, which measures whether this
+  analyses repositories or one repository, and reports yield per file each
+  analyzer actually read so a weak analyzer is distinguishable from clean code
+- `benchmarks/comparison/run_structure_diff.py`, which compares what two
+  specifications are *about* rather than what they name
 - re-runnable applicability probes with four verdicts (`applicable`, `degenerate`,
   `absent`, `structural`); an absent concern prints the query that found nothing
 - a numeric tunable index and a consolidated failure-response surface, both

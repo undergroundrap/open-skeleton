@@ -23,8 +23,8 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Bounded traversal with symlink, secret, binary, generated-output, malformed-encoding, and file-size controls
 - Deterministic SHA-256 file and snapshot identities
 - Python AST symbols, imports, calls, FastAPI routes, typed parameters, state mutation, SQLite/JSON persistence, CORS, tests, process exits, and selected failure behavior
-- Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, and imports
-- Comment-safe TypeScript/JavaScript lexical facts for symbols, imports, fetch calls, endpoint literals, React hooks, browser storage, and tests
+- Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, imports, `const`/`static` tunables, struct fields, impl methods, shared statics, the Result/`?` error surface, and trait implementations
+- Comment-safe TypeScript/JavaScript lexical facts for value bindings, class and interface members, object literal keys, imports, fetch calls, endpoint literals, React hooks, browser storage, module-scope state, `process.env` reads, thrown types, and tests
 - Project-manifest and Markdown reconciliation for dependencies, API tables, runtime instructions, Tailwind claims, tests, and CI
 - Native `hum.semantic_graph.v0` ingestion without implicitly executing the Hum compiler
 - Atomic `verified`, `inferred`, `conflict`, `unknown`, and `stale` claims with alternatives and invalidation keys
@@ -33,6 +33,11 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Outline-driven long-form specifications from user-editable profiles, where absence is a verdict backed by the query that found nothing
 - Per-route sequence diagrams and a persistence entity diagram, generated from the graph rather than narrated
 - Implemented-capability catalog with traceability computed from call edges and route-path literals, naming the capabilities no test or harness reaches
+- Declared-surface extraction a symbol index misses: model fields, function signatures with defaults as written, returned payload shapes, object literal keys, and imported names per module
+- Runtime-reach extraction: platform API called through imports, and third-party hosts named in stylesheets and markup that no dependency manifest shows
+- Substitute analysis, so an absent concern names the structure doing its job instead of stopping at the absence
+- A security control matrix, an endpoint catalog with per-handler guards and refusals, and module-level data flow
+- Per-section provenance: which files each section's conclusions were read out of
 - Citation integrity verification that re-resolves every receipt against current source bytes
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract
@@ -145,7 +150,7 @@ The included gold set pins `SINGLE-PLAYER-AI-MUD` commit `93ebd51cb4083d2307564c
 | Open Skeleton | 100.0% | 100.0% | 100.0% | 100.0% |
 | Supplied commercial baseline | 89.4% | 89.4% | 95.5% | 75.0% |
 
-Open Skeleton completed in about 1.5 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. The generated specification is 85 sections and roughly 49,800 words, against approximately 180,800 words for the baseline.
+Open Skeleton completed in about 2.7 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. The generated specification is 90 sections and roughly 58,100 words, against approximately 180,800 words for the baseline.
 
 **These numbers describe one author-reviewed fixture, not universal product superiority**, and the comparison is deliberately narrow. It measures whether the material findings of a long-form specification can be reproduced deterministically and cited verifiably. It does not measure breadth: the baseline artifact also contains a requirements catalog, process and state-machine diagrams, architectural decision records, and user-interface analysis that Open Skeleton does not attempt. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
@@ -168,15 +173,15 @@ commit:
 
 | Measure | Open Skeleton | Baseline |
 |---|---:|---:|
-| Generation time | ~1.5 s | 5 h 47 m |
+| Generation time | ~2.7 s | 5 h 47 m |
 | Diagrams | 83 | 82 |
-| References carrying a line number | 432 | 375 |
-| Citations verified against source hashes | 749 | 0 |
+| References carrying a line number | 437 | 375 |
+| Citations verified against source hashes | 753 | 0 |
 | Citation integrity | 100% | not reported |
 
 The two documents do not attempt the same scope: the baseline carries a
 requirements catalog and interface analysis this engine does not produce, and it
-is roughly three and a half times longer. The rows that matter are the last two.
+is roughly three times longer. The rows that matter are the last two.
 A reference naming only a file cannot be checked; a citation pinned to a content
 hash is re-resolved on every `spec --verify` run.
 

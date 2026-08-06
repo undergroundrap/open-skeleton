@@ -105,6 +105,45 @@ near-zero yield, and the specification prints that gap in its executive summary.
 If your analyzer lands with low yield, that is not a failure — it is the report
 telling the truth about a thin read. Do not pad it with claims that say nothing.
 
+Yield per repository is not the check, because it conflates a weak analyzer with
+a clean codebase — a crate with no global mutable state and an analyzer that
+cannot find one score the same. Run the generalization benchmark, which measures
+each analyzer against the files it actually read:
+
+```powershell
+python benchmarks\generalizationun_generalization.py `
+  --repo C:\path\to\one --repo C:\path\to\two --output-dir generalization-output
+```
+
+The Rust analyzer sat at 0.13 claims per file it read while Python sat at 1.83.
+That gap was invisible to every pinned benchmark in this repository, because a
+pinned benchmark measures one fixture and cannot see a language it does not
+contain.
+
+## Reuse a claim category before inventing one
+
+A module-scope container written to at runtime is `process_local_state` in
+Python, TypeScript and Rust. It could have been `ui_state` in one and
+`shared_static` in another, and then a reader would need three vocabularies for
+one fact and no cross-language consequence rule could ever fire.
+
+Before adding a category, look for the one that already names your finding.
+`grep -rn 'category=' src/open_skeleton/analyzers/` is the whole search. The
+generalization report lists every category produced for exactly one repository,
+which is where a needlessly novel name shows up.
+
+## Panels must tolerate what your analyzer omits
+
+A panel reads metadata your analyzer wrote and must not assume every key is
+present. A Rust `static` can be declared in one place and assigned in another,
+so its constant entry has a name and a line and no value — and an early version
+of `tunable_index` indexed `entry["value"]` directly and took down the whole
+document on the first Rust repository it met.
+
+If you add a panel, read optional fields with `.get` and a sensible default.
+Crashing a specification over one missing key is the wrong contract to offer a
+contributed analyzer, and contributed analyzers are the point.
+
 ## Tests
 
 `CONTRIBUTING.md` requires one deterministic positive test and one negative or
