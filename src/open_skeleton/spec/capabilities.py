@@ -62,7 +62,16 @@ class Capability:
 
 
 def _short_name(qualified: str) -> str:
-    return qualified.rsplit(".", 1)[-1]
+    """The final segment of a qualified name, in either separator.
+
+    Splitting on `.` alone silently passed every Rust name through unchanged,
+    so `crates::warmboot_core::compat::check_build` never matched a call edge
+    recorded as `check_build`. The comparison was between a full path and a
+    bare name, which cannot succeed, and the result was reported as a crate
+    with no verification rather than as a name that failed to normalize.
+    """
+
+    return qualified.rsplit("::", 1)[-1].rsplit(".", 1)[-1]
 
 
 def _static_prefix(path: str) -> str:

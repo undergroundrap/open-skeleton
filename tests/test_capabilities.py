@@ -5,7 +5,12 @@
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.spec.capabilities import Capability, build_capabilities, verifying_paths
+from open_skeleton.spec.capabilities import (
+    Capability,
+    _short_name,
+    build_capabilities,
+    verifying_paths,
+)
 
 
 def _claim(
@@ -184,3 +189,28 @@ class CapabilityClusteringTests(TestCase):
         first = self._build(())
         second = self._build(())
         self.assertEqual([item.to_dict() for item in first], [item.to_dict() for item in second])
+
+
+class QualifiedNameTests(TestCase):
+    """Name normalization across languages that punctuate differently.
+
+    A Rust crate with 178 passing tests reported no verifying reference for any
+    capability. Four things were wrong in sequence, and this was the one that
+    made the other three invisible: comparing a full path against a bare name
+    cannot succeed, so it failed silently and read as absent verification
+    rather than as a name that never normalized.
+    """
+
+    def test_a_dotted_name_reduces_to_its_last_segment(self) -> None:
+        self.assertEqual(_short_name("app.services.billing.charge"), "charge")
+
+    def test_a_rust_path_reduces_to_its_last_segment(self) -> None:
+        self.assertEqual(_short_name("crates::core::compat::check_build"), "check_build")
+
+    def test_a_mixed_separator_name_reduces_to_its_last_segment(self) -> None:
+        # Module paths are recorded with dots and Rust items with colons, so a
+        # qualified name can carry both.
+        self.assertEqual(_short_name("crates.core::compat::check_build"), "check_build")
+
+    def test_a_bare_name_is_returned_unchanged(self) -> None:
+        self.assertEqual(_short_name("check_build"), "check_build")

@@ -65,6 +65,12 @@ ROUTE_BUILDERS = frozenset({"route", "resource"}) | MOUNT_BUILDERS
 # `get("/x")` means a request only if one of these is in scope; otherwise it is
 # axum's method router and reading it as a call would invent outbound traffic.
 HTTP_CLIENT_CRATES = frozenset({"reqwest", "ureq", "surf", "isahc", "hyper"})
+# Control flow that takes a parenthesis, and the names Rust programs write
+# most often in constructor position. Neither is a call to a definition.
+NON_CALL_KEYWORDS = frozenset(
+    {"if", "while", "match", "for", "return", "in", "let", "fn", "as", "where"}
+)
+ENUM_CONSTRUCTORS = frozenset({"Some", "None", "Ok", "Err"})
 IDENTIFIER_START = re.compile(r"[A-Za-z_]")
 IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_]")
 
@@ -593,6 +599,43 @@ def _http_routes(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
+def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
+    """Names invoked as calls, as `(callee, line)`.
+
+    Until this existed the Rust analyzer emitted no `calls` edges at all, so
+    every consumer that walks the call graph -- capability tracing above all --
+    silently returned nothing for Rust. A 52-module crate with 178 passing
+    tests reported no verifying reference for any capability, and the reason
+    was not the tracing rules but that there was no graph to trace.
+
+    Lexical resolution means a name, not a target. `parse(x)` records `parse`
+    without deciding which `parse` it is, which is the same guarantee the rest
+    of this analyzer makes. Three things that look like calls are excluded
+    because none of them is one: a declaration's own name after `fn`, control
+    flow that takes a parenthesis, and a type in constructor position such as
+    `Some(x)` or `Ok(x)`. Macros need no exclusion -- `println!(...)` puts a
+    bang between the name and the parenthesis, so requiring them adjacent
+    already skips it.
+    """
+
+    found: list[tuple[str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or index + 1 >= total:
+            continue
+        if tokens[index + 1].value != "(":
+            continue
+        name = token.value
+        if name in NON_CALL_KEYWORDS or name in ENUM_CONSTRUCTORS:
+            continue
+        if index and tokens[index - 1].value == "fn":
+            continue
+        if _is_macro_parameter(tokens, index):
+            continue
+        found.append((name, token.line))
+    return found
+
+
 def _client_calls(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """Outbound HTTP requests this module makes, as `(method, target, line)`.
 
@@ -791,6 +834,7 @@ class RustLexicalAnalyzer:
             file_traits = _trait_implementations(tokens)
             file_routes = _http_routes(tokens)
             file_calls = _client_calls(tokens)
+            file_call_sites = _call_sites(tokens)
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
@@ -1031,6 +1075,33 @@ class RustLexicalAnalyzer:
                         supporting=(route_receipt.evidence_id,),
                         importance="high" if category == "http_route" else "medium",
                         path=file_record.path,
+                    )
+                )
+
+            for callee, call_line in file_call_sites:
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge",
+                            (
+                                snapshot.snapshot_id,
+                                module_symbol_id,
+                                "calls",
+                                callee,
+                                call_line,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=module_symbol_id,
+                        source_path=file_record.path,
+                        relationship="calls",
+                        target_ref=callee,
+                        target_symbol_id=None,
+                        evidence_id=receipt(
+                            file_record.path, call_line, "call_site", callee, excerpt
+                        ).evidence_id,
+                        analyzer=ANALYZER_VERSION,
                     )
                 )
 

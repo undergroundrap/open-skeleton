@@ -8,6 +8,7 @@ from unittest import TestCase
 
 from open_skeleton.analyzers.rust_lexical import (
     RustLexicalAnalyzer,
+    _call_sites,
     _constants,
     _error_surface,
     _impl_methods,
@@ -270,3 +271,34 @@ class RustErrorAndTraitTests(TestCase):
         )
         self.assertEqual(_trait_implementations(tokenize(source)), [])
         self.assertEqual(_impl_methods(tokenize(source)), [])
+
+
+class CallSiteTests(TestCase):
+    """Rust call edges, which did not exist until a real crate needed them.
+
+    Every consumer that walks the call graph returned nothing for Rust because
+    the analyzer emitted no `calls` edges at all. Capability tracing reported
+    no verification for a 52-module crate, and the cause was not the tracing
+    rules but that there was no graph to trace.
+    """
+
+    def test_a_plain_call_is_recorded(self) -> None:
+        self.assertEqual(_call_sites(tokenize("fn f() { parse(x); }\n")), [("parse", 1)])
+
+    def test_a_method_call_is_recorded(self) -> None:
+        self.assertIn(
+            "method", [name for name, _ in _call_sites(tokenize("fn f() { a.method(y); }\n"))]
+        )
+
+    def test_a_declaration_is_not_a_call(self) -> None:
+        self.assertEqual(_call_sites(tokenize("fn run(x: u32) {}\n")), [])
+
+    def test_a_macro_is_not_a_call(self) -> None:
+        # `println!(...)` puts a bang between the name and the parenthesis.
+        self.assertEqual(_call_sites(tokenize('fn f() { println!("hi"); }\n')), [])
+
+    def test_control_flow_is_not_a_call(self) -> None:
+        self.assertEqual(_call_sites(tokenize("fn f() { if (a) { } while (b) { } }\n")), [])
+
+    def test_a_constructor_is_not_a_call(self) -> None:
+        self.assertEqual(_call_sites(tokenize("fn f() { Some(y); Ok(z); }\n")), [])
