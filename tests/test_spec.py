@@ -711,3 +711,59 @@ class SubstituteTests(TestCase):
             },
         )
         self.assertEqual(derive_substitutes(symbols, claims, absent_sections=frozenset()), ())
+
+
+class ExaminedFileTests(TestCase):
+    """The reverse of a citation: which files a section was written from."""
+
+    def test_a_section_lists_the_files_its_findings_were_read_from(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            document = build_spec(ledger, load_profile())
+            with_findings = [item for item in document.sections if item.findings]
+            self.assertTrue(with_findings)
+            for section in with_findings:
+                # Constraints are cited exactly as findings are, so a file
+                # reached only through one still had to be read.
+                cited = {
+                    citation.path
+                    for claim in (*section.findings, *section.constraints)
+                    for citation in claim.citations
+                    if citation.path not in {".", ""}
+                }
+                listed = {path for path, _ in section.examined_files}
+                self.assertEqual(listed, cited)
+
+    def test_a_repository_wide_census_receipt_names_no_file(self) -> None:
+        # A section resting only on census receipts has examined nothing in
+        # particular, and claiming the whole tree would be worse than silence.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            document = build_spec(ledger, load_profile())
+            for section in document.sections:
+                for path, count in section.examined_files:
+                    self.assertNotEqual(path, ".")
+                    self.assertGreaterEqual(count, 1)
+
+    def test_counts_are_ordered_by_how_much_each_file_contributed(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+
+            document = build_spec(ledger, load_profile())
+            for section in document.sections:
+                counts = [count for _, count in section.examined_files]
+                self.assertEqual(counts, sorted(counts, reverse=True))

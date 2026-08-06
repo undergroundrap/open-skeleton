@@ -21,6 +21,9 @@ from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
 from open_skeleton.spec.substitutes import Substitute, derive_substitutes
 
 SPEC_SCHEMA_VERSION = "open-skeleton.spec.v1"
+# A section resting on a whole package would otherwise print a paragraph of
+# paths. The complete list stays in the JSON projection.
+MAX_EXAMINED_FILES = 12
 
 _VERDICT_SENTENCE = {
     "applicable": (
@@ -113,6 +116,7 @@ class RenderedSection:
     omitted_findings: int
     depth: int
     degenerate_threshold: int = 0
+    examined_files: tuple[tuple[str, int], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +134,9 @@ class RenderedSection:
             "cross_references": list(self.cross_references),
             "omitted_findings": self.omitted_findings,
             "depth": self.depth,
+            "examined_files": [
+                {"path": path, "receipts": count} for path, count in self.examined_files
+            ],
         }
 
 
@@ -184,6 +191,33 @@ class SpecDocument:
             "name_index": {path: dict(names) for path, names in sorted(self.name_index.items())},
             "sections": [item.to_dict() for item in self.sections],
         }
+
+
+def _examined_files(
+    findings: tuple[RenderedClaim, ...],
+    constraints: tuple[RenderedClaim, ...],
+) -> tuple[tuple[str, int], ...]:
+    """Which files this section's conclusions were actually read out of.
+
+    Every claim already carries receipts and every receipt already carries a
+    path, so this asserts nothing new. What it adds is the reverse lookup a
+    reviewer wants: not "where did this sentence come from" but "which files
+    did you have to read to write this section", which is the question asked
+    when deciding whether a section can be trusted or needs checking.
+
+    A repository-wide census receipt has no file behind it and is excluded, so
+    a section resting only on those correctly reports nothing examined rather
+    than claiming the whole tree.
+    """
+
+    counts: dict[str, int] = {}
+    for claim in (*findings, *constraints):
+        for citation in claim.citations:
+            path = citation.path
+            if path in {".", ""} or path.startswith("@"):
+                continue
+            counts[path] = counts.get(path, 0) + 1
+    return tuple(sorted(counts.items(), key=lambda pair: (-pair[1], pair[0])))
 
 
 def _select(
@@ -334,6 +368,7 @@ def build_spec(
                 omitted_findings=omitted,
                 depth=depth,
                 degenerate_threshold=section.degenerate_below,
+                examined_files=_examined_files(findings, constraints),
             )
         )
         for child in section.children:
@@ -679,6 +714,21 @@ def render_spec_markdown(document: SpecDocument) -> str:
                 + "._\n\n"
             )
             lines.append(note)
+
+        if section.examined_files:
+            # The reverse of a citation: not "where did this sentence come
+            # from" but "which files did you read to write this section",
+            # which is the question asked when deciding whether a section can
+            # be trusted or has to be checked.
+            top_files = section.examined_files[:MAX_EXAMINED_FILES]
+            listed = ", ".join(f"`{path}` ({count})" for path, count in top_files)
+            remaining = len(section.examined_files) - len(top_files)
+            if remaining > 0:
+                listed += f", and {remaining:,} more"
+            lines.append(
+                f"**Files examined** ({len(section.examined_files):,}, receipt count in "
+                f"parentheses): {listed}.\n\n"
+            )
 
         if section.cross_references:
             references = ", ".join(
