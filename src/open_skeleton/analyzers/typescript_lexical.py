@@ -97,6 +97,27 @@ EXPORTABLE_KEYWORDS = frozenset(
         "default",
         "abstract",
         "declare",
+        "namespace",
+    }
+)
+# Keywords after which a `/` opens a regex. Every other identifier is a
+# value, and a value can be divided.
+REGEX_PRECEDING_KEYWORDS = frozenset(
+    {
+        "return",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "new",
+        "delete",
+        "void",
+        "throw",
+        "case",
+        "do",
+        "else",
+        "yield",
+        "await",
     }
 )
 CLIENT_STORES = frozenset({"localStorage", "sessionStorage"})
@@ -123,6 +144,62 @@ class Token:
     value: str
     line: int
     end_line: int
+
+
+def _regex_may_start(emitted: list[Token]) -> bool:
+    """Whether a `/` here opens a regex rather than dividing.
+
+    JavaScript cannot be tokenized without this decision, and it cannot be made
+    from the slash alone: `a / b` divides and `/ab/.test(x)` matches. What
+    settles it is what came before. A value can be divided, so an identifier, a
+    number, a string, or a closing bracket means division. Anything else --
+    an operator, a comma, an opening bracket, a keyword, the start of the file
+    -- cannot be divided and therefore opens a pattern.
+
+    `}` is read as allowing a regex. It usually closes a block, and a statement
+    may begin with a regex; reading it as division would swallow one.
+    """
+
+    if not emitted:
+        return True
+    previous = emitted[-1]
+    if previous.kind in {"number", "string"}:
+        return False
+    if previous.kind == "identifier":
+        return previous.value in REGEX_PRECEDING_KEYWORDS
+    return previous.value not in {")", "]"}
+
+
+def _read_regex(source: str, index: int) -> int:
+    """Return the index just past a regex literal beginning at ``index``.
+
+    Returns ``index`` when the slash does not in fact open one, so the caller
+    can fall through rather than consume the rest of the file on a guess.
+    """
+
+    cursor = index + 1
+    length = len(source)
+    in_class = False
+    while cursor < length:
+        character = source[cursor]
+        if character == "\\":
+            cursor += 2
+            continue
+        if character == "\n":
+            # A regex literal cannot span lines. This was division, or broken
+            # source; either way the slash is not a pattern opener.
+            return index
+        if character == "[":
+            in_class = True
+        elif character == "]":
+            in_class = False
+        elif character == "/" and not in_class:
+            cursor += 1
+            while cursor < length and source[cursor].isalpha():
+                cursor += 1
+            return cursor
+        cursor += 1
+    return index
 
 
 def _tokens(source: str) -> list[Token]:
@@ -156,6 +233,18 @@ def _tokens(source: str) -> list[Token]:
             line += source[index : end + 2].count("\n")
             index = end + 2
             continue
+        if character == "/" and _regex_may_start(result):
+            end = _read_regex(source, index)
+            if end > index:
+                # The body is deliberately not kept. A regex is a pattern, not
+                # a name or a value this engine reports, and the only thing
+                # that matters is consuming it so its contents stop being read
+                # as code. `/^[^\s@"]+$/` contains a quote, and treating that
+                # quote as a string opener swallowed the rest of the file --
+                # every declaration after the first such regex disappeared.
+                line += source[index:end].count("\n")
+                index = end
+                continue
         if character in {'"', "'", "`"}:
             quote = character
             start_line = line
@@ -579,6 +668,17 @@ def _exported_names(tokens: list[Token]) -> list[str]:
         # `export type { Foo }` is a type-only list. The keyword sits between
         # `export` and the brace, so matching only on `{` missed the whole
         # form -- and it is how TypeScript projects publish their types.
+        # `export * as core from "./x"` binds a namespace object called
+        # `core`. Only the bare `export * from` forwards without naming
+        # anything, and treating both the same lost a real export.
+        if (
+            following.value == "*"
+            and index + 3 < total
+            and tokens[index + 2].value == "as"
+            and tokens[index + 3].kind == "identifier"
+        ):
+            exported.append(tokens[index + 3].value)
+            continue
         brace = index + 1
         if following.value == "type" and index + 2 < total and tokens[index + 2].value == "{":
             following = tokens[index + 2]
@@ -608,6 +708,33 @@ def _exported_names(tokens: list[Token]) -> list[str]:
                 scan += 1
             if pending is not None:
                 exported.append(pending)
+            continue
+        # `export default class Engine {}` binds `default`, not `Engine`. An
+        # importer writes `import Anything from "./x"`, so renaming the class
+        # breaks nobody -- and reporting `Engine` as the public name asserted a
+        # compatibility promise the module does not make. Found by comparing
+        # against esbuild, which reports what the module system actually binds.
+        if following.value == "default":
+            exported.append("default")
+            continue
+        # `export const { GET } = handler()` binds each destructured name.
+        # Reading only `export <keyword> <identifier>` saw the brace and
+        # recorded nothing.
+        if (
+            following.value in BINDING_KEYWORDS
+            and index + 2 < total
+            and tokens[index + 2].value in {"{", "["}
+        ):
+            closing = {"{": "}", "[": "]"}[tokens[index + 2].value]
+            scan = index + 3
+            while scan < total and tokens[scan].value != closing:
+                current = tokens[scan]
+                # `{ a: b }` binds b: the name before the colon is the key
+                # being read, and the one after it is what gets exported.
+                next_value = tokens[scan + 1].value if scan + 1 < total else ""
+                if current.kind == "identifier" and next_value != ":":
+                    exported.append(current.value)
+                scan += 1
             continue
         if following.value in EXPORTABLE_KEYWORDS and index + 2 < total:
             name = tokens[index + 2]

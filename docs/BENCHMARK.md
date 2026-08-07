@@ -118,3 +118,47 @@ facts than a CLI framework, and `platformdirs` scores highest because reading
 environment settings is the entire job of the library — 30 recorded against 33
 read sites in its source. The number to watch is the silent column: a package
 that says nothing names a category that does not exist yet.
+
+## Differential comparison against a real parser
+
+```
+npm install esbuild
+python benchmarks/differential/run_differential.py --root some/typescript/project
+```
+
+Every other check here needs someone to imagine the input first. Fixtures are
+written by a person who already knows the answer, and a corpus sweep only
+covers shapes some repository happened to contain. A form nobody thought of
+escapes both — `export { type Foo, Bar }` published an export named `type`
+for exactly that reason.
+
+A differential test needs no such imagination. Feed both readers the same file
+and any disagreement is a lead. esbuild is the reference because it reports
+what the module system actually binds, and the difference from what a
+specification wants is the useful part:
+
+| Disagreement | Meaning |
+|---|---|
+| esbuild reports it, we do not | **Defect** — the module exports it and the spec omits it |
+| We report it, esbuild does not | Read it. Usually a type export, which esbuild erases and a specification needs |
+
+First run against `zod`, 237 files: **10 files with missing exports**, in four
+forms plus one tokenizer fault.
+
+- `export * as core from "./x"` binds a namespace object; only the bare
+  `export * from` names nothing.
+- `export namespace errorUtil {}` — the keyword was not in the exportable set.
+- `export const { GET } = handler()` — destructuring binds each name.
+- `export default class Engine {}` binds `default`, not `Engine`. An importer
+  writes `import Anything from "./x"`, so the claim that renaming the class
+  breaks importers was simply false.
+- A regex literal may contain a quote. Without a concept of regex literals the
+  tokenizer read `/^[^\s@"]+$/` as opening a string and swallowed the rest of
+  the file, losing every declaration after it.
+
+After: **0 files with missing exports**, 32 with names esbuild erases, all of
+them type exports.
+
+esbuild is a development dependency and is never required to analyze a
+repository. Without it the harness exits zero and says so, because a check
+that cannot run is not a check that failed.

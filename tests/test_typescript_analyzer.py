@@ -418,8 +418,12 @@ class ExportSurfaceTests(TestCase):
             _exported_names(_tokens("export { internal as publicName };\n")), ["publicName"]
         )
 
-    def test_a_default_export_is_recorded(self) -> None:
-        self.assertEqual(_exported_names(_tokens("export default class Foo {}\n")), ["Foo"])
+    def test_a_default_export_binds_default_not_the_local_name(self) -> None:
+        # This asserted ["Foo"] until esbuild was asked the same question and
+        # answered "default". An importer writes `import Anything from "./x"`,
+        # so renaming the class breaks nobody, and reporting `Foo` as the
+        # public name asserted a compatibility promise the module never made.
+        self.assertEqual(_exported_names(_tokens("export default class Foo {}\n")), ["default"])
 
     def test_a_star_reexport_claims_no_names(self) -> None:
         # The names live in another file. Listing them here would attribute a
@@ -464,3 +468,62 @@ class ExportAndTunableEdgeTests(TestCase):
     def test_the_iife_wrapper_still_yields_its_constants(self) -> None:
         source = "(function (global) {\n  const GRAVITY = 16.0;\n})(window);\n"
         self.assertEqual(list(_tunables(_tokens(source))), ["GRAVITY"])
+
+
+class RegexLiteralTests(TestCase):
+    r"""The JavaScript lexing trap, equivalent to the three Rust ones.
+
+    A regex may contain a quote. Without a concept of regex literals the
+    tokenizer read `/^[^\s@"]+$/` as opening a string and swallowed everything
+    to the next quote -- so every declaration after the first such regex
+    vanished, along with every claim that rested on them. One file in `zod`
+    lost five exports this way, and nothing in the suite noticed because no
+    fixture contained a regex with a quote in it.
+
+    Deciding whether `/` divides or matches cannot be done from the slash. It
+    is settled by what precedes it: a value can be divided, anything else
+    cannot.
+    """
+
+    def test_a_regex_containing_a_quote_does_not_swallow_the_file(self) -> None:
+        found = _exported_names(_tokens('const r = /ab"c/;\nexport const AFTER = 1;\n'))
+        self.assertEqual(found, ["AFTER"])
+
+    def test_division_is_not_read_as_a_regex(self) -> None:
+        values = [item.value for item in _tokens("const a = b / c / d;")]
+        self.assertEqual(values.count("/"), 2)
+
+    def test_a_regex_after_a_keyword_is_consumed(self) -> None:
+        values = [item.value for item in _tokens("return /x/.test(y);")]
+        self.assertNotIn("x", values)
+
+    def test_division_after_a_closing_parenthesis_is_division(self) -> None:
+        values = [item.value for item in _tokens("const x = (a + b) / 2;")]
+        self.assertIn("/", values)
+        self.assertIn("2", values)
+
+    def test_a_character_class_may_contain_a_slash(self) -> None:
+        # `[/]` does not end the pattern, so the literal runs past it.
+        found = _exported_names(_tokens("const r = /[/]x/;\nexport const AFTER = 1;\n"))
+        self.assertEqual(found, ["AFTER"])
+
+
+class ExportFormTests(TestCase):
+    """Export forms found by comparing against esbuild on a real package."""
+
+    def test_a_namespace_reexport_binds_its_alias(self) -> None:
+        # `export * as core from` names something; bare `export * from` does not.
+        self.assertEqual(_exported_names(_tokens('export * as core from "./x";')), ["core"])
+
+    def test_a_typescript_namespace_is_a_surface(self) -> None:
+        self.assertEqual(_exported_names(_tokens("export namespace errorUtil { }")), ["errorUtil"])
+
+    def test_a_destructured_export_binds_each_name(self) -> None:
+        self.assertEqual(_exported_names(_tokens("export const { GET } = make();")), ["GET"])
+
+    def test_a_renamed_destructured_export_binds_the_new_name(self) -> None:
+        # `{ a: b }` reads key a and binds b.
+        self.assertEqual(_exported_names(_tokens("export const { a: b, c } = x;")), ["b", "c"])
+
+    def test_array_destructuring_binds_each_position(self) -> None:
+        self.assertEqual(_exported_names(_tokens("export const [p, q] = y;")), ["p", "q"])
