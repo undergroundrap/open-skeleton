@@ -946,7 +946,19 @@ class _ModuleMutationCollector(ast.NodeVisitor):
         while isinstance(candidate, (ast.Subscript, ast.Attribute)):
             candidate = candidate.value
         if isinstance(candidate, ast.Name) and self._is_module_reference(candidate.id):
-            self.mutations[candidate.id].append(evidence_node)
+            # `setdefault` rather than indexing, because the two paths into
+            # this branch do not agree on which names exist. The map is keyed
+            # on module-owned mutable containers, while `_is_module_reference`
+            # also answers yes to anything an enclosing scope declared
+            # `global`. A module-level counter is the common case -- an int is
+            # not a container, so `global n` followed by `n += 1` reached a key
+            # that was never created and raised `KeyError`, aborting the whole
+            # analysis of the repository rather than skipping one statement.
+            #
+            # Recording it is also the right answer. A counter rebound across
+            # calls through `global` is process-local state by the plainest
+            # reading of the term.
+            self.mutations.setdefault(candidate.id, []).append(evidence_node)
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> None:
         bound, declared_global = _function_bindings(node)
@@ -1477,6 +1489,42 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     invalidation_keys=(f"file:{self.path}", f"symbol:{qualified}"),
                     alternatives=(
                         "The assigned object may proxy or synchronize state to an external store.",
+                    ),
+                )
+            elif mutation_nodes and not _is_mutable_initializer(value):
+                # A scalar is not a container, so the branch above passes over
+                # it. `counter = 0` rebound from a function through `global` is
+                # still state this process owns and the next one starts without
+                # -- counters, cached singletons and feature flags all take this
+                # shape. The gate is an observed rebinding rather than the
+                # declaration, so a module constant nobody writes to stays a
+                # constant.
+                rebind_evidence = tuple(
+                    self._evidence(
+                        start_line=getattr(mutation, "lineno", None),
+                        end_line=getattr(mutation, "end_lineno", getattr(mutation, "lineno", None)),
+                        symbol=qualified,
+                        evidence_kind="rebinding",
+                    ).evidence_id
+                    for mutation in mutation_nodes
+                )
+                self._claim(
+                    text=(
+                        f"{qualified} is a module-level value rebound from "
+                        f"{len(mutation_nodes)} site(s) inside functions; its current value is "
+                        "process-local, so a second instance of this program starts without it."
+                    ),
+                    category="process_local_state",
+                    status="inferred",
+                    confidence=0.9,
+                    importance="high",
+                    supporting=(evidence.evidence_id, *rebind_evidence),
+                    invalidation_keys=(f"file:{self.path}", f"symbol:{qualified}"),
+                    alternatives=(
+                        (
+                            "The value may be re-derived at startup, or written through to a "
+                            "store by code this analyzer did not resolve."
+                        ),
                     ),
                 )
 

@@ -707,3 +707,38 @@ class AnalyzerContractTests(TestCase):
             checked: Analyzer = analyzer
             self.assertTrue(checked.name, f"{analyzer!r} declares no name")
             self.assertTrue(checked.version, f"{analyzer!r} declares no version")
+
+
+class GlobalCounterTests(TestCase):
+    """A `global` name that is not a mutable container.
+
+    Found by pointing the analyzer at an installed third-party library. It
+    raised `KeyError` and aborted the entire repository, because two paths
+    reach the same map and disagree about which names exist: it is keyed on
+    module-owned mutable containers, while the scope check also answers yes to
+    anything an enclosing function declared `global`. An integer is not a
+    container, so a module-level counter satisfied one and not the other.
+    """
+
+    def _mutations(self, source: str) -> dict[str, int]:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sample.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return {claim.category: 1 for claim in result.claims}
+
+    def test_a_global_counter_does_not_abort_the_analysis(self) -> None:
+        # Exactly the shape found in the wild: `n = 0` at module level, then
+        # `global n` and `n += 1` inside a function.
+        source = "leases = 0\n\n\ndef acquire():\n    global leases\n    leases += 1\n"
+        self.assertIsInstance(self._mutations(source), dict)
+
+    def test_a_global_counter_is_recorded_as_process_local_state(self) -> None:
+        # A counter rebound across calls is process-local state by the plainest
+        # reading of the term, so it is recorded rather than merely survived.
+        source = "leases = 0\n\n\ndef acquire():\n    global leases\n    leases += 1\n"
+        self.assertIn("process_local_state", self._mutations(source))
+
+    def test_a_global_declared_name_never_assigned_at_module_scope(self) -> None:
+        source = "def start():\n    global handle\n    handle = object()\n"
+        self.assertIsInstance(self._mutations(source), dict)
