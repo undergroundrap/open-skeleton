@@ -5,6 +5,7 @@
 //! reports that this does not is a fabrication.
 
 use quote::ToTokens;
+use syn::visit::{self, Visit};
 use serde_json::json;
 use std::{env, fs};
 use syn::{Item, Type};
@@ -106,6 +107,37 @@ fn walk(
     }
 }
 
+/// Collects the names invoked as calls, which is what the lexical reader
+/// claims to find. A method call contributes its method name and a path call
+/// its final segment, matching how a name-only reader can see them.
+#[derive(Default)]
+struct Calls {
+    names: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for Calls {
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*node.func {
+            if let Some(segment) = path.path.segments.last() {
+                self.names.push(segment.ident.to_string());
+            }
+        }
+        visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        self.names.push(node.method.to_string());
+        visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_item_macro(&mut self, _node: &'ast syn::ItemMacro) {
+        // A macro body is a template. The lexical reader skips it and so does
+        // this, or every disagreement would be about code nobody wrote.
+    }
+
+    fn visit_macro(&mut self, _node: &'ast syn::Macro) {}
+}
+
 fn main() {
     let path = env::args().nth(1).expect("usage: rustref <file.rs>");
     let source = match fs::read_to_string(&path) {
@@ -122,6 +154,8 @@ fn main() {
             return;
         }
     };
+    let mut calls = Calls::default();
+    calls.visit_file(&parsed);
     let mut names = Vec::new();
     let mut decls = Vec::new();
     let mut impls = Vec::new();
@@ -130,5 +164,5 @@ fn main() {
         .into_iter()
         .map(|(owner, trait_name)| json!({"owner": owner, "trait": trait_name}))
         .collect();
-    println!("{}", json!({"parsed": true, "names": names, "decls": decls, "impls": pairs}));
+    println!("{}", json!({"parsed": true, "names": names, "decls": decls, "impls": pairs, "calls": calls.names}));
 }

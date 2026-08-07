@@ -367,3 +367,45 @@ class RawIdentifierTests(TestCase):
 
     def test_a_raw_identifier_type_is_named_correctly(self) -> None:
         self.assertEqual(_declared_items(tokenize("struct r#type;")), [("struct", "type", 1)])
+
+
+class CallSitePrecisionTests(TestCase):
+    """Shapes that look like calls and are not, found by comparing against syn.
+
+    Call edges feed capability tracing, and they were built here without any
+    reference checking them. A single ripgrep run reported invented calls in
+    104 of 110 files: attribute contents, visibility qualifiers, and enum
+    variant constructions, none of which resolve to a definition anywhere in
+    the crate.
+    """
+
+    def test_attribute_contents_are_not_calls(self) -> None:
+        # `#[derive(Debug)]` and `#[cfg(not(any(unix, windows)))]` are an
+        # identifier followed by a parenthesis, which is exactly a call's shape.
+        source = "#[derive(Debug)]\n#[cfg(not(any(unix, windows)))]\nfn f() { parse(x); }\n"
+        self.assertEqual([name for name, _ in _call_sites(tokenize(source))], ["parse"])
+
+    def test_an_inner_attribute_is_also_skipped(self) -> None:
+        source = "#![deny(warnings)]\nfn f() { work(x); }\n"
+        self.assertEqual([name for name, _ in _call_sites(tokenize(source))], ["work"])
+
+    def test_a_visibility_qualifier_is_not_a_call(self) -> None:
+        self.assertEqual(_call_sites(tokenize("pub(crate) fn f() {}")), [])
+
+    def test_an_enum_variant_construction_is_not_a_call(self) -> None:
+        # `Mode::Search(x)` builds a value. It cannot be listed like `Some`
+        # because it is the crate's own type, but Rust capitalises variants
+        # and types and lints anything else, so the convention separates them.
+        source = "fn f() { let m = Search(x); helper(y); }\n"
+        self.assertEqual([name for name, _ in _call_sites(tokenize(source))], ["helper"])
+
+    def test_a_turbofish_call_is_recorded(self) -> None:
+        # `value.parse::<u64>()` puts the type between the name and the paren.
+        self.assertEqual(_call_sites(tokenize("fn f() { v.parse::<u64>(); }")), [("parse", 1)])
+
+    def test_a_nested_turbofish_is_recorded(self) -> None:
+        found = _call_sites(tokenize("fn f() { collect::<Vec<String>>(x); }"))
+        self.assertEqual([name for name, _ in found], ["collect"])
+
+    def test_a_path_call_records_its_last_segment(self) -> None:
+        self.assertEqual([name for name, _ in _call_sites(tokenize("fn f() { a::b(z); }"))], ["b"])

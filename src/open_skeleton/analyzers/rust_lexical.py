@@ -68,7 +68,8 @@ HTTP_CLIENT_CRATES = frozenset({"reqwest", "ureq", "surf", "isahc", "hyper"})
 # Control flow that takes a parenthesis, and the names Rust programs write
 # most often in constructor position. Neither is a call to a definition.
 NON_CALL_KEYWORDS = frozenset(
-    {"if", "while", "match", "for", "return", "in", "let", "fn", "as", "where"}
+    # `pub(crate)` is a visibility qualifier wearing a call's shape.
+    {"if", "while", "match", "for", "return", "in", "let", "fn", "as", "where", "pub", "mut"}
 )
 # `Some(x)` and `Self(x)` construct a value; they call no definition, and
 # counting them fills the call graph with names nothing declares.
@@ -722,6 +723,41 @@ def _http_routes(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
+def _attribute_spans(tokens: list[Token]) -> list[tuple[int, int]]:
+    """Token ranges inside `#[...]`, which configure code rather than run it.
+
+    `#[derive(Debug)]` and `#[cfg(not(any(unix, windows)))]` are identifiers
+    followed by parentheses, which is exactly the shape of a call. Reading them
+    as calls filled the graph with `derive`, `cfg`, `not`, `any` and `deny` --
+    names that resolve to no definition anywhere in the crate, in more than a
+    hundred ripgrep files.
+    """
+
+    spans: list[tuple[int, int]] = []
+    total = len(tokens)
+    index = 0
+    while index < total:
+        if tokens[index].value == "#":
+            opener = index + 1
+            # `#![...]` is an inner attribute; the bang sits before the bracket.
+            if opener < total and tokens[opener].value == "!":
+                opener += 1
+            if opener < total and tokens[opener].value == "[":
+                depth = 1
+                scan = opener + 1
+                while scan < total and depth:
+                    if tokens[scan].value == "[":
+                        depth += 1
+                    elif tokens[scan].value == "]":
+                        depth -= 1
+                    scan += 1
+                spans.append((index, scan))
+                index = scan
+                continue
+        index += 1
+    return spans
+
+
 def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
     """Names invoked as calls, as `(callee, line)`.
 
@@ -743,13 +779,41 @@ def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
 
     found: list[tuple[str, int]] = []
     total = len(tokens)
+    attributes = _attribute_spans(tokens)
+    templates = _macro_body_spans(tokens)
     for index, token in enumerate(tokens):
         if token.kind != "identifier" or index + 1 >= total:
             continue
-        if tokens[index + 1].value != "(":
+        # `value.parse::<u64>()` is a call with a turbofish between the name and
+        # the parenthesis. Requiring them adjacent missed every generic call.
+        opener = index + 1
+        if tokens[opener].value == ":" and opener + 2 < total and tokens[opener + 1].value == ":":
+            scan = opener + 2
+            if scan < total and tokens[scan].value == "<":
+                depth = 1
+                scan += 1
+                while scan < total and depth:
+                    if tokens[scan].value == "<":
+                        depth += 1
+                    elif tokens[scan].value == ">":
+                        depth -= 1
+                    scan += 1
+                opener = scan
+        if opener >= total or tokens[opener].value != "(":
+            continue
+        if any(start < index < end for start, end in attributes):
+            continue
+        if any(start < index < end for start, end in templates):
             continue
         name = token.value
         if name in NON_CALL_KEYWORDS or name in ENUM_CONSTRUCTORS:
+            continue
+        # `Mode::Search(x)` constructs an enum variant and `impl Fn(A)` names
+        # a trait bound; neither calls a definition. They cannot be listed
+        # like `Some` and `Ok` because they are the crate's own types, but
+        # Rust's naming convention separates them: variants and types are
+        # capitalised, functions are not, and rustc lints anything else.
+        if name[:1].isupper():
             continue
         if index and tokens[index - 1].value == "fn":
             continue

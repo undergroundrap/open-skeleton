@@ -41,6 +41,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from open_skeleton.analyzers.rust_lexical import (
+    ENUM_CONSTRUCTORS,
+    _call_sites,
     _declared_items,
     _trait_implementations,
     tokenize,
@@ -92,6 +94,14 @@ def _reference(helper: Path, source: Path) -> dict[str, set[str]] | None:
         # either side adopt the other's convention.
         "decls": {name.removeprefix("r#") for name in payload.get("names", [])},
         "impls": {f"{item['owner']}:{item['trait']}" for item in payload.get("impls", [])},
+        # `Some(x)` is an `ExprCall` to `syn` and a construction to this
+        # engine, which deliberately records no call for it. Normalising
+        # here keeps a stated design choice out of the defect column.
+        "calls": {
+            name.removeprefix("r#")
+            for name in payload.get("calls", [])
+            if name not in ENUM_CONSTRUCTORS
+        },
     }
 
 
@@ -100,6 +110,7 @@ def _ours(source: Path) -> dict[str, set[str]]:
     return {
         "decls": {name for _, name, _ in _declared_items(tokens)},
         "impls": {f"{owner}:{trait}" for owner, trait, _ in _trait_implementations(tokens)},
+        "calls": {name for name, _ in _call_sites(tokens)},
     }
 
 
@@ -133,8 +144,16 @@ def compare(root: Path, helper: Path) -> Report:
         # inside an `impl` block. Comparing against `decls` reported fifty-seven
         # files of fabrication in ripgrep, all of them real methods -- a
         # definition mismatch that looked exactly like a defect.
-        absent = (reference["impls"] - ours["impls"]) | (reference["decls"] - ours["decls"])
-        extra = (ours["impls"] - reference["impls"]) | (ours["decls"] - reference["decls"])
+        absent = (
+            (reference["impls"] - ours["impls"])
+            | (reference["decls"] - ours["decls"])
+            | (reference["calls"] - ours["calls"])
+        )
+        extra = (
+            (ours["impls"] - reference["impls"])
+            | (ours["decls"] - reference["decls"])
+            | (ours["calls"] - reference["calls"])
+        )
         if absent:
             report.missing.append(Disagreement(relative, missing=tuple(sorted(absent))))
         if extra:
