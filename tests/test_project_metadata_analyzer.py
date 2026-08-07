@@ -12,6 +12,7 @@ from open_skeleton.analyzers.project_metadata import (
     _checked_out_revision,
     _declared_commitments,
     is_declarative_document,
+    is_non_goal_heading,
 )
 from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
@@ -357,3 +358,46 @@ class CheckedOutRevisionTests(TestCase):
             (root / ".git").mkdir()
             (root / ".git" / "HEAD").write_text("ref: refs/heads/gone\n", encoding="utf-8")
             self.assertIsNone(_checked_out_revision(root))
+
+
+class DeclaredNonGoalTests(TestCase):
+    """A non-goal is a declared absence, not an obligation.
+
+    Found by comparing this engine's specification of its own repository with
+    another generator's on the same subject. Theirs wrote that an absent
+    concern "is a design decision recorded in the repository rather than an
+    omission discovered by this document". Ours had read the same heading and
+    reported that `docs/PRODUCT_REQUIREMENTS.md` "declares Non-goals with 6
+    stated obligation(s)" -- six things the project refuses to build,
+    described as promises to build them.
+
+    That is the true-but-misleading shape `open-skeleton audit` exists to
+    catch, produced by this engine about itself.
+    """
+
+    def test_a_non_goal_heading_is_recognized(self) -> None:
+        for heading in ("Non-goals", "Out of scope", "What this deliberately does not do"):
+            self.assertTrue(is_non_goal_heading(heading), heading)
+
+    def test_an_obligation_heading_is_not_a_non_goal(self) -> None:
+        for heading in (
+            "G1: Safe repository boundary",
+            "Required outcomes",
+            "Before changing code",
+        ):
+            self.assertFalse(is_non_goal_heading(heading), heading)
+
+    def test_the_two_kinds_are_reported_under_different_categories(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "REQUIREMENTS.md").write_text(
+                "## Required outcomes\n\n- One.\n- Two.\n\n## Non-goals\n\n- Never this.\n"
+                "- Nor this.\n- Nor that.\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        found = {claim.category: claim.claim for claim in result.claims}
+        self.assertIn("declared_commitment", found)
+        self.assertIn("declared_non_goal", found)
+        self.assertIn("places 3 thing(s) outside this project", found["declared_non_goal"])
+        self.assertIn("stated obligation(s)", found["declared_commitment"])

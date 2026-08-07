@@ -282,8 +282,28 @@ DECLARATIVE_DOCUMENT_MARKERS = (
     "decision",
     "adr",
 )
+# A heading that names what a project has decided *not* to do. The bullets
+# under it are declared absences, not obligations, and calling six things a
+# project refuses to build "stated obligations" inverts their meaning.
+NON_GOAL_MARKERS = (
+    "non-goal",
+    "nongoal",
+    "out of scope",
+    "not in scope",
+    "will not",
+    "deliberately does not",
+    "does not do",
+    "excluded",
+)
 # One bullet under a heading is a remark. Several are a list of obligations.
 MIN_OBLIGATIONS = 2
+
+
+def is_non_goal_heading(heading: str) -> bool:
+    """Whether a heading names declared absences rather than obligations."""
+
+    folded = heading.casefold()
+    return any(marker in folded for marker in NON_GOAL_MARKERS)
 
 
 def _checked_out_revision(root: Path) -> tuple[str, str] | None:
@@ -792,8 +812,14 @@ class ProjectMetadataAnalyzer:
                         "declared_commitment",
                         heading,
                     )
+                    non_goal = is_non_goal_heading(heading)
                     commitment_text = (
-                        f'{file_record.path} declares "{heading}" with {obligations:,} '
+                        f"{file_record.path} places {obligations:,} thing(s) outside this "
+                        f'project under "{heading}". A concern named here is absent by '
+                        "decision rather than by omission, and this claim records the "
+                        "decision, not whether the code honours it."
+                        if non_goal
+                        else f'{file_record.path} declares "{heading}" with {obligations:,} '
                         "stated obligation(s). This records that the commitment was made; "
                         "whether the code keeps it is a separate question this claim does "
                         "not answer."
@@ -804,14 +830,14 @@ class ProjectMetadataAnalyzer:
                                 "claim",
                                 (
                                     snapshot.snapshot_id,
-                                    "declared_commitment",
+                                    "declared_non_goal" if non_goal else "declared_commitment",
                                     commitment_text,
                                     ANALYZER_VERSION,
                                 ),
                             ),
                             snapshot_id=snapshot.snapshot_id,
                             claim=commitment_text,
-                            category="declared_commitment",
+                            category="declared_non_goal" if non_goal else "declared_commitment",
                             status="verified",
                             confidence=1.0,
                             importance="medium",
