@@ -39,13 +39,28 @@ class AuditTests(TestCase):
         self.assertNotIn("test-only-evidence", checks)
 
     def test_a_category_with_no_file_evidence_anywhere_is_flagged(self) -> None:
-        # This is the shape in which an absence gets counted as presence.
+        # This is the shape in which an absence gets counted as presence. The
+        # category has to be one that ought to name a file: `http_route` says
+        # something about a handler, so a receipt naming no file is a gap.
+        checks = self._checks(
+            [_claim("c1", "http_route", "e1")],
+            [{"evidence_id": "e1", "path": "."}],
+            [],
+        )
+        self.assertIn("no-file-evidence", checks)
+
+    def test_a_census_category_without_file_evidence_is_not_flagged(self) -> None:
+        # "No CI workflow exists under .github/workflows" is a statement about
+        # the repository and there is no file it could name without inventing
+        # one. Flagging it fired on five of six repositories the first time
+        # this ran across a set, always on the same categories, and a check
+        # that reports the same thing everywhere teaches a reader to skip it.
         checks = self._checks(
             [_claim("c1", "delivery_automation", "e1")],
             [{"evidence_id": "e1", "path": "."}],
             [],
         )
-        self.assertIn("no-file-evidence", checks)
+        self.assertNotIn("no-file-evidence", checks)
 
     def test_a_monolith_is_not_flagged_for_concentration(self) -> None:
         # A service keeping every route in one module is normal. Flagging it

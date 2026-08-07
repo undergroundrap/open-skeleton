@@ -29,6 +29,20 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+# Claims that are a statement about the repository rather than about any file
+# in it. Their receipts are census receipts by construction, so the
+# no-file-evidence check would fire on every repository forever.
+CENSUS_CATEGORIES = frozenset(
+    {
+        "delivery_automation",
+        "testing_census",
+        "testing_gap",
+        "unsafe_surface",
+        "auth_control_census",
+        "dependency_inventory",
+        "language_census",
+    }
+)
 # Categories that describe what a system does in production. A finding in one
 # of these resting only on test files is describing the suite, not the system.
 PRODUCTION_CATEGORIES = frozenset(
@@ -129,7 +143,15 @@ def audit_claims(
         # A category whose every claim rests on a repository-wide census has no
         # file behind any of it. That is how an absence gets counted as
         # evidence of presence, which has happened three times here.
-        if group and unsourced == len(group):
+        #
+        # Categories that are a census by construction are exempt. "No CI
+        # workflow exists under .github/workflows" is a statement about the
+        # repository, and there is no file it could name without inventing
+        # one. Flagging them fired on five of six repositories the first time
+        # this ran across a set, always on the same three categories -- and a
+        # check that reports the same thing everywhere teaches the reader to
+        # skip it, which costs more than the check was worth.
+        if group and unsourced == len(group) and category not in CENSUS_CATEGORIES:
             findings.append(
                 Finding(
                     check="no-file-evidence",
