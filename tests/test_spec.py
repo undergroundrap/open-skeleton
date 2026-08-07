@@ -1257,3 +1257,73 @@ class ScopedAbsenceTests(TestCase):
         self.assertIn("Determination: absent", markdown)
         self.assertIn("zero matches across the", markdown)
         self.assertIn(f"{document.total_claims:,} claim(s)", markdown)
+
+
+class CandidateProbeTests(TestCase):
+    """Absence by foreclosure: what is adjacent, and why none of it qualifies.
+
+    Another generator reported that no network client exists by listing all
+    three `http`/`urllib` imports and observing that none of them is one. That
+    is stronger than a probe returning zero, because a reader can check it by
+    reading rather than by trusting the query.
+
+    A `candidates` list is that move as profile data. It runs only when the
+    probes found nothing, since what is nearby is uninteresting when the
+    concern itself is present.
+    """
+
+    def _profile(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "schema": "open-skeleton.spec_profile.v1",
+            "profile_id": "p",
+            "profile_version": "v1",
+            "title": "t",
+            "sections": [
+                {
+                    "id": "a",
+                    "number": "1",
+                    "title": "A",
+                    "probes": [{"name": "P", "kind": "claim_category", "terms": ["absent_thing"]}],
+                    "candidates": candidates,
+                }
+            ],
+        }
+
+    def test_candidates_without_probes_are_rejected(self) -> None:
+        # A candidate is only meaningful beside a query that could have
+        # matched instead; alone it asserts nothing about a concern.
+        payload = self._profile([{"name": "C", "kind": "import_target", "terms": ["http"]}])
+        payload["sections"][0].pop("probes")
+        with self.assertRaises(ProfileError):
+            parse_profile(payload)
+
+    def test_candidates_parse_beside_probes(self) -> None:
+        payload = self._profile([{"name": "C", "kind": "import_target", "terms": ["http"]}])
+        self.assertEqual(len(parse_profile(payload).sections[0].candidates), 1)
+
+    def test_a_present_concern_runs_no_candidate_query(self) -> None:
+        # The section below is absent in the sample repository, so a concern
+        # that *is* present must leave candidate results empty.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+        present = [item for item in document.sections if item.verdict == "applicable"]
+        self.assertTrue(present)
+        self.assertTrue(all(not item.candidate_results for item in present))
+
+    def test_an_absent_section_reports_what_is_adjacent(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            markdown = render_spec_markdown(build_spec(ledger, load_profile()))
+        self.assertTrue(
+            "Adjacent to this concern and present" in markdown
+            or "Nothing adjacent is present either" in markdown
+        )

@@ -662,6 +662,15 @@
           ],
           "requires": [
             "state.durable"
+          ],
+          "candidates": [
+            {
+              "name": "In-memory containers that could be a cache",
+              "kind": "claim_category",
+              "terms": [
+                "process_local_state"
+              ]
+            }
           ]
         },
         {
@@ -946,6 +955,16 @@
           },
           "cross_references": [
             "integration.configuration"
+          ],
+          "candidates": [
+            {
+              "name": "Configuration read at run time",
+              "kind": "claim_category",
+              "terms": [
+                "configuration_read",
+                "environment_setting"
+              ]
+            }
           ]
         },
         {
@@ -998,6 +1017,16 @@
                 "nats",
                 "pulsar",
                 "faust"
+              ]
+            }
+          ],
+          "candidates": [
+            {
+              "name": "Structures that could be a queue",
+              "kind": "claim_category",
+              "terms": [
+                "process_local_state",
+                "storage_schema"
               ]
             }
           ]
@@ -1927,6 +1956,16 @@
           "cross_references": [
             "integration.configuration",
             "state.durable"
+          ],
+          "candidates": [
+            {
+              "name": "Delivery automation that could have carried a build",
+              "kind": "claim_category",
+              "terms": [
+                "delivery_automation",
+                "documented_runtime_command"
+              ]
+            }
           ]
         },
         {

@@ -126,6 +126,12 @@ class SpecSection:
     concern: str
     framing: str = ""
     probes: tuple[SpecProbe, ...] = ()
+    # Queries for what is *adjacent* to this concern rather than what satisfies
+    # it. They are evaluated only when the probes found nothing, and they turn
+    # "we looked and found none" into "here is everything that could have been
+    # one, and none of them is" -- an absence a reader can check by reading
+    # rather than by trusting the query.
+    candidates: tuple[SpecProbe, ...] = ()
     findings: SpecSelector | None = None
     constraints: SpecSelector | None = None
     diagrams: tuple[str, ...] = ()
@@ -220,6 +226,12 @@ def _parse_section(payload: dict[str, Any], context: str, seen: set[str]) -> Spe
     node_context = f"section '{section_id}'"
 
     probes = tuple(_parse_probe(item, node_context) for item in payload.get("probes", []))
+    candidates = tuple(_parse_probe(item, node_context) for item in payload.get("candidates", []))
+    if candidates and not probes:
+        raise ProfileError(
+            f"{node_context}: declares candidates without probes; a candidate is only "
+            "meaningful beside a query that could have matched instead"
+        )
     degenerate_below = int(payload.get("degenerate_below", 0))
     if degenerate_below < 0:
         raise ProfileError(f"{node_context}: degenerate_below must not be negative")
@@ -243,6 +255,7 @@ def _parse_section(payload: dict[str, Any], context: str, seen: set[str]) -> Spe
         concern=str(payload.get("concern", "")),
         framing=str(payload.get("framing", "")),
         probes=probes,
+        candidates=candidates,
         findings=_parse_selector(payload.get("findings"), node_context),
         constraints=_parse_selector(payload.get("constraints"), node_context),
         diagrams=_string_tuple(payload.get("diagrams"), node_context),

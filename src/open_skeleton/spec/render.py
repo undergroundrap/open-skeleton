@@ -18,7 +18,7 @@ from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
 from open_skeleton.spec.panels import Panel, PanelContext, build_panel, short_form
-from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section
+from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section, run_probe
 from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
 from open_skeleton.spec.roles import MultiRole, derive_roles
 from open_skeleton.spec.substitutes import Substitute, derive_substitutes
@@ -136,6 +136,7 @@ class RenderedSection:
     degenerate_threshold: int = 0
     examined_files: tuple[tuple[str, int], ...] = ()
     unmet_requirements: tuple[str, ...] = ()
+    candidate_results: tuple[ProbeResult, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +158,7 @@ class RenderedSection:
                 {"path": path, "receipts": count} for path, count in self.examined_files
             ],
             "unmet_requirements": list(self.unmet_requirements),
+            "candidates": [item.to_dict() for item in self.candidate_results],
         }
 
 
@@ -356,6 +358,13 @@ def build_spec(
 
     def render_node(section: SpecSection, depth: int) -> None:
         verdict, probe_results = evaluate_section(section, corpus)
+        # Adjacent queries are run only when the concern was not found. If
+        # the probes matched, what is nearby is not the interesting fact.
+        candidate_results = (
+            tuple(run_probe(probe, corpus) for probe in section.candidates)
+            if verdict == "absent" and section.candidates
+            else ()
+        )
         # A concern can presuppose another. Pagination without an HTTP surface
         # is not a gap in the system, it is a question that does not arise —
         # and reporting fifty of those buries the handful that do. The
@@ -420,6 +429,7 @@ def build_spec(
                 framing=section.framing,
                 verdict=verdict,
                 probe_results=probe_results,
+                candidate_results=candidate_results,
                 findings=findings,
                 constraints=constraints,
                 diagrams=diagrams,
@@ -843,6 +853,26 @@ def render_spec_markdown(document: SpecDocument) -> str:
             ),
         )
         lines.append(f"{sentence}\n\n")
+
+        if section.candidate_results:
+            matched = [item for item in section.candidate_results if item.match_count]
+            if matched:
+                described = "; ".join(
+                    f"{_escape(item.name)} ({item.match_count:,})" for item in matched
+                )
+                lines.append(
+                    f"_Adjacent to this concern and present: {described}. Those records "
+                    "exist and none of them satisfies the concern above, so the absence "
+                    "is a reading of what is here rather than only a query that missed._\n\n"
+                )
+            else:
+                queries = "; ".join(
+                    f"`{_escape(item.query)}`" for item in section.candidate_results
+                )
+                lines.append(
+                    f"_Nothing adjacent is present either: {queries} also matched nothing._\n\n"
+                )
+
         if section.framing:
             lines.append(f"{section.framing}\n\n")
 
