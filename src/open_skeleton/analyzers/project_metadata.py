@@ -286,6 +286,51 @@ DECLARATIVE_DOCUMENT_MARKERS = (
 MIN_OBLIGATIONS = 2
 
 
+def _checked_out_revision(root: Path) -> tuple[str, str] | None:
+    """`(revision, ref)` for the commit checked out, or None outside a git tree.
+
+    A snapshot identifies the bytes on disk when it was taken, which is a
+    deterministic function of a directory and not of a commit. Two people on
+    the same revision can hold different working trees, so a reader with only
+    a snapshot identifier cannot tell which revision it corresponds to, and a
+    diff between two machines would read as change rather than as difference.
+
+    Recording the revision does not make the snapshot commit-addressed, and
+    the claim says so: the tree may carry edits this does not describe. It
+    turns "some state of this repository" into "this revision, plus whatever
+    was uncommitted", which is the honest version of the same fact.
+
+    `.git` is excluded from analysis, and reading it here is provenance rather
+    than analysis: no target code runs and nothing is written.
+    """
+
+    head = root / ".git" / "HEAD"
+    if not head.is_file():
+        return None
+    try:
+        contents = head.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not contents.startswith("ref: "):
+        return (contents, "detached HEAD") if len(contents) >= 7 else None
+    ref = contents.removeprefix("ref: ").strip()
+    direct = root / ".git" / Path(ref)
+    if direct.is_file():
+        try:
+            return direct.read_text(encoding="utf-8", errors="replace").strip(), ref
+        except OSError:
+            return None
+    packed = root / ".git" / "packed-refs"
+    if packed.is_file():
+        try:
+            for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.endswith(f" {ref}"):
+                    return line.split(" ", 1)[0].strip(), ref
+        except OSError:
+            return None
+    return None
+
+
 def is_declarative_document(path: str) -> bool:
     """Whether a document's name says its contents are commitments."""
 
@@ -959,6 +1004,35 @@ class ProjectMetadataAnalyzer:
                             "untracked build environment."
                         ),
                     ),
+                )
+            )
+
+        revision = _checked_out_revision(snapshot.root)
+        if revision is not None:
+            commit, ref = revision
+            revision_receipt = receipt(".", None, None, "snapshot_census", "checked-out revision")
+            revision_text = (
+                f"The working tree was checked out at {commit[:12]} on {ref} when this "
+                "snapshot was taken. The snapshot identifies the bytes on disk, not that "
+                "commit, so uncommitted edits are included and are not distinguished here."
+            )
+            claims.append(
+                ClaimRecord(
+                    claim_id=stable_id(
+                        "claim",
+                        (snapshot.snapshot_id, "checked_out_revision", commit, ANALYZER_VERSION),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    claim=revision_text,
+                    category="checked_out_revision",
+                    status="verified",
+                    confidence=1.0,
+                    importance="high",
+                    produced_by=ANALYZER_VERSION,
+                    created_at=created_at,
+                    verified_at=created_at,
+                    supporting_evidence=(revision_receipt.evidence_id,),
+                    invalidation_keys=("git:HEAD",),
                 )
             )
 

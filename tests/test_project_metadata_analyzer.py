@@ -9,6 +9,7 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.project_metadata import (
     ProjectMetadataAnalyzer,
+    _checked_out_revision,
     _declared_commitments,
     is_declarative_document,
 )
@@ -300,3 +301,59 @@ class DeclaredCommitmentTests(TestCase):
         # A README says what a thing does; it does not promise anything.
         self.assertFalse(is_declarative_document("README.md"))
         self.assertFalse(is_declarative_document("docs/BENCHMARK.md"))
+
+
+class CheckedOutRevisionTests(TestCase):
+    """Which revision the bytes came from, which a snapshot identifier cannot say.
+
+    A snapshot is a deterministic function of a directory, not of a commit. Two
+    people on the same revision can hold different working trees, so a reader
+    with only a snapshot identifier cannot tell which revision it corresponds
+    to, and a diff taken on two machines reads as change rather than as
+    difference.
+
+    Recording the revision does not make the snapshot commit-addressed and the
+    claim says so. It turns "some state of this repository" into "this
+    revision, plus whatever was uncommitted", which is the honest version of
+    the same fact.
+    """
+
+    def test_a_branch_head_is_read(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            git = root / ".git"
+            (git / "refs" / "heads").mkdir(parents=True)
+            (git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            (git / "refs" / "heads" / "main").write_text("a" * 40 + "\n", encoding="utf-8")
+            self.assertEqual(_checked_out_revision(root), ("a" * 40, "refs/heads/main"))
+
+    def test_a_detached_head_reports_its_commit(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / ".git" / "HEAD").write_text("b" * 40 + "\n", encoding="utf-8")
+            self.assertEqual(_checked_out_revision(root), ("b" * 40, "detached HEAD"))
+
+    def test_a_packed_ref_is_resolved(self) -> None:
+        # A freshly cloned repository keeps its refs packed rather than loose.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            (root / ".git" / "packed-refs").write_text(
+                "# pack-refs with: peeled\n" + "c" * 40 + " refs/heads/main\n", encoding="utf-8"
+            )
+            self.assertEqual(_checked_out_revision(root), ("c" * 40, "refs/heads/main"))
+
+    def test_a_directory_that_is_not_a_repository_reports_nothing(self) -> None:
+        with TemporaryDirectory() as directory:
+            self.assertIsNone(_checked_out_revision(Path(directory)))
+
+    def test_an_unresolvable_ref_reports_nothing(self) -> None:
+        # A HEAD pointing at a branch with no loose or packed ref: say nothing
+        # rather than guess at a revision.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            (root / ".git" / "HEAD").write_text("ref: refs/heads/gone\n", encoding="utf-8")
+            self.assertIsNone(_checked_out_revision(root))
