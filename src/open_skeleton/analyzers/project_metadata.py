@@ -257,6 +257,88 @@ def _pyproject_dependencies(document: dict[str, Any]) -> dict[str, set[str]]:
     return {"runtime": runtime, "optional": optional - runtime}
 
 
+# Documents whose filename declares that their contents are commitments rather
+# than description. A README lists what a thing does; a requirements or gates
+# document lists what it must do, and the difference is what makes one worth
+# recording as an obligation.
+DECLARATIVE_DOCUMENT_MARKERS = (
+    "requirement",
+    "gate",
+    "roadmap",
+    "threat",
+    "security",
+    "contributing",
+    "agents",
+    "milestone",
+    "charter",
+    "principles",
+    "governance",
+    "completion",
+    "acceptance",
+    "sla",
+    # An architecture decision record states a decision and its consequences,
+    # which is a commitment in the same sense. They are conventionally filed
+    # under a `decisions/` or `adr/` directory and numbered.
+    "decision",
+    "adr",
+)
+# One bullet under a heading is a remark. Several are a list of obligations.
+MIN_OBLIGATIONS = 2
+
+
+def is_declarative_document(path: str) -> bool:
+    """Whether a document's name says its contents are commitments."""
+
+    folded = path.casefold()
+    stem = folded.rsplit("/", 1)[-1]
+    directories = folded.rsplit("/", 1)[0] if "/" in folded else ""
+    return any(
+        marker in stem or f"/{marker}" in f"/{directories}"
+        for marker in DECLARATIVE_DOCUMENT_MARKERS
+    )
+
+
+def _declared_commitments(source: str) -> list[tuple[str, int, int]]:
+    """`(heading, obligation count, line)` for each commitment group in a document.
+
+    A specification generator can extract what a codebase *does* from the code.
+    What it cannot recover that way is what the codebase said it *must* do, and
+    that lives in prose: a heading naming an obligation group, followed by the
+    bullets that spell it out. `## G1: Safe repository boundary` and the three
+    lines under it are a commitment; the same shape appears in a requirements
+    document, a threat model, and a contributing guide.
+
+    Nothing here checks whether an obligation holds. Recording that the
+    repository made the promise is a different fact from whether it kept it,
+    and only the first is visible in a document.
+    """
+
+    found: list[tuple[str, int, int]] = []
+    heading = ""
+    heading_line = 0
+    obligations = 0
+    fenced = False
+    for number, line in enumerate(source.splitlines(), start=1):
+        if line.startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.startswith("#"):
+            if heading and obligations >= MIN_OBLIGATIONS:
+                found.append((heading, obligations, heading_line))
+            heading = line.lstrip("#").strip()
+            heading_line = number
+            obligations = 0
+            continue
+        stripped = line.strip()
+        if stripped.startswith(("- ", "* ", "+ ")) or re.match(r"^\d+\. ", stripped):
+            obligations += 1
+    if heading and obligations >= MIN_OBLIGATIONS:
+        found.append((heading, obligations, heading_line))
+    return found
+
+
 class ProjectMetadataAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
@@ -654,6 +736,47 @@ class ProjectMetadataAnalyzer:
         for file_record in eligible:
             if file_record.language != "Markdown" or file_record.path not in file_sources:
                 continue
+            if is_declarative_document(file_record.path):
+                for heading, obligations, heading_line in _declared_commitments(
+                    file_sources[file_record.path]
+                ):
+                    commitment_receipt = receipt(
+                        file_record.path,
+                        heading_line,
+                        heading_line,
+                        "declared_commitment",
+                        heading,
+                    )
+                    commitment_text = (
+                        f'{file_record.path} declares "{heading}" with {obligations:,} '
+                        "stated obligation(s). This records that the commitment was made; "
+                        "whether the code keeps it is a separate question this claim does "
+                        "not answer."
+                    )
+                    claims.append(
+                        ClaimRecord(
+                            claim_id=stable_id(
+                                "claim",
+                                (
+                                    snapshot.snapshot_id,
+                                    "declared_commitment",
+                                    commitment_text,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            claim=commitment_text,
+                            category="declared_commitment",
+                            status="verified",
+                            confidence=1.0,
+                            importance="medium",
+                            produced_by=ANALYZER_VERSION,
+                            created_at=created_at,
+                            verified_at=created_at,
+                            supporting_evidence=(commitment_receipt.evidence_id,),
+                            invalidation_keys=(f"file:{file_record.path}",),
+                        )
+                    )
             for line_number, line in enumerate(
                 file_sources[file_record.path].splitlines(), start=1
             ):

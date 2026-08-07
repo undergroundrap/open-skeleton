@@ -7,7 +7,11 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
-from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
+from open_skeleton.analyzers.project_metadata import (
+    ProjectMetadataAnalyzer,
+    _declared_commitments,
+    is_declarative_document,
+)
 from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
 
@@ -246,3 +250,53 @@ class CompilerSettingTests(TestCase):
     def test_a_double_slash_inside_a_string_is_not_a_comment(self) -> None:
         settings = self._settings('{"compilerOptions": {"baseUrl": "https://x.test/y"}}')
         self.assertEqual(settings["compilerOptions.baseUrl"], "https://x.test/y")
+
+
+class DeclaredCommitmentTests(TestCase):
+    """What a repository said it must do, which no analyzer can read from code.
+
+    A specification generator recovers what a codebase *does* from the code.
+    What it cannot recover that way is what the codebase promised, and that
+    lives in prose — a heading naming an obligation group, followed by the
+    bullets that spell it out. `## G1: Safe repository boundary` and its three
+    lines are a commitment, and the same shape appears in a requirements
+    document, a threat model, a contributing guide, and an ADR.
+
+    The idea came from reading another generator's output on this repository.
+    It built its entire feature catalogue by reconciling declared documents
+    against implementation, and stated the rule it followed: source code is not
+    intent, so intent has to be read from where intent was written down.
+    """
+
+    def _commitments(self, source: str) -> list[tuple[str, int, int]]:
+        return _declared_commitments(source)
+
+    def test_a_heading_with_several_bullets_is_a_commitment(self) -> None:
+        source = "## G1: Safe boundary\n\n- No execution.\n- No network.\n- No writes.\n"
+        self.assertEqual(self._commitments(source), [("G1: Safe boundary", 3, 1)])
+
+    def test_a_heading_with_one_bullet_is_a_remark(self) -> None:
+        # One bullet under a heading is a note, not a list of obligations.
+        self.assertEqual(self._commitments("## Notes\n\n- Something.\n"), [])
+
+    def test_numbered_obligations_count(self) -> None:
+        source = "## Steps\n\n1. First.\n2. Second.\n3. Third.\n"
+        self.assertEqual(self._commitments(source)[0][1], 3)
+
+    def test_bullets_inside_a_code_fence_are_not_obligations(self) -> None:
+        source = "## Example\n\n```\n- not an obligation\n- nor this\n```\n"
+        self.assertEqual(self._commitments(source), [])
+
+    def test_a_declarative_filename_is_recognized(self) -> None:
+        self.assertTrue(is_declarative_document("docs/COMPLETION_GATES.md"))
+        self.assertTrue(is_declarative_document("docs/PRODUCT_REQUIREMENTS.md"))
+
+    def test_an_adr_directory_is_recognized(self) -> None:
+        # Architecture decision records state a decision and its consequences.
+        self.assertTrue(is_declarative_document("docs/decisions/0003-keep-it-local.md"))
+        self.assertTrue(is_declarative_document("docs/adr/0001-choose-sqlite.md"))
+
+    def test_a_descriptive_document_is_not_declarative(self) -> None:
+        # A README says what a thing does; it does not promise anything.
+        self.assertFalse(is_declarative_document("README.md"))
+        self.assertFalse(is_declarative_document("docs/BENCHMARK.md"))
