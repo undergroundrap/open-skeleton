@@ -13,6 +13,8 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.python_ast import (
     PythonAstAnalyzer,
+    _caught_families,
+    _defined_exceptions,
     _embedded_literals,
     _external_calls,
     _imported_names,
@@ -811,3 +813,43 @@ class DeprecationReceiverTests(TestCase):
     def test_a_bare_imported_warn_is_a_deprecation(self) -> None:
         source = "from warnings import warn\n\n\ndef f():\n    warn('x', DeprecationWarning)\n"
         self.assertTrue(self._has(source))
+
+
+class ExceptionContractTests(TestCase):
+    """A package's own error types, and what its handlers absorb.
+
+    The only `try` handling this analyzer had was written to recognise one
+    fixture's AI-client fallbacks -- a rule about a repository rather than
+    about Python. An outside generator read the same code and produced an
+    exception taxonomy: three declared types, all subclassing `ValueError`,
+    and the family every handler names. Both are ordinary AST facts and
+    neither was recorded here.
+    """
+
+    def _parse(self, source: str) -> ast.Module:
+        return ast.parse(source)
+
+    def test_a_declared_exception_type_is_recorded(self) -> None:
+        found = _defined_exceptions(self._parse("class BadInput(ValueError):\n    pass\n"))
+        self.assertEqual(found, [("BadInput", "ValueError", 1)])
+
+    def test_a_plain_class_is_not_an_exception_type(self) -> None:
+        self.assertEqual(_defined_exceptions(self._parse("class Config:\n    pass\n")), [])
+
+    def test_a_subclass_of_exception_counts(self) -> None:
+        found = _defined_exceptions(self._parse("class Halt(Exception):\n    pass\n"))
+        self.assertEqual(found[0][:2], ("Halt", "Exception"))
+
+    def test_a_handler_records_its_whole_family(self) -> None:
+        source = "try:\n    go()\nexcept (OSError, ValueError):\n    pass\n"
+        self.assertEqual(_caught_families(self._parse(source)), [("OSError, ValueError", 3)])
+
+    def test_a_dotted_exception_keeps_its_module(self) -> None:
+        source = "import json\ntry:\n    go()\nexcept json.JSONDecodeError:\n    pass\n"
+        self.assertEqual(_caught_families(self._parse(source))[0][0], "json.JSONDecodeError")
+
+    def test_a_bare_except_is_recorded_as_catching_everything(self) -> None:
+        # Absorbing everything is a different fact from absorbing something,
+        # and a reader should be able to find it.
+        source = "try:\n    go()\nexcept:\n    pass\n"
+        self.assertEqual(_caught_families(self._parse(source)), [("*", 3)])

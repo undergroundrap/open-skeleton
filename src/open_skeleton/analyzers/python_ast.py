@@ -8,6 +8,7 @@ import ast
 import hashlib
 import re
 import time
+from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -602,6 +603,48 @@ def _signatures(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _defined_exceptions(tree: ast.Module) -> list[tuple[str, str, int]]:
+    """`(name, base, line)` for exception types a module declares.
+
+    A package's own exception types are its error contract: they say what a
+    caller is expected to catch, and what a maintainer may not rename without
+    breaking one. Nothing here recorded them, because the only `try` handling
+    this analyzer had was written to recognise one fixture's AI-client
+    fallbacks -- a rule about a repository rather than about Python.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for base in node.bases:
+            name = base.id if isinstance(base, ast.Name) else ""
+            if name.endswith(("Error", "Exception")):
+                found.append((node.name, name, node.lineno))
+                break
+    return found
+
+
+def _caught_families(tree: ast.Module) -> list[tuple[str, int]]:
+    """The exception family each `except` clause names, in source order.
+
+    A bare `except:` is recorded as `*`, because catching everything is a
+    different fact from catching something and is worth being able to find.
+    """
+
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        if node.type is None:
+            found.append(("*", node.lineno))
+            continue
+        parts = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+        rendered = ", ".join(ast.unparse(item) for item in parts)
+        found.append((rendered, node.lineno))
+    return found
+
+
 def _reference_literals(tree: ast.Module) -> set[int]:
     """Constant nodes that name a string rather than address a service.
 
@@ -1057,6 +1100,9 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.imported_names = _imported_names(tree)
         self.string_constants = _string_constants(tree)
         self.embedded_literals = _embedded_literals(tree)
+        self.defined_exceptions = _defined_exceptions(tree)
+        self.caught_families = _caught_families(tree)
+        self.caught_family_evidence: dict[str, list[str]] = {}
         self.signatures = _signatures(tree)
         self.external_calls = _external_calls(tree)
         self.name_index = _name_index(tree)
@@ -1983,6 +2029,37 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
     def finalize(self) -> None:
         self._attach_module_metadata()
+        for name, base, line in self.defined_exceptions:
+            qualified = f"{self.module}.{name}"
+            self._claim(
+                text=(
+                    f"{qualified} extends {base}, so it is part of this package's "
+                    "error contract: a caller catches it by name and renaming it "
+                    "breaks them."
+                ),
+                category="exception_type",
+                status="verified",
+                confidence=1.0,
+                importance="medium",
+                supporting=(
+                    self._evidence(
+                        start_line=line,
+                        end_line=line,
+                        symbol=qualified,
+                        evidence_kind="exception_type",
+                    ).evidence_id,
+                ),
+                invalidation_keys=(f"file:{self.path}", f"symbol:{qualified}"),
+            )
+        for family, line in self.caught_families:
+            self.caught_family_evidence.setdefault(family, []).append(
+                self._evidence(
+                    start_line=line,
+                    end_line=line,
+                    symbol=self.module,
+                    evidence_kind="caught_exception",
+                ).evidence_id
+            )
         if self.test_evidence:
             self._claim(
                 text=f"{self.path} declares {len(self.test_evidence)} test symbols.",
@@ -2038,6 +2115,7 @@ class PythonAstAnalyzer:
         route_evidence: list[str] = []
         endpoint_evidence: list[str] = []
         endpoint_literals: set[str] = set()
+        caught_families: dict[str, list[str]] = defaultdict(list)
         route_auth_control_evidence: list[str] = []
         typed_route_evidence: list[str] = []
         eligible = [item for item in snapshot.files if item.language == "Python"]
@@ -2072,9 +2150,36 @@ class PythonAstAnalyzer:
             route_evidence.extend(analyzer.route_evidence)
             endpoint_evidence.extend(analyzer.endpoint_evidence)
             endpoint_literals.update(analyzer.endpoint_literals)
+            for family, receipts in analyzer.caught_family_evidence.items():
+                caught_families[family].extend(receipts)
             route_auth_control_evidence.extend(analyzer.route_auth_control_evidence)
             typed_route_evidence.extend(analyzer.typed_route_evidence)
             analyzed_files += 1
+
+        for family, receipts in sorted(caught_families.items()):
+            rendered = "every exception" if family == "*" else f"`{family}`"
+            claims.append(
+                ClaimRecord(
+                    claim_id=stable_id(
+                        "claim",
+                        (snapshot.snapshot_id, "caught_exception", family, ANALYZER_VERSION),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    claim=(
+                        f"{len(receipts):,} handler(s) catch {rendered}. What a program "
+                        "chooses to absorb is where it decided a fault is survivable."
+                    ),
+                    category="caught_exception",
+                    status="verified",
+                    confidence=1.0,
+                    importance="high" if family == "*" else "medium",
+                    produced_by=ANALYZER_VERSION,
+                    created_at=created_at,
+                    verified_at=created_at,
+                    supporting_evidence=tuple(sorted(receipts)),
+                    invalidation_keys=("python:exception-handling",),
+                )
+            )
 
         if endpoint_evidence:
             listed = ", ".join(sorted(endpoint_literals))
