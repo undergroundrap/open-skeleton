@@ -1232,3 +1232,28 @@ class LegibleMatchTests(TestCase):
             for item in probe.get("matches", [])
         ]
         self.assertTrue(matched, "the JSON projection must still carry probe matches")
+
+
+class ScopedAbsenceTests(TestCase):
+    """An absence is only as strong as the corpus it was measured against.
+
+    "The glob matched zero" invites the question zero out of what, and the
+    answer was already known at render time. Another generator made the same
+    point structurally rather than by probe: instead of reporting that no
+    network client exists, it listed all three `http`/`urllib` imports and
+    observed that none of them is one. Naming the corpus is the general form
+    of that move, and needs no per-concern candidate set to state.
+    """
+
+    def test_an_absent_verdict_names_the_corpus_it_searched(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+            markdown = render_spec_markdown(document)
+        self.assertIn("Determination: absent", markdown)
+        self.assertIn("zero matches across the", markdown)
+        self.assertIn(f"{document.total_claims:,} claim(s)", markdown)

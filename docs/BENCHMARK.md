@@ -229,3 +229,36 @@ function bodies and closures, keeps the escape on a raw identifier, and counts
 a tuple-struct construction as a call. Each looked exactly like a defect until
 it was read. A differential says the two readers disagree; it never says which
 one is wrong.
+
+## Reading another generator's specification of this repository
+
+The comparison that produced the most change was not a metric. It was putting
+this engine's specification of its own repository beside another tool's, on
+the same subject, and reading both.
+
+Every automated check here measures whether a claim is *true*. None measures
+whether the document is *readable*, and the tests are written by whoever wrote
+the renderer, so they encode the same framing the renderer does. A document
+aimed at the same reader does not.
+
+Four subjects compared, three defects found, none of which was a false claim:
+
+| Subject | What the comparison exposed |
+|---|---|
+| The SQLite ledger | Twelve sixty-four-character digests printed at a human reader under "Matched records" |
+| Security architecture | Absence reported without attributing it to the decision that caused it |
+| Non-goals | Six things the project refuses to build, reported as "stated obligations" |
+| Integration surface | An absence stated as a failed probe rather than scoped to what was searched |
+
+The third is worth recording plainly: it is the true-but-misleading shape
+`open-skeleton audit` exists to catch, produced by this engine about itself, by
+a claim added earlier in the same session as the audit that would have caught
+it in someone else's output.
+
+One idea from that document is not yet built. It reports absences by
+foreclosure rather than by probe: instead of "no network client was found", it
+lists all three `http`/`urllib` imports and observes that none of them is a
+client. Doing that in general needs a candidate set per concern — the complete
+list of things that could have satisfied it — which the profile does not
+declare today. Naming the corpus an absence was measured against is the cheap
+general form, and is what the `absent` verdict now states.

@@ -48,8 +48,9 @@ _VERDICT_SENTENCE = {
     ),
     "absent": (
         "**Determination: absent.** Every probe declared for this concern returned "
-        "zero matches against snapshot `{snapshot}`. The queries are listed below so "
-        "the absence can be re-checked rather than trusted."
+        "zero matches across the {corpus:,} file(s) and {claims:,} claim(s) in snapshot "
+        "`{snapshot}`. The queries are listed below so the absence can be re-checked "
+        "rather than trusted."
     ),
     "structural": (
         "This section organizes the subsections below and makes no presence claim of its own."
@@ -789,6 +790,7 @@ def render_spec_markdown(document: SpecDocument) -> str:
     # Excerpts are read from the analyzed tree, so the root is resolved once and
     # every citation path is checked to stay inside it.
     root = Path(document.root).expanduser().resolve()
+    corpus_files = sum(int(item.get("analyzed_files", 0) or 0) for item in document.coverage)
 
     lines.append(f"# {document.profile_title}\n\n")
     lines.append(f"- Snapshot: `{document.snapshot_id}`\n")
@@ -827,8 +829,13 @@ def render_spec_markdown(document: SpecDocument) -> str:
             lines.append(f"_Concern: {section.concern}_\n\n")
 
         total = sum(item.match_count for item in section.probe_results)
+        # An absence is only as strong as the corpus it was measured against.
+        # "The glob matched zero" invites the question zero out of what, and
+        # the answer is already known here.
         sentence = _VERDICT_SENTENCE[section.verdict].format(
             total=total,
+            corpus=corpus_files,
+            claims=document.total_claims,
             snapshot=document.snapshot_id,
             threshold=section.degenerate_threshold,
             requires=", ".join(
