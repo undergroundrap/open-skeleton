@@ -200,6 +200,7 @@ Consolidated views — the same determinations, arranged for one question:
 | `endpoint_catalog` | Each route with its handler's guards, refusals, and response fields |
 | `data_flow` | Where data enters, rests, and leaves each module |
 | `substitute_analysis` | What plays an absent concern's part, since the work happens regardless |
+| `multi_role_structures` | Structures carrying a concern from more than one family at once |
 | `documented_values` | What the documentation asserts, beside what the code declares |
 
 The exclusions panel is the one that matters most. A census that silently drops

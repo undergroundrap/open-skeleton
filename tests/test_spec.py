@@ -3,6 +3,7 @@
 # Additional terms: see NOTICE.md for visible attribution requirements.
 
 import json
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -1075,3 +1076,33 @@ class SummarySpreadTests(TestCase):
 
     def test_an_empty_list_yields_nothing(self) -> None:
         self.assertEqual(_spread_by_category([], 10), [])
+
+
+class PanelCatalogueTests(TestCase):
+    """Every registered panel has a row in the documented catalogue.
+
+    `docs/SPEC.md` states the rule for adding a panel: "a function in
+    `spec/panels.py`, an entry in `PANEL_KINDS`, and a row here."
+    `multi_role_structures` had the first two and not the third, so the
+    documented catalogue listed 29 panels while the code registered 30.
+
+    Found by an outside specification generator, which read both the code and
+    the documentation and reported the two counts separately rather than
+    picking one. Nothing in this suite compared them, which is why a rule the
+    project states about itself went unenforced.
+    """
+
+    def test_every_registered_panel_is_documented(self) -> None:
+        from open_skeleton.spec.profile import PANEL_KINDS
+
+        documented = set(
+            re.findall(
+                r"^\| `([a-z_]+)` \|",
+                (Path(__file__).resolve().parents[1] / "docs" / "SPEC.md").read_text(
+                    encoding="utf-8"
+                ),
+                flags=re.MULTILINE,
+            )
+        )
+        missing = sorted(PANEL_KINDS - documented)
+        self.assertEqual(missing, [], f"registered but undocumented panels: {missing}")
