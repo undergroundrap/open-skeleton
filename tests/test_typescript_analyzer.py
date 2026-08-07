@@ -11,6 +11,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     TypeScriptLexicalAnalyzer,
     _declarations,
     _environment_reads,
+    _exported_names,
     _external_origins,
     _imported_names,
     _module_state,
@@ -392,3 +393,39 @@ class TunableTests(TestCase):
     def test_a_computed_initializer_is_not_recorded(self) -> None:
         # `const X = a * b` has no literal value to report without evaluating it.
         self.assertEqual(_tunables(_tokens("const SPEED = base * 2;\n")), {})
+
+
+class ExportSurfaceTests(TestCase):
+    """Which names a module makes public, which `_declarations` cannot say.
+
+    Found by running against a date library of 1,579 modules that produced
+    0.07 claims per file. That was not a quiet codebase: every module exports
+    the one function it exists to provide, and an internal helper was recorded
+    identically to it. In an ES module the keyword is the declaration, and
+    `export` is more explicit than the `__all__` list it corresponds to.
+    """
+
+    def test_an_exported_function_is_public_and_a_helper_is_not(self) -> None:
+        found = _exported_names(_tokens("export function addDays(d, n) {}\nfunction helper() {}\n"))
+        self.assertEqual(found, ["addDays"])
+
+    def test_an_export_list_records_each_name(self) -> None:
+        self.assertEqual(_exported_names(_tokens("export { a, b };\n")), ["a", "b"])
+
+    def test_a_renamed_export_records_the_public_name(self) -> None:
+        # `export { internal as publicName }` commits to publicName only.
+        self.assertEqual(
+            _exported_names(_tokens("export { internal as publicName };\n")), ["publicName"]
+        )
+
+    def test_a_default_export_is_recorded(self) -> None:
+        self.assertEqual(_exported_names(_tokens("export default class Foo {}\n")), ["Foo"])
+
+    def test_a_star_reexport_claims_no_names(self) -> None:
+        # The names live in another file. Listing them here would attribute a
+        # surface to the wrong module.
+        self.assertEqual(_exported_names(_tokens('export * from "./other";\n')), [])
+
+    def test_types_and_constants_count_as_surface(self) -> None:
+        found = _exported_names(_tokens("export const X = 1;\nexport interface Opts {}\n"))
+        self.assertEqual(found, ["X", "Opts"])

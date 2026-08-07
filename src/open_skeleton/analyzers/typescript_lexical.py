@@ -82,6 +82,23 @@ JS_KEYWORDS = frozenset(
 REACT_HOOKS = frozenset(
     {"useCallback", "useContext", "useEffect", "useMemo", "useReducer", "useRef", "useState"}
 )
+# Keywords that may sit between `export` and the name being exported.
+EXPORTABLE_KEYWORDS = frozenset(
+    {
+        "function",
+        "const",
+        "let",
+        "var",
+        "class",
+        "interface",
+        "type",
+        "enum",
+        "async",
+        "default",
+        "abstract",
+        "declare",
+    }
+)
 CLIENT_STORES = frozenset({"localStorage", "sessionStorage"})
 # Calls that return something requests are registered on. A name is treated as
 # a server only by being bound to one of these, never by being called `app`.
@@ -502,6 +519,69 @@ def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
         entry["count"] = int(entry["count"]) + 1
         entry["first_line"] = min(int(entry["first_line"]), token.line)
     return found
+
+
+def _exported_names(tokens: list[Token]) -> list[str]:
+    """Names this module makes public, in declaration order.
+
+    `_declarations` records every name a module introduces and cannot say
+    which of them anyone outside is allowed to use, so an internal helper and
+    the function the package exists to provide looked identical. For a library
+    that is the difference between the surface it must not break and the parts
+    it may rewrite freely.
+
+    In an ES module the keyword is the declaration: `export` is more explicit
+    than Python's `__all__`, which has to be kept in step with the code by
+    hand. Both direct forms are read -- `export function x` and the
+    `export { x, y as z }` list, where the exported name is the alias.
+
+    `export * from` is deliberately not expanded. The names it forwards live in
+    another file, and listing this module as their origin would attribute a
+    surface to the wrong place.
+    """
+
+    exported: list[str] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "export" or index + 1 >= total:
+            continue
+        following = tokens[index + 1]
+        if following.value == "{":
+            scan = index + 2
+            pending: str | None = None
+            while scan < total and tokens[scan].value != "}":
+                current = tokens[scan]
+                if current.kind == "identifier":
+                    # `a as b` exports b; the name before `as` is local.
+                    if current.value == "as" and scan + 1 < total:
+                        pending = tokens[scan + 1].value
+                        scan += 2
+                        continue
+                    if pending is None:
+                        pending = current.value
+                elif current.value == "," and pending is not None:
+                    exported.append(pending)
+                    pending = None
+                scan += 1
+            if pending is not None:
+                exported.append(pending)
+            continue
+        if following.value in EXPORTABLE_KEYWORDS and index + 2 < total:
+            name = tokens[index + 2]
+            # `export default function ...` and `export async function ...`
+            # put another keyword before the name.
+            if name.value in EXPORTABLE_KEYWORDS and index + 3 < total:
+                name = tokens[index + 3]
+            if name.kind == "identifier" and name.value not in EXPORTABLE_KEYWORDS:
+                exported.append(name.value)
+    # Declaration order is kept: it is the order a reader meets them in the file.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in exported:
+        if candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
 
 
 def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
@@ -1158,6 +1238,7 @@ class TypeScriptLexicalAnalyzer:
             file_aliases = _import_aliases(file_tokens)
             file_servers = _server_receivers(file_tokens)
             file_tunables = _tunables(file_tokens)
+            file_exports = _exported_names(file_tokens)
             file_clients = {
                 name
                 for module_name, entry in file_imports.items()
@@ -1448,6 +1529,21 @@ class TypeScriptLexicalAnalyzer:
                         file_record.sha256,
                     )
                     test_evidence.append(receipt.evidence_id)
+
+            if file_exports:
+                surface = add_evidence(
+                    file_record.path, 1, 1, module, "public_api", file_record.sha256
+                )
+                shown = ", ".join(sorted(file_exports)[:12])
+                add_claim(
+                    f"{module} exports {len(file_exports)} name(s): {shown}"
+                    f"{'...' if len(file_exports) > 12 else ''}. Renaming or removing one is a "
+                    "breaking change for every importer.",
+                    "public_api",
+                    "high",
+                    [surface.evidence_id],
+                    file_record.path,
+                )
 
             if fetch_evidence:
                 add_claim(

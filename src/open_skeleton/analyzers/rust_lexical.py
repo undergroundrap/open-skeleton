@@ -698,7 +698,16 @@ def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
         if scan >= total or not header:
             index = scan + 1
             continue
-        owner = header[header.index("for") + 1] if "for" in header else header[-1]
+        # `impl Trait for ()` names its target entirely in punctuation, so the
+        # header ends at `for` and there is no identifier after it. Indexing
+        # past the end raised `IndexError` and abandoned the whole repository
+        # over one statement -- `clap` implements three traits for the unit
+        # type, which no fixture written by hand would have thought to include.
+        divider = header.index("for") if "for" in header else -1
+        if divider >= 0 and divider + 1 >= len(header):
+            index = scan + 1
+            continue
+        owner = header[divider + 1] if divider >= 0 else header[-1]
         if owner == "$":
             index = scan + 1
             continue

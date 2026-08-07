@@ -62,13 +62,24 @@ class Outcome:
 
 
 def _candidates(root: Path) -> list[Path]:
+    """Directories holding source in any language this engine analyzes.
+
+    The first version required a `*.py` file, which meant a harness built
+    to give the Rust and TypeScript analyzers outside scrutiny examined one
+    of six repositories and reported success. A filter that quietly drops
+    what it was written to measure is worse than no filter.
+    """
+
     return sorted(
         item
         for item in root.iterdir()
         if item.is_dir()
         and not item.name.endswith(("dist-info", "egg-info", "__pycache__"))
         and not item.name.startswith((".", "_"))
-        and any(item.rglob("*.py"))
+        and any(
+            next(item.rglob(pattern), None) is not None
+            for pattern in ("*.py", "*.rs", "*.ts", "*.tsx", "*.js", "*.jsx")
+        )
     )
 
 
