@@ -10,6 +10,7 @@ from open_skeleton.analyzers.rust_lexical import (
     RustLexicalAnalyzer,
     _call_sites,
     _constants,
+    _declared_items,
     _error_surface,
     _impl_methods,
     _mutable_statics,
@@ -302,3 +303,46 @@ class CallSiteTests(TestCase):
 
     def test_a_constructor_is_not_a_call(self) -> None:
         self.assertEqual(_call_sites(tokenize("fn f() { Some(y); Ok(z); }\n")), [])
+
+
+class MacroTemplateTests(TestCase):
+    """A macro body describes code; it does not declare it.
+
+    `macro_rules! make { ($n:ident) => { pub struct Generated; }; }` declares no
+    struct. It describes one a caller may ask for, under a name substituted at
+    expansion. Recording it put types in the symbol index that nothing in the
+    crate defines, and a reader cannot tell such an entry from a real one.
+
+    Found by comparing against `syn`, which gets this boundary for free by
+    treating a macro invocation as one opaque item and never descending.
+    """
+
+    def test_a_struct_inside_a_macro_definition_is_not_declared(self) -> None:
+        source = "macro_rules! make {\n    ($n:ident) => { pub struct Generated; };\n}\n"
+        self.assertEqual(_declared_items(tokenize(source)), [])
+
+    def test_a_struct_inside_a_quote_body_is_not_declared(self) -> None:
+        found = _declared_items(tokenize("quote! { pub struct Templated; }\n"))
+        self.assertEqual(found, [])
+
+    def test_a_real_declaration_beside_a_macro_survives(self) -> None:
+        source = "macro_rules! make { () => { struct Hidden; }; }\npub struct Real;\n"
+        self.assertEqual([name for _, name, _ in _declared_items(tokenize(source))], ["Real"])
+
+    def test_an_implementation_inside_a_macro_body_is_not_recorded(self) -> None:
+        source = "quote! { impl #generics Args for #ident #where_clause { } }\n"
+        self.assertEqual(_trait_implementations(tokenize(source)), [])
+
+    def test_a_lifetime_is_not_an_owner(self) -> None:
+        # `impl Matcher for &'a Foo` reported the owner as `a` until lifetimes
+        # became a token kind of their own.
+        found = _trait_implementations(tokenize("impl<'a> Matcher for &'a Foo {}"))
+        self.assertEqual([(owner, name) for owner, name, _ in found], [("Foo", "Matcher")])
+
+    def test_a_path_qualified_owner_resolves_to_its_last_segment(self) -> None:
+        found = _trait_implementations(tokenize("impl From<E> for std::io::Error {}"))
+        self.assertEqual([(owner, name) for owner, name, _ in found], [("Error", "From")])
+
+    def test_a_where_clause_is_not_part_of_the_type(self) -> None:
+        found = _trait_implementations(tokenize("impl<T> Trait for Foo where T: Send {}"))
+        self.assertEqual([(owner, name) for owner, name, _ in found], [("Foo", "Trait")])

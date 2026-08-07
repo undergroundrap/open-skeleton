@@ -560,6 +560,33 @@ def _macro_body_spans(tokens: list[Token]) -> list[tuple[int, int]]:
     return spans
 
 
+def _declared_items(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """`(kind, name, line)` for the items a file actually declares.
+
+    `macro_rules! make { ($n:ident) => { pub struct Generated; }; }` declares
+    no struct. It describes one a caller may ask for, under a name that is
+    substituted at expansion. Recording it put a type in the symbol index that
+    nothing in the crate defines, and a reader cannot tell that entry from a
+    real one.
+
+    The same exclusion `_trait_implementations` uses, applied to the other
+    half of what this analyzer says a file contains.
+    """
+
+    templates = _macro_body_spans(tokens)
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in ITEM_KEYWORDS:
+            continue
+        if index + 1 >= total or any(start < index < end for start, end in templates):
+            continue
+        name = tokens[index + 1]
+        if name.kind == "identifier" and not _is_macro_parameter(tokens, index + 1):
+            found.append((ITEM_KEYWORDS[token.value], name.value, token.line))
+    return found
+
+
 def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """`impl Trait for Type` pairs: the contracts a type actually satisfies.
 
@@ -921,6 +948,7 @@ class RustLexicalAnalyzer:
             file_routes = _http_routes(tokens)
             file_calls = _client_calls(tokens)
             file_call_sites = _call_sites(tokens)
+            declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
             module_symbol_id = stable_id(
@@ -998,7 +1026,11 @@ class RustLexicalAnalyzer:
 
                 if token.value in ITEM_KEYWORDS and index + 1 < len(tokens):
                     name_token = tokens[index + 1]
-                    if name_token.kind == "identifier":
+                    # `_declared_items` is the single decision about what this
+                    # file declares, so a template inside a macro body is
+                    # excluded here by the same rule rather than a second one
+                    # that can drift away from it.
+                    if (token.line, name_token.value) in declared_here:
                         qualified = f"{module}::{name_token.value}"
                         item_receipt = receipt(
                             file_record.path, token.line, "symbol", qualified, excerpt
