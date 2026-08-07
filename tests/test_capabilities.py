@@ -214,3 +214,28 @@ class QualifiedNameTests(TestCase):
 
     def test_a_bare_name_is_returned_unchanged(self) -> None:
         self.assertEqual(_short_name("check_build"), "check_build")
+
+
+class ReferenceStrengthTests(TestCase):
+    """A reference says which kind of verifier produced it.
+
+    Whole-file granularity means a source file carrying inline tests counts as
+    verifying everything it calls, including from code that is not the test.
+    That is real evidence and it is weaker than a dedicated test calling the
+    same thing, so the sentence distinguishes them rather than letting a reader
+    assume the stronger reading of a number.
+    """
+
+    def test_a_dedicated_test_reference_reads_as_a_direct_call(self) -> None:
+        capabilities = CapabilityClusteringTests()._build(
+            (
+                {
+                    "relationship": "calls",
+                    "source_path": "tests/test_api.py",
+                    "target_ref": "attack",
+                },
+            )
+        )
+        references = [ref for item in capabilities for ref in item.exercised_by]
+        self.assertTrue(references, "the call should have been recorded")
+        self.assertFalse(any("contains tests and" in ref for ref in references))

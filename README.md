@@ -23,8 +23,8 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Bounded traversal with symlink, secret, binary, generated-output, malformed-encoding, and file-size controls
 - Deterministic SHA-256 file and snapshot identities
 - Python AST symbols, imports, calls, FastAPI routes, typed parameters, state mutation, SQLite/JSON persistence, CORS, tests, process exits, and selected failure behavior
-- Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, imports, `const`/`static` tunables, struct fields, impl methods, shared statics, the Result/`?` error surface, and trait implementations
-- Comment-safe TypeScript/JavaScript lexical facts for value bindings, class and interface members, object literal keys, imports, fetch calls, endpoint literals, React hooks, browser storage, module-scope state, `process.env` reads, thrown types, and tests
+- Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, imports, call edges, served routes in builder and attribute-macro form, outbound client requests, `const`/`static` tunables, struct fields, impl methods, shared statics, the Result/`?` error surface, and trait implementations
+- Comment-safe TypeScript/JavaScript lexical facts for value bindings, class and interface members, object literal keys, imports, served routes, the endpoint each call targets, named literal tunables including inside an IIFE wrapper, endpoint literals, React hooks resolved through aliased imports, browser storage, module-scope state, `process.env` reads, thrown types, and tests
 - Project-manifest and Markdown reconciliation for dependencies, API tables, runtime instructions, Tailwind claims, tests, and CI
 - Native `hum.semantic_graph.v0` ingestion without implicitly executing the Hum compiler
 - Atomic `verified`, `inferred`, `conflict`, `unknown`, and `stale` claims with alternatives and invalidation keys
@@ -135,6 +135,35 @@ instances: a production finding evidenced only by test files, a category with
 no file-level evidence at all, a category concentrated in a file that carries
 little else. A finding is a place to read before publishing a number, not a
 defect — `--strict` exits non-zero if you want it as a gate.
+
+## Precision under hostile input
+
+Every fixture used to build these analyzers was written by someone trying to
+make a working program, and real code is cooperative. An extractor only looks
+precise until it meets a decorator that is commented out, aliased, or applied
+in a loop, so `tests/test_canary_repository.py` is a repository written
+specifically to fool one.
+
+| Case | What it separates | Result |
+|---|---|---|
+| A route inside a comment | Regex scanning from syntax parsing | Not extracted |
+| A route inside a string literal | The same, through the other common leak | Not extracted |
+| An aliased decorator or import | Name resolution from literal matching | Resolved |
+| A path built in a loop or template | Static extraction from execution | Not invented |
+| A receiver of unknown origin | Whether a guess is preferred to silence | No claim either way |
+| A genuine route, call, and hook | That the above is precision, not blindness | Extracted |
+
+The standard is precision rather than recall. An analyzer honestly reported as
+lexical is allowed to miss a dynamically registered route; it is not allowed
+to assert one that does not exist, because a specification naming an endpoint
+nobody serves is worse than one omitting an endpoint somebody does. A
+template path is recorded as its static prefix marked interpolated —
+`/api/user/` rather than a fabricated `/api/user/42`.
+
+The last row exists because the first version of this fixture passed in every
+language and the result was misleading: two of three analyzers passed each
+trap by extracting nothing at all. A test suite that only checks for false
+positives rewards blindness.
 
 ## Agent access with MCP
 

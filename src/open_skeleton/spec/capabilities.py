@@ -253,7 +253,16 @@ def build_capabilities(
         route_paths = {entry.split(" ", 1)[1] for entry in bucket["routes"] if " " in entry}
         references = sorted(
             {
-                f"{source} calls {_short_name(name)}"
+                # Whole-file granularity means a reference from a source file
+                # carrying inline tests proves the file reaches this, not that
+                # a test does. Both are evidence and they are not equally
+                # strong, so the sentence says which one it is instead of
+                # letting a reader assume the stronger reading.
+                (
+                    f"{source} calls {_short_name(name)}"
+                    if source in dedicated
+                    else f"{source} contains tests and calls {_short_name(name)}"
+                )
                 for name in members
                 for source in calls_from_verifiers.get(_short_name(name), ())
             }
