@@ -25,6 +25,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Python AST symbols, imports, calls, FastAPI routes, typed parameters, state mutation, SQLite/JSON persistence, CORS, tests, process exits, and selected failure behavior
 - Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, imports, call edges, served routes in builder and attribute-macro form, outbound client requests, `const`/`static` tunables, struct fields, impl methods, shared statics, the Result/`?` error surface, and trait implementations
 - Comment-safe TypeScript/JavaScript lexical facts for value bindings, class and interface members, object literal keys, imports, served routes, the endpoint each call targets, named literal tunables including inside an IIFE wrapper, endpoint literals, React hooks resolved through aliased imports, browser storage, module-scope state, `process.env` reads, thrown types, and tests
+- Library-shaped facts an application taxonomy has no category for: the public surface a module commits to through `__all__`, and the paths it has scheduled for removal through deprecation warnings
 - Project-manifest and Markdown reconciliation for dependencies, API tables, runtime instructions, Tailwind claims, tests, and CI
 - Native `hum.semantic_graph.v0` ingestion without implicitly executing the Hum compiler
 - Atomic `verified`, `inferred`, `conflict`, `unknown`, and `stale` claims with alternatives and invalidation keys

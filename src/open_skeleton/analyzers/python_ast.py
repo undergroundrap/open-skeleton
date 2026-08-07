@@ -74,6 +74,10 @@ STRING_MATCH_METHODS = frozenset(
 )
 # Mapping keys whose value names a vocabulary rather than a host to contact.
 IDENTIFIER_KEYS = frozenset({"$schema", "$id", "xmlns", "namespace", "schema"})
+# Warning classes that announce a scheduled removal rather than a defect.
+DEPRECATION_CATEGORIES = frozenset(
+    {"DeprecationWarning", "PendingDeprecationWarning", "FutureWarning"}
+)
 # Categories that describe the system when the evidence is source and describe
 # the suite when it is a test. Nothing is dropped: a fixture's shape is a real
 # fact about the suite, and a reader deciding what the system stores needs to
@@ -1427,6 +1431,33 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         value = node.value
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         names = [name for target in targets for name in _assigned_names(target)]
+        if "__all__" in names and isinstance(value, (ast.List, ast.Tuple)):
+            exported = tuple(
+                item.value
+                for item in value.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            )
+            if exported:
+                surface = self._evidence(
+                    start_line=node.lineno,
+                    end_line=node.end_lineno or node.lineno,
+                    symbol=self.module,
+                    evidence_kind="public_api",
+                )
+                self._claim(
+                    text=(
+                        f"{self.module} declares {len(exported)} name(s) as its public surface: "
+                        f"{', '.join(sorted(exported)[:12])}"
+                        f"{'...' if len(exported) > 12 else ''}. Removing or renaming one is a "
+                        "breaking change for every importer."
+                    ),
+                    category="public_api",
+                    status="verified",
+                    confidence=1.0,
+                    importance="high",
+                    supporting=(surface.evidence_id,),
+                    invalidation_keys=(f"file:{self.path}", f"symbol:{self.module}.__all__"),
+                )
         for name in names:
             qualified = f"{self.module}.{name}"
             symbol = self._symbol(
@@ -1716,6 +1747,42 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         call_name = _expr_name(node.func)
+        # A deprecation is a removal that has been scheduled and announced. It
+        # is one of the few facts a library states about its own future, and
+        # the reason a caller pinning this version needs to read the section
+        # before upgrading rather than after.
+        if call_name and call_name.split(".")[-1] == "warn":
+            categories = {
+                _expr_name(argument)
+                for argument in (*node.args, *(keyword.value for keyword in node.keywords))
+            }
+            named = sorted(
+                item.split(".")[-1]
+                for item in categories
+                if item and item.split(".")[-1] in DEPRECATION_CATEGORIES
+            )
+            if named:
+                notice = self._evidence(
+                    start_line=node.lineno,
+                    end_line=node.end_lineno or node.lineno,
+                    symbol=self.current_qualified_name,
+                    evidence_kind="deprecation",
+                )
+                self._claim(
+                    text=(
+                        f"{self.current_qualified_name} raises {named[0]} at runtime, so callers "
+                        "of it are being told this path is scheduled for removal."
+                    ),
+                    category="deprecation",
+                    status="verified",
+                    confidence=1.0,
+                    importance="high",
+                    supporting=(notice.evidence_id,),
+                    invalidation_keys=(
+                        f"file:{self.path}",
+                        f"symbol:{self.current_qualified_name}",
+                    ),
+                )
         if call_name:
             evidence = self._evidence(
                 start_line=node.lineno,

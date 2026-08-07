@@ -742,3 +742,48 @@ class GlobalCounterTests(TestCase):
     def test_a_global_declared_name_never_assigned_at_module_scope(self) -> None:
         source = "def start():\n    global handle\n    handle = object()\n"
         self.assertIsInstance(self._mutations(source), dict)
+
+
+class LibrarySurfaceTests(TestCase):
+    """Facts a library states about itself, which an application-shaped
+    taxonomy had no category for.
+
+    Pointing this at installed third-party packages produced two claims for
+    `attrs` and three for `cryptography`. That is not a simple codebase; it is
+    a taxonomy built from web applications, where the interesting facts are
+    routes and persistence. A library's equivalents are the surface it commits
+    to and the parts it has scheduled for removal, and both are ordinary
+    Python that any repository may contain.
+    """
+
+    def _categories(self, source: str) -> dict[str, str]:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sample.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return {claim.category: claim.claim for claim in result.claims}
+
+    def test_an_all_declaration_is_recorded_as_a_public_surface(self) -> None:
+        found = self._categories('__all__ = ["load", "dump"]\n')
+        self.assertIn("public_api", found)
+        self.assertIn("2 name(s)", found["public_api"])
+
+    def test_the_exported_names_are_named(self) -> None:
+        # A count alone cannot be checked against the source by a reader.
+        found = self._categories('__all__ = ["dump", "load"]\n')
+        self.assertIn("dump, load", found["public_api"])
+
+    def test_a_computed_all_is_not_reported_as_a_surface(self) -> None:
+        # `__all__ = [*base.__all__, "extra"]` has no literal membership.
+        self.assertNotIn("public_api", self._categories("__all__ = [*base.__all__]\n"))
+
+    def test_a_deprecation_warning_is_recorded(self) -> None:
+        source = "import warnings\n\n\ndef old():\n    warnings.warn('x', DeprecationWarning)\n"
+        found = self._categories(source)
+        self.assertIn("deprecation", found)
+        self.assertIn("DeprecationWarning", found["deprecation"])
+
+    def test_an_ordinary_warning_is_not_a_deprecation(self) -> None:
+        # A UserWarning reports a condition, not a scheduled removal.
+        source = "import warnings\n\n\ndef f():\n    warnings.warn('careful', UserWarning)\n"
+        self.assertNotIn("deprecation", self._categories(source))
