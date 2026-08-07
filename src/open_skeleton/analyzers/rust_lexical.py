@@ -73,6 +73,9 @@ NON_CALL_KEYWORDS = frozenset(
 # `Some(x)` and `Self(x)` construct a value; they call no definition, and
 # counting them fills the call graph with names nothing declares.
 ENUM_CONSTRUCTORS = frozenset({"Some", "None", "Ok", "Err", "Self"})
+# Words that qualify a type without naming it. `&mut Foo` and `dyn Foo`
+# are both implemented for Foo.
+TYPE_QUALIFIERS = frozenset({"mut", "dyn", "impl", "const"})
 IDENTIFIER_START = re.compile(r"[A-Za-z_]")
 IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_]")
 
@@ -177,9 +180,17 @@ def tokenize(source: str) -> list[Token]:
                 closing = source.find("'", index + 1)
                 index = length if closing < 0 else closing + 1
                 continue
-            # A lifetime: emit nothing and step past the tick so the name that
-            # follows is not mistaken for an item.
+            # A lifetime. It was previously skipped without emitting, which
+            # left the name after the tick to be read as an ordinary
+            # identifier -- so `impl Matcher for &'a Foo` reported the owner
+            # as `a`. Emitting it with its own kind means every consumer that
+            # filters on `identifier` ignores it for free.
             index += 1
+            start = index
+            while index < length and IDENTIFIER_BODY.match(source[index]):
+                index += 1
+            if index > start:
+                tokens.append(Token("lifetime", source[start:index], line))
             continue
         if IDENTIFIER_START.match(character):
             start = index
@@ -496,6 +507,59 @@ def _error_surface(tokens: list[Token]) -> dict[str, Any]:
     }
 
 
+def _macro_body_spans(tokens: list[Token]) -> list[tuple[int, int]]:
+    """Token ranges inside a macro body, which hold templates rather than code.
+
+    `quote! { impl #generics Args for #ident #where_clause { ... } }` looks
+    exactly like an implementation and is not one: it is text a macro will
+    emit, for a type whose name is substituted later. Reading it as real
+    reported implementations on `where_clause`, a token that names nothing.
+
+    A real Rust parser has this for free -- `syn` treats a macro invocation as
+    one opaque item and never descends -- so the lexical reader has to be told
+    the same boundary explicitly.
+    """
+
+    spans: list[tuple[int, int]] = []
+    total = len(tokens)
+    index = 0
+    while index < total:
+        # `quote! {` puts the body straight after the bang. `macro_rules! name {`
+        # puts the macro's own name in between, so a detector that expects them
+        # adjacent misses every macro definition -- which is where the densest
+        # templates live.
+        opener = 0
+        if (
+            tokens[index].kind == "identifier"
+            and index + 2 < total
+            and tokens[index + 1].value == "!"
+        ):
+            if tokens[index + 2].value in {"{", "(", "["}:
+                opener = index + 2
+            elif (
+                index + 3 < total
+                and tokens[index + 2].kind == "identifier"
+                and tokens[index + 3].value in {"{", "(", "["}
+            ):
+                opener = index + 3
+        if opener:
+            opening = tokens[opener].value
+            closing = {"{": "}", "(": ")", "[": "]"}[opening]
+            depth = 1
+            scan = opener + 1
+            while scan < total and depth:
+                if tokens[scan].value == opening:
+                    depth += 1
+                elif tokens[scan].value == closing:
+                    depth -= 1
+                scan += 1
+            spans.append((index, scan))
+            index = scan
+            continue
+        index += 1
+    return spans
+
+
 def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """`impl Trait for Type` pairs: the contracts a type actually satisfies.
 
@@ -507,8 +571,11 @@ def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
 
     found: list[tuple[str, str, int]] = []
     total = len(tokens)
+    templates = _macro_body_spans(tokens)
     for index, token in enumerate(tokens):
         if token.kind != "identifier" or token.value != "impl":
+            continue
+        if any(start < index < end for start, end in templates):
             continue
         header: list[str] = []
         scan = index + 1
@@ -519,6 +586,11 @@ def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
         generics = 0
         while scan < total and tokens[scan].value not in {"{", ";"}:
             value = tokens[scan].value
+            # A `where` clause names bounds, not the type being implemented
+            # for. Reading past it made `impl Trait for Foo where T: Send`
+            # report an implementation on `Send`.
+            if tokens[scan].kind == "identifier" and value == "where" and generics <= 0:
+                break
             if value == "<":
                 generics += 1
             elif value == ">":
@@ -526,14 +598,17 @@ def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
             elif tokens[scan].kind == "identifier" and generics <= 0:
                 if _is_macro_parameter(tokens, scan):
                     header.append("$")
-                else:
+                elif value not in TYPE_QUALIFIERS:
                     header.append(value)
             scan += 1
         if "for" not in header:
             continue
         divider = header.index("for")
         trait_name = header[divider - 1] if divider else ""
-        owner = header[divider + 1] if divider + 1 < len(header) else ""
+        # `impl From<E> for std::io::Error` implements it for Error, not for
+        # std. The segments after `for` are one path, so the owner is its last
+        # segment rather than its first.
+        owner = header[-1] if divider + 1 < len(header) else ""
         if trait_name and owner and "$" not in {trait_name, owner}:
             found.append((owner, trait_name, token.line))
     return found

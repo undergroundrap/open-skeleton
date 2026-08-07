@@ -162,3 +162,46 @@ them type exports.
 esbuild is a development dependency and is never required to analyze a
 repository. Without it the harness exits zero and says so, because a check
 that cannot run is not a check that failed.
+
+## Differential comparison for Rust
+
+```
+cargo build --release --manifest-path benchmarks/differential/rustref/Cargo.toml
+python benchmarks/differential/run_rust_differential.py --root some/rust/project
+```
+
+The reference is a small helper crate that parses one file with `syn` and
+prints the items and trait implementations it finds. `syn` is what procedural
+macros are written against, so it is the reader the Rust ecosystem trusts.
+
+First run across `ripgrep`, `serde` and `clap` — 648 files — found four
+causes of invented implementations, all of them naming a type that does not
+exist:
+
+| Reported | Actual source |
+|---|---|
+| `std:From` | `impl From<E> for std::io::Error` — the first path segment, not the last |
+| `a:Matcher` | `impl Matcher for &'a Foo` — the **lifetime** read as the owner |
+| `mut:MapAccess`, `dyn:Display` | qualifiers read as type names |
+| `where_clause:Args` | an `impl` inside a `quote!` body, which is a template |
+
+Lifetimes are now a token kind of their own, so every consumer that filters on
+identifiers ignores them without knowing they exist. Macro bodies are skipped,
+since a real parser treats a macro invocation as one opaque item and never
+descends into it.
+
+| Crate | Files with invented impls, before | After |
+|---|---:|---:|
+| ripgrep | 6 | 2 |
+| serde | 21 | 5 |
+| clap | 19 | 0 |
+
+**Two of those reductions came from fixing the reference, not the analyzer.**
+`serde` declares visitor structs and their implementations inside function
+bodies, and the helper walked only modules — so it reported real
+implementations as absent and made the analyzer look like it was inventing
+them. A reference is another program with its own defects, and disagreement
+says only that one of the two is wrong.
+
+What remains is a naming convention rather than a fabrication:
+`impl Index<Match> for [u8]` is recorded against `u8` where `syn` says `[u8]`.
