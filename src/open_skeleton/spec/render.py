@@ -28,6 +28,11 @@ SPEC_INDEX_SCHEMA_VERSION = "open-skeleton.spec_index.v1"
 # A section resting on a whole package would otherwise print a paragraph of
 # paths. The complete list stays in the JSON projection.
 MAX_EXAMINED_FILES = 12
+# Above this share, claims reaching no section stop being an oddity and start
+# being a statement about the profile. Six extractors were once added here
+# without routing any of them, and seventy-eight claims sat in the catch-all
+# unnoticed because nothing counted them where a reader would look.
+UNMAPPED_ATTENTION_SHARE = 0.05
 # Probe kinds whose matches are things a person can read. The rest match on
 # claim, symbol or edge identifiers, which are content digests: useful in
 # the JSON projection for an agent resolving a reference, and twelve lines
@@ -766,6 +771,25 @@ def _executive_summary(document: SpecDocument) -> list[str]:
             f"{len(absent):,} of {len(probed):,} probed concerns returned no matches: "
             f"{names}{suffix}. Each prints the query that found nothing.\n\n"
         )
+
+    unmapped = next(
+        (item for item in document.sections if item.section_id == "maintenance.unmapped"), None
+    )
+    if unmapped is not None and unmapped.findings and document.total_claims:
+        stranded = len(unmapped.findings) + unmapped.omitted_findings
+        share = stranded / document.total_claims
+        if share >= UNMAPPED_ATTENTION_SHARE:
+            families = ", ".join(
+                sorted({_escape(claim.category) for claim in unmapped.findings})[:8]
+            )
+            lines.append("### Facts this outline has nowhere to put\n\n")
+            lines.append(
+                f"{stranded:,} of {document.total_claims:,} claims ({share:.0%}) matched no "
+                f"section's selector and reach a reader only through §{unmapped.number}: "
+                f"{families}. An analyzer that extracts a fact the profile never asks for "
+                "produces a true statement nobody reads, so this is a gap in the outline "
+                "rather than in the code it describes.\n\n"
+            )
 
     if thin:
         lines.append("### Where this analysis is thin\n\n")

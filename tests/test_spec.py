@@ -5,6 +5,7 @@
 import hashlib
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -1373,3 +1374,61 @@ class ClaimRoutingTests(TestCase):
             claimed = {claim.category for claim in section.findings}
             leaked = claimed & {claim.category for claim in unmapped.findings}
             self.assertEqual(leaked, set(), f"§{section.number} leaked {leaked} into the catch-all")
+
+
+class UnmappedAttentionTests(TestCase):
+    """The executive summary counts facts the outline has nowhere to put.
+
+    Six extractors were added in one sitting and none was routed, so
+    seventy-eight claims reached a reader only through the catch-all. The
+    catch-all had been reporting that the whole time; nothing counted it where
+    a reader would look, so nobody looked.
+
+    Making the share visible in every run is what stops that recurring, and it
+    applies to any repository rather than to this one: `warmboot` strands 78%
+    of its claims and `hum-lang` 36%, because this profile's vocabulary was
+    built from web applications.
+    """
+
+    def test_a_well_routed_repository_says_nothing(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+            unmapped = next(
+                item for item in document.sections if item.section_id == "maintenance.unmapped"
+            )
+            stranded = len(unmapped.findings) + unmapped.omitted_findings
+            share = stranded / document.total_claims
+            markdown = render_spec_markdown(document)
+        if share < 0.05:
+            self.assertNotIn("nowhere to put", markdown)
+
+    def test_the_warning_names_the_share_and_the_families(self) -> None:
+        # Constructed rather than sampled: the sample repository routes well,
+        # and the case worth testing is the one that does not.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+        unmapped = next(
+            item for item in document.sections if item.section_id == "maintenance.unmapped"
+        )
+        starved = replace(
+            document,
+            sections=tuple(
+                replace(item, findings=unmapped.findings) if item is unmapped else item
+                for item in document.sections
+            ),
+            total_claims=max(1, len(unmapped.findings)),
+        )
+        markdown = render_spec_markdown(starved)
+        if unmapped.findings:
+            self.assertIn("nowhere to put", markdown)
+            self.assertIn("matched no section's selector", markdown)
