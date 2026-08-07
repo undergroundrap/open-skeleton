@@ -28,6 +28,13 @@ SPEC_INDEX_SCHEMA_VERSION = "open-skeleton.spec_index.v1"
 # A section resting on a whole package would otherwise print a paragraph of
 # paths. The complete list stays in the JSON projection.
 MAX_EXAMINED_FILES = 12
+# Probe kinds whose matches are things a person can read. The rest match on
+# claim, symbol or edge identifiers, which are content digests: useful in
+# the JSON projection for an agent resolving a reference, and twelve lines
+# of unreadable hexadecimal in a document meant for a human.
+LEGIBLE_PROBE_KINDS = frozenset(
+    {"path_glob", "file_language", "file_role", "dependency_name", "import_target"}
+)
 
 _VERDICT_SENTENCE = {
     "applicable": (
@@ -843,12 +850,23 @@ def render_spec_markdown(document: SpecDocument) -> str:
             lines.append("\n")
             examples = [probe for probe in section.probe_results if probe.matches]
             if examples:
-                lines.append("Matched records:\n\n")
-                for probe in examples:
-                    shown = ", ".join(f"`{_escape(item)}`" for item in probe.matches)
-                    suffix = " …" if probe.match_count > len(probe.matches) else ""
-                    lines.append(f"- {_escape(probe.name)}: {shown}{suffix}\n")
-                lines.append("\n")
+                legible = [item for item in examples if item.kind in LEGIBLE_PROBE_KINDS]
+                opaque = [item for item in examples if item.kind not in LEGIBLE_PROBE_KINDS]
+                if legible:
+                    lines.append("Matched records:\n\n")
+                    for probe in legible:
+                        shown = ", ".join(f"`{_escape(item)}`" for item in probe.matches)
+                        suffix = " …" if probe.match_count > len(probe.matches) else ""
+                        lines.append(f"- {_escape(probe.name)}: {shown}{suffix}\n")
+                    lines.append("\n")
+                if opaque:
+                    named = ", ".join(
+                        f"{_escape(item.name)} ({item.match_count:,})" for item in opaque
+                    )
+                    lines.append(
+                        f"_{named} matched by identifier. Those identifiers resolve in "
+                        "`spec.json`; the claims they name are listed below._\n\n"
+                    )
 
         if section.section_id == "surface.dossiers":
             lines.extend(render_dossiers(document.dossiers))

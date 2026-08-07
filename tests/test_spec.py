@@ -1172,3 +1172,63 @@ class SourceExcerptTests(TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             self.assertIsNone(_excerpt(root, self._citation(".", 1, 1, None)))
+
+
+class LegibleMatchTests(TestCase):
+    """A document for a person should not print content digests at them.
+
+    Found by putting this engine's specification of its own repository beside
+    another generator's, on the same subject. Theirs explained the storage
+    design; ours printed twelve sixty-four-character hexadecimal identifiers
+    under the heading "Matched records".
+
+    Those identifiers are not useless -- an agent resolving a reference in
+    `spec.json` needs exactly them. They are useless *there*, in prose, where
+    the reader cannot resolve anything and the claims they name are printed a
+    few lines further down anyway.
+    """
+
+    def test_a_path_probe_still_lists_what_it_matched(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            markdown = render_spec_markdown(build_spec(ledger, load_profile()))
+        # `path_glob` matches are file paths, which a reader can act on.
+        self.assertIn("Matched records:", markdown)
+
+    def test_no_content_digest_is_printed_in_prose(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+            markdown = render_spec_markdown(document)
+        listed = re.findall(r"`[0-9a-f]{64}`", markdown)
+        # The snapshot identifier appears in verdict sentences by design; a
+        # matched-record list of them does not.
+        self.assertTrue(
+            all(item.strip("`") == document.snapshot_id for item in listed),
+            f"non-snapshot digests printed in prose: {set(listed)}",
+        )
+
+    def test_the_identifiers_remain_in_the_json_projection(self) -> None:
+        # Removing them from prose must not remove them from the data.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            payload = json.loads(render_spec_json(build_spec(ledger, load_profile())))
+        matched = [
+            item
+            for section in payload["sections"]
+            for probe in section["probes"]
+            for item in probe.get("matches", [])
+        ]
+        self.assertTrue(matched, "the JSON projection must still carry probe matches")
