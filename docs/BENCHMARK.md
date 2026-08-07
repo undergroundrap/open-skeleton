@@ -80,3 +80,41 @@ in it by design. A keyword comparison can tell you what two documents *name*;
 it cannot tell you what they *concluded*. Shipping a number that claims
 otherwise would be the true-but-misleading failure `open-skeleton audit`
 exists to catch, applied to our own benchmarks.
+
+## Robustness across unseen packages
+
+```
+python benchmarks/robustness/run_robustness.py --root .venv/Lib/site-packages --strict
+```
+
+Fixtures are written by someone who already knows what the analyzer should
+find. This runs it over every package in a directory instead and reports the
+two failures a fixture suite cannot show.
+
+A **crash** is the worst outcome available: the repository produces nothing at
+all, and the cause is usually one statement. An installed library raised
+`KeyError` on a module-level counter and abandoned the entire package, from a
+shape — `global n` where `n` is not a mutable container — that appears in no
+fixture anyone would think to write.
+
+**Silence** is the quieter failure. A package that analyzes cleanly and says
+nothing is not a simple package; it is a taxonomy with no category for what
+that code contains. Two claims for `attrs` read as a quiet library and was a
+vocabulary built entirely from web applications, with no notion of a public
+surface or a scheduled removal. Census categories are excluded from the count,
+since they are emitted for every repository whether or not anything is found.
+
+Result on 68 installed packages, 61 of them with three or more source files:
+
+| Measure | Result |
+|---|---|
+| Crashed | 0 |
+| Analyzed but silent | 0 |
+| Claim density | 0.14–4.22 per source file |
+| Spread | 31× |
+
+Spread is not by itself a defect. A Markdown parser has fewer architectural
+facts than a CLI framework, and `platformdirs` scores highest because reading
+environment settings is the entire job of the library — 30 recorded against 33
+read sites in its source. The number to watch is the silent column: a package
+that says nothing names a category that does not exist yet.
