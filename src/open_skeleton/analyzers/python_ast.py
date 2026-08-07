@@ -1751,7 +1751,10 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         # is one of the few facts a library states about its own future, and
         # the reason a caller pinning this version needs to read the section
         # before upgrading rather than after.
-        if call_name and call_name.split(".")[-1] == "warn":
+        # Matching any `.warn` swept in `logger.warn`, which reports a
+        # condition rather than a scheduled removal. The receiver has to be
+        # the `warnings` module, or the bare name imported from it.
+        if call_name in {"warnings.warn", "warn"}:
             categories = {
                 _expr_name(argument)
                 for argument in (*node.args, *(keyword.value for keyword in node.keywords))

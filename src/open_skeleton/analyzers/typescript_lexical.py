@@ -521,6 +521,36 @@ def _external_origins(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _opens_assigned_function(tokens: list[Token], brace: int) -> bool:
+    """Whether the brace at ``brace`` opens a function bound to a name.
+
+    An IIFE wrapper is invoked rather than assigned, so its body holds module
+    constants. An arrow or function expression on the right of `=` holds
+    locals. Both put their contents one brace deep, and only this tells them
+    apart without parsing.
+    """
+
+    scan = brace - 1
+    # Step back over the parameter list, if there is one.
+    if scan >= 0 and tokens[scan].value == ")":
+        depth = 1
+        scan -= 1
+        while scan >= 0 and depth:
+            if tokens[scan].value == ")":
+                depth += 1
+            elif tokens[scan].value == "(":
+                depth -= 1
+            scan -= 1
+    elif scan >= 1 and tokens[scan].value == ">" and tokens[scan - 1].value == "=":
+        return True
+    while scan >= 0 and tokens[scan].kind == "identifier" and tokens[scan].value != "function":
+        scan -= 1
+    if scan < 0 or tokens[scan].value != "function":
+        return False
+    # `const f = function () {}` is assigned; `(function () {})()` is not.
+    return scan >= 1 and tokens[scan - 1].value == "="
+
+
 def _exported_names(tokens: list[Token]) -> list[str]:
     """Names this module makes public, in declaration order.
 
@@ -546,12 +576,25 @@ def _exported_names(tokens: list[Token]) -> list[str]:
         if token.kind != "identifier" or token.value != "export" or index + 1 >= total:
             continue
         following = tokens[index + 1]
+        # `export type { Foo }` is a type-only list. The keyword sits between
+        # `export` and the brace, so matching only on `{` missed the whole
+        # form -- and it is how TypeScript projects publish their types.
+        brace = index + 1
+        if following.value == "type" and index + 2 < total and tokens[index + 2].value == "{":
+            following = tokens[index + 2]
+            brace = index + 2
         if following.value == "{":
-            scan = index + 2
+            scan = brace + 1
             pending: str | None = None
             while scan < total and tokens[scan].value != "}":
                 current = tokens[scan]
                 if current.kind == "identifier":
+                    # `export { type Foo, Bar }` marks one entry as a type. The
+                    # modifier is not a name, and reporting it published an
+                    # export called `type` that no module has.
+                    if current.value == "type" and scan + 1 < total:
+                        scan += 1
+                        continue
                     # `a as b` exports b; the name before `as` is local.
                     if current.value == "as" and scan + 1 < total:
                         pending = tokens[scan + 1].value
@@ -600,16 +643,24 @@ def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    depth = 0
+    # Depth alone is not enough. `const f = () => { const scratch = 1; }` puts a
+    # function-local at depth 1, indistinguishable from a constant inside the
+    # IIFE wrapper, and reporting a scratch variable as a knob a maintainer
+    # would tune is a fabricated fact rather than a missed one. Each open brace
+    # therefore records whether it belongs to a function that was assigned to
+    # something; the IIFE wrapper is invoked rather than assigned, so it is not.
+    in_function: list[bool] = []
     total = len(tokens)
     for index, token in enumerate(tokens):
         if token.kind == "punctuation":
             if token.value == "{":
-                depth += 1
-            elif token.value == "}":
-                depth -= 1
+                in_function.append(_opens_assigned_function(tokens, index))
+            elif token.value == "}" and in_function:
+                in_function.pop()
             continue
-        if token.kind != "identifier" or token.value != "const" or depth > 1:
+        if token.kind != "identifier" or token.value != "const":
+            continue
+        if len(in_function) > 1 or any(in_function):
             continue
         if index + 3 >= total:
             continue

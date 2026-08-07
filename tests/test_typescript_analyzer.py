@@ -429,3 +429,38 @@ class ExportSurfaceTests(TestCase):
     def test_types_and_constants_count_as_surface(self) -> None:
         found = _exported_names(_tokens("export const X = 1;\nexport interface Opts {}\n"))
         self.assertEqual(found, ["X", "Opts"])
+
+
+class ExportAndTunableEdgeTests(TestCase):
+    """Cases found by reading this code rather than by running it on a repo.
+
+    Every defect this session was found by pointing the engine at unseen code,
+    which meant the shapes no repository happened to contain went unexamined.
+    These are three of those, and two produced fabricated facts -- an export
+    named `type` that no module has, and a scratch variable inside a callback
+    reported as a knob a maintainer would tune.
+    """
+
+    def test_a_type_only_export_list_is_a_surface(self) -> None:
+        # `export type { Foo }` is how a TypeScript package publishes its types.
+        self.assertEqual(_exported_names(_tokens("export type { Foo, Bar };")), ["Foo", "Bar"])
+
+    def test_an_inline_type_modifier_is_not_an_exported_name(self) -> None:
+        # `export { type Foo, Bar }` once reported an export called `type`.
+        self.assertEqual(_exported_names(_tokens("export { type Foo, Bar };")), ["Foo", "Bar"])
+
+    def test_a_constant_inside_a_callback_is_not_a_module_tunable(self) -> None:
+        source = "const OUT = 1;\nconst f = () => { const scratch = 999; };\n"
+        self.assertEqual(list(_tunables(_tokens(source))), ["OUT"])
+
+    def test_a_constant_inside_an_assigned_function_expression_is_not_a_tunable(self) -> None:
+        self.assertEqual(_tunables(_tokens("const f = function () { const s = 9; };")), {})
+
+    def test_a_nested_function_inside_an_iife_does_not_contribute_tunables(self) -> None:
+        # The IIFE body holds module constants; a function inside it holds locals.
+        source = "(function (g) {\n  const OK = 1;\n  function h() { const bad = 2; }\n})(w);\n"
+        self.assertEqual(list(_tunables(_tokens(source))), ["OK"])
+
+    def test_the_iife_wrapper_still_yields_its_constants(self) -> None:
+        source = "(function (global) {\n  const GRAVITY = 16.0;\n})(window);\n"
+        self.assertEqual(list(_tunables(_tokens(source))), ["GRAVITY"])

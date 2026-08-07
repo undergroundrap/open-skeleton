@@ -787,3 +787,27 @@ class LibrarySurfaceTests(TestCase):
         # A UserWarning reports a condition, not a scheduled removal.
         source = "import warnings\n\n\ndef f():\n    warnings.warn('careful', UserWarning)\n"
         self.assertNotIn("deprecation", self._categories(source))
+
+
+class DeprecationReceiverTests(TestCase):
+    """A deprecation comes from `warnings`, not from anything named `warn`."""
+
+    def _has(self, source: str) -> bool:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sample.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return any(claim.category == "deprecation" for claim in result.claims)
+
+    def test_a_logger_call_is_not_a_deprecation(self) -> None:
+        # `logger.warn` reports a condition. Matching any `.warn` swept it in.
+        source = "import logging\nlog = logging.getLogger()\n\n\ndef f():\n    log.warn('x', DeprecationWarning)\n"
+        self.assertFalse(self._has(source))
+
+    def test_the_warnings_module_is_a_deprecation(self) -> None:
+        source = "import warnings\n\n\ndef f():\n    warnings.warn('x', DeprecationWarning)\n"
+        self.assertTrue(self._has(source))
+
+    def test_a_bare_imported_warn_is_a_deprecation(self) -> None:
+        source = "from warnings import warn\n\n\ndef f():\n    warn('x', DeprecationWarning)\n"
+        self.assertTrue(self._has(source))

@@ -70,7 +70,9 @@ HTTP_CLIENT_CRATES = frozenset({"reqwest", "ureq", "surf", "isahc", "hyper"})
 NON_CALL_KEYWORDS = frozenset(
     {"if", "while", "match", "for", "return", "in", "let", "fn", "as", "where"}
 )
-ENUM_CONSTRUCTORS = frozenset({"Some", "None", "Ok", "Err"})
+# `Some(x)` and `Self(x)` construct a value; they call no definition, and
+# counting them fills the call graph with names nothing declares.
+ENUM_CONSTRUCTORS = frozenset({"Some", "None", "Ok", "Err", "Self"})
 IDENTIFIER_START = re.compile(r"[A-Za-z_]")
 IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_]")
 
