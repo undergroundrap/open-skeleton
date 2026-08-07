@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms: see NOTICE.md for visible attribution requirements.
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -17,7 +18,9 @@ from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import (
+    Citation,
     RenderedClaim,
+    _excerpt,
     _spread_by_category,
     render_spec_index_json,
     render_spec_json,
@@ -1106,3 +1109,66 @@ class PanelCatalogueTests(TestCase):
         )
         missing = sorted(PANEL_KINDS - documented)
         self.assertEqual(missing, [], f"registered but undocumented panels: {missing}")
+
+
+class SourceExcerptTests(TestCase):
+    """Bytes shown under a claim, and the three cases where they must not be.
+
+    A citation a reader has to go and open is doing half the job. But bytes are
+    only honest if they are still the bytes the receipt was taken from: a file
+    changed since analysis would otherwise have its current contents printed
+    under a claim about its former contents, which is a more convincing way to
+    be wrong than printing nothing at all.
+    """
+
+    def _citation(self, path: str, start: int, end: int, digest: str | None) -> Citation:
+        return Citation(
+            evidence_id="e" * 16,
+            path=path,
+            start_line=start,
+            end_line=end,
+            file_sha256=digest,
+            relationship="supports",
+        )
+
+    def test_a_narrow_citation_yields_its_lines(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "sample.py"
+            body = "one = 1\ntwo = 2\nthree = 3\n"
+            target.write_text(body, encoding="utf-8")
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            found = _excerpt(root, self._citation("sample.py", 2, 2, digest))
+            self.assertEqual(found, ("two = 2",))
+
+    def test_a_changed_file_yields_nothing(self) -> None:
+        # The receipt was taken from different bytes. Printing today's lines
+        # under yesterday's claim would misrepresent both.
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "sample.py").write_text("changed = True\n", encoding="utf-8")
+            stale = "0" * 64
+            self.assertIsNone(_excerpt(root, self._citation("sample.py", 1, 1, stale)))
+
+    def test_a_whole_file_span_is_cited_not_quoted(self) -> None:
+        # A receipt covering 400 lines points at a file, not at a place, and
+        # its first fourteen lines are usually the licence header.
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "big.py"
+            target.write_text("x = 1\n" * 400, encoding="utf-8")
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            self.assertIsNone(_excerpt(root, self._citation("big.py", 1, 400, digest)))
+
+    def test_a_path_outside_the_root_is_refused(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "inside.py").write_text("safe = 1\n", encoding="utf-8")
+            digest = hashlib.sha256((root / "inside.py").read_bytes()).hexdigest()
+            escaped = self._citation("../outside.py", 1, 1, digest)
+            self.assertIsNone(_excerpt(root, escaped))
+
+    def test_a_census_receipt_has_nothing_to_quote(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            self.assertIsNone(_excerpt(root, self._citation(".", 1, 1, None)))

@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from open_skeleton.ledger import EvidenceLedger
@@ -555,6 +557,92 @@ def _spread_by_category(claims: list[RenderedClaim], limit: int) -> list[Rendere
 THIN_YIELD_RATIO = 0.34
 
 
+# A reader who has to open a file to see what a claim rests on is doing the
+# work the citation was supposed to save them. These bound how much source a
+# document carries before it stops being a specification and becomes a copy.
+MAX_EXCERPTS_PER_SECTION = 2
+MAX_EXCERPT_LINES = 14
+# A receipt spanning a whole file points at a file, not at a place. Showing
+# its first few lines would print a licence header underneath a claim about
+# something on line 900, so a span this long is cited and not quoted.
+MAX_QUOTABLE_SPAN = 40
+# Fence languages by suffix, so an excerpt highlights as what it is.
+EXCERPT_LANGUAGES = {
+    ".py": "python",
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".json": "json",
+    ".toml": "toml",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".md": "markdown",
+    ".sql": "sql",
+}
+
+
+def _excerpt(root: Path, citation: Citation) -> tuple[str, ...] | None:
+    """The source lines a citation names, or None when they cannot be trusted.
+
+    Rendering bytes is only honest if they are still the bytes the receipt was
+    taken from. A file that has changed since analysis would otherwise have its
+    current contents printed underneath a claim about its former contents,
+    which is a more convincing way to be wrong than printing nothing.
+
+    The same containment check `verify_spec` uses applies here: a citation path
+    that resolves outside the analyzed root is not read.
+    """
+
+    if citation.path == "." or citation.start_line is None or citation.file_sha256 is None:
+        return None
+    source = (root / Path(citation.path)).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError:
+        return None
+    if not source.is_file():
+        return None
+    span = (citation.end_line or citation.start_line) - citation.start_line
+    if span > MAX_QUOTABLE_SPAN:
+        return None
+    payload = source.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != citation.file_sha256:
+        return None
+    lines = payload.decode("utf-8", errors="replace").splitlines()
+    start = max(1, citation.start_line)
+    end = min(len(lines), citation.end_line or citation.start_line)
+    if start > len(lines) or end < start:
+        return None
+    return tuple(lines[start - 1 : min(end, start + MAX_EXCERPT_LINES - 1)])
+
+
+def _excerpt_block(root: Path, claims: Iterable[RenderedClaim]) -> list[str]:
+    """Rendered source for the first few claims in a section that can carry it."""
+
+    rendered: list[str] = []
+    shown = 0
+    for claim in claims:
+        if shown >= MAX_EXCERPTS_PER_SECTION:
+            break
+        for citation in claim.citations:
+            lines = _excerpt(root, citation)
+            if not lines:
+                continue
+            rendered.append(f"\n_{_escape(claim.claim)}_\n\n")
+            suffix = "." + citation.path.rsplit(".", 1)[-1] if "." in citation.path else ""
+            rendered.append(f"```{EXCERPT_LANGUAGES.get(suffix, 'text')}\n")
+            rendered.extend(f"{line}\n" for line in lines)
+            if (citation.end_line or 0) - (citation.start_line or 0) >= MAX_EXCERPT_LINES:
+                rendered.append(f"# ... truncated at {MAX_EXCERPT_LINES} lines\n")
+            rendered.append("```\n")
+            rendered.append(f"\n<sub>{citation.location}</sub>\n")
+            shown += 1
+            break
+    return rendered
+
+
 def _first_citation(claim: RenderedClaim) -> str:
     if not claim.citations:
         return "—"
@@ -691,6 +779,9 @@ def _claim_table(claims: tuple[RenderedClaim, ...]) -> Iterable[str]:
 def render_spec_markdown(document: SpecDocument) -> str:
     lines: list[str] = []
     section_titles = {item.section_id: f"§{item.number} {item.title}" for item in document.sections}
+    # Excerpts are read from the analyzed tree, so the root is resolved once and
+    # every citation path is checked to stay inside it.
+    root = Path(document.root).expanduser().resolve()
 
     lines.append(f"# {document.profile_title}\n\n")
     lines.append(f"- Snapshot: `{document.snapshot_id}`\n")
@@ -788,6 +879,10 @@ def render_spec_markdown(document: SpecDocument) -> str:
                     "section's selector and are available in the JSON projection "
                     "and the claim ledger._\n"
                 )
+            excerpts = _excerpt_block(root, section.findings)
+            if excerpts:
+                lines.append("\n**Source for the above**\n")
+                lines.extend(excerpts)
             lines.append("\n")
 
         if section.verdict == "absent" and section.constraints:
