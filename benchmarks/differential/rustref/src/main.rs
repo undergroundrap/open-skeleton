@@ -22,11 +22,17 @@ fn type_name(ty: &Type) -> String {
     }
 }
 
-fn walk(items: &[Item], names: &mut Vec<String>, impls: &mut Vec<(String, String)>) {
+fn walk(
+    items: &[Item],
+    names: &mut Vec<String>,
+    decls: &mut Vec<String>,
+    impls: &mut Vec<(String, String)>,
+) {
     for item in items {
         match item {
             Item::Fn(node) => {
                 names.push(node.sig.ident.to_string());
+                decls.push(node.sig.ident.to_string());
                 // Rust allows items inside a function body, and serde declares
                 // visitor structs and their impls there. Walking only modules
                 // reported those implementations as absent, which would have
@@ -40,15 +46,36 @@ fn walk(items: &[Item], names: &mut Vec<String>, impls: &mut Vec<(String, String
                         _ => None,
                     })
                     .collect();
-                walk(&nested, names, impls);
+                walk(&nested, names, decls, impls);
             }
-            Item::Struct(node) => names.push(node.ident.to_string()),
-            Item::Enum(node) => names.push(node.ident.to_string()),
-            Item::Trait(node) => names.push(node.ident.to_string()),
-            Item::Union(node) => names.push(node.ident.to_string()),
+            Item::Struct(node) => {
+                names.push(node.ident.to_string());
+                decls.push(node.ident.to_string());
+            }
+            Item::Enum(node) => {
+                names.push(node.ident.to_string());
+                decls.push(node.ident.to_string());
+            }
+            Item::Trait(node) => {
+                names.push(node.ident.to_string());
+                decls.push(node.ident.to_string());
+                // A trait's method signatures are declarations too. Walking
+                // only impl bodies reported them as absent, which made the
+                // lexical reader look like it was inventing a dozen names per
+                // trait definition.
+                for sub in &node.items {
+                    if let syn::TraitItem::Fn(method) = sub {
+                        names.push(method.sig.ident.to_string());
+                    }
+                }
+            }
+            Item::Union(node) => {
+                names.push(node.ident.to_string());
+                decls.push(node.ident.to_string());
+            }
             Item::Mod(node) => {
                 if let Some((_, inner)) = &node.content {
-                    walk(inner, names, impls);
+                    walk(inner, names, decls, impls);
                 }
             }
             Item::Impl(node) => {
@@ -70,7 +97,7 @@ fn walk(items: &[Item], names: &mut Vec<String>, impls: &mut Vec<(String, String
                                 _ => None,
                             })
                             .collect();
-                        walk(&nested, names, impls);
+                        walk(&nested, names, decls, impls);
                     }
                 }
             }
@@ -96,11 +123,12 @@ fn main() {
         }
     };
     let mut names = Vec::new();
+    let mut decls = Vec::new();
     let mut impls = Vec::new();
-    walk(&parsed.items, &mut names, &mut impls);
+    walk(&parsed.items, &mut names, &mut decls, &mut impls);
     let pairs: Vec<_> = impls
         .into_iter()
         .map(|(owner, trait_name)| json!({"owner": owner, "trait": trait_name}))
         .collect();
-    println!("{}", json!({"parsed": true, "names": names, "impls": pairs}));
+    println!("{}", json!({"parsed": true, "names": names, "decls": decls, "impls": pairs}));
 }

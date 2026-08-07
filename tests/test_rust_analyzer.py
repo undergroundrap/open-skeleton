@@ -346,3 +346,24 @@ class MacroTemplateTests(TestCase):
     def test_a_where_clause_is_not_part_of_the_type(self) -> None:
         found = _trait_implementations(tokenize("impl<T> Trait for Foo where T: Send {}"))
         self.assertEqual([(owner, name) for owner, name, _ in found], [("Foo", "Trait")])
+
+
+class RawIdentifierTests(TestCase):
+    """`r#async` names something `async`, not something `r`.
+
+    Rust escapes a keyword used as a name by prefixing `r#`. Raw strings were
+    handled and this was not, so `fn r#async(...)` was recorded as a function
+    called `r` -- a name that appears nowhere in the crate. The character after
+    the hash tells the two apart: `r#"` opens a string and `r#a` opens a name.
+    """
+
+    def test_a_raw_identifier_records_the_name_it_escapes(self) -> None:
+        self.assertEqual(_declared_items(tokenize("fn r#async() {}")), [("function", "async", 1)])
+
+    def test_a_raw_string_is_still_a_string(self) -> None:
+        values = [item.value for item in tokenize('let s = r#"has "quote""#; fn after() {}')]
+        self.assertIn("after", values)
+        self.assertNotIn("quote", values)
+
+    def test_a_raw_identifier_type_is_named_correctly(self) -> None:
+        self.assertEqual(_declared_items(tokenize("struct r#type;")), [("struct", "type", 1)])

@@ -41,7 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from open_skeleton.analyzers.rust_lexical import (
-    _impl_methods,
+    _declared_items,
     _trait_implementations,
     tokenize,
 )
@@ -86,7 +86,11 @@ def _reference(helper: Path, source: Path) -> dict[str, set[str]] | None:
     if not payload.get("parsed"):
         return None
     return {
-        "names": set(payload.get("names", [])),
+        # `syn` keeps the escape on a raw identifier, printing `r#async`
+        # where this engine records the name itself. Both are right about
+        # the same function, so the harness normalizes rather than making
+        # either side adopt the other's convention.
+        "decls": {name.removeprefix("r#") for name in payload.get("names", [])},
         "impls": {f"{item['owner']}:{item['trait']}" for item in payload.get("impls", [])},
     }
 
@@ -94,7 +98,7 @@ def _reference(helper: Path, source: Path) -> dict[str, set[str]] | None:
 def _ours(source: Path) -> dict[str, set[str]]:
     tokens = tokenize(source.read_text(encoding="utf-8", errors="replace"))
     return {
-        "names": {name for _, name, _ in _impl_methods(tokens)},
+        "decls": {name for _, name, _ in _declared_items(tokens)},
         "impls": {f"{owner}:{trait}" for owner, trait, _ in _trait_implementations(tokens)},
     }
 
@@ -120,8 +124,17 @@ def compare(root: Path, helper: Path) -> Report:
         report.compared += 1
         ours = _ours(source)
         relative = str(source.relative_to(root)).replace("\\", "/")
-        absent = reference["impls"] - ours["impls"]
-        extra = ours["impls"] - reference["impls"]
+        # Both families are compared: implementations say what a type can be
+        # used as, declarations say what the crate contains at all.
+        #
+        # The reference's `names` is the right side of this, not its `decls`.
+        # `decls` holds only what a module declares directly, while
+        # `_declared_items` counts every `fn` keyword including the methods
+        # inside an `impl` block. Comparing against `decls` reported fifty-seven
+        # files of fabrication in ripgrep, all of them real methods -- a
+        # definition mismatch that looked exactly like a defect.
+        absent = (reference["impls"] - ours["impls"]) | (reference["decls"] - ours["decls"])
+        extra = (ours["impls"] - reference["impls"]) | (ours["decls"] - reference["decls"])
         if absent:
             report.missing.append(Disagreement(relative, missing=tuple(sorted(absent))))
         if extra:

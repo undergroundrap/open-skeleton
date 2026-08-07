@@ -148,6 +148,25 @@ def tokenize(source: str) -> list[Token]:
                     cursor += 1
             index = cursor
             continue
+        if (
+            character == "r"
+            and index + 2 < length
+            and source[index + 1] == "#"
+            and IDENTIFIER_START.match(source[index + 2])
+        ):
+            # A raw identifier: `r#async` names something `async`, which is how
+            # Rust lets a keyword be used as a name. Raw strings were handled
+            # and this was not, so `fn r#async(...)` was recorded as a function
+            # called `r` -- a name that appears nowhere in the crate. The
+            # following character tells the two apart, since `r#"` opens a
+            # string and `r#a` opens a name.
+            start = index + 2
+            cursor = start
+            while cursor < length and IDENTIFIER_BODY.match(source[cursor]):
+                cursor += 1
+            tokens.append(Token("identifier", source[start:cursor], line))
+            index = cursor
+            continue
         if character in {"r", "b"} and index + 1 < length and source[index + 1] in {'"', "#"}:
             end = _read_raw_string(source, index, length)
             if end > index + 1:
