@@ -36,6 +36,11 @@ EXCLUDED_DIRECTORIES = frozenset(
         "vendor",
     }
 )
+# Build output whose directory name carries the package name, so no fixed
+# set can match it. `src/open_skeleton.egg-info/` was being read as source:
+# six generated files, none of them tracked by git, counted in the file
+# census and available to every analyzer as if a person had written them.
+EXCLUDED_DIRECTORY_SUFFIXES = (".egg-info", ".dist-info", ".egg")
 
 SENSITIVE_FILE_NAMES = frozenset(
     {
@@ -157,7 +162,8 @@ class ScanPolicy:
     max_file_bytes: int = 2_000_000
 
     def directory_exclusion(self, name: str) -> str | None:
-        if name.casefold() in EXCLUDED_DIRECTORIES:
+        folded = name.casefold()
+        if folded in EXCLUDED_DIRECTORIES or folded.endswith(EXCLUDED_DIRECTORY_SUFFIXES):
             return "excluded-directory"
         return None
 
