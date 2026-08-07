@@ -126,6 +126,7 @@ fn walk(
 struct Calls {
     names: Vec<String>,
     consts: Vec<(String, String)>,
+    fields: Vec<(String, String, String)>,
 }
 
 impl<'ast> Visit<'ast> for Calls {
@@ -158,6 +159,24 @@ impl<'ast> Visit<'ast> for Calls {
     fn visit_impl_item_const(&mut self, node: &'ast syn::ImplItemConst) {
         self.consts.push((node.ident.to_string(), type_name(&node.ty)));
         visit::visit_impl_item_const(self, node);
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        // Named fields only. A tuple struct's members are positional and have
+        // no name for a lexical reader to find, so comparing them would report
+        // a disagreement about a question neither side is asking.
+        if let syn::Fields::Named(named) = &node.fields {
+            for field in &named.named {
+                if let Some(ident) = &field.ident {
+                    self.fields.push((
+                        node.ident.to_string(),
+                        ident.to_string(),
+                        type_name(&field.ty),
+                    ));
+                }
+            }
+        }
+        visit::visit_item_struct(self, node);
     }
 
     fn visit_item_macro(&mut self, _node: &'ast syn::ItemMacro) {
@@ -196,5 +215,6 @@ fn main() {
         .map(|(owner, trait_name)| json!({"owner": owner, "trait": trait_name}))
         .collect();
     println!("{}", json!({"parsed": true, "names": names, "decls": decls, "impls": pairs, "calls": calls.names,
-        "consts": calls.consts.iter().map(|(n, t)| json!({"name": n, "type": t})).collect::<Vec<_>>()}));
+        "consts": calls.consts.iter().map(|(n, t)| json!({"name": n, "type": t})).collect::<Vec<_>>(),
+        "fields": calls.fields.iter().map(|(o, n, t)| json!({"owner": o, "name": n, "type": t})).collect::<Vec<_>>()}));
 }

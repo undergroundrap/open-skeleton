@@ -205,3 +205,27 @@ says only that one of the two is wrong.
 
 What remains is a naming convention rather than a fabrication:
 `impl Index<Match> for [u8]` is recorded against `u8` where `syn` says `[u8]`.
+
+### What the Rust differential now compares
+
+Four families, added one at a time because each addition found something the
+previous one could not see.
+
+| Family | First run | After |
+|---|---|---|
+| Trait implementations | 46 files with invented owners | 2, both naming conventions |
+| Declared items | 3 of 4 symbols fabricated on a probe | exact |
+| Call sites | 104 of 110 files invented | 2 |
+| Constants | 10 invented | **0 missed, 0 invented** |
+| Struct fields | — | **748 on both sides, exact on the first run** |
+
+The last two are the point of keeping a reference around. Constants needed
+three fixes and the fields extractor needed none, and there was no way to know
+which without asking a real parser.
+
+**Roughly half of every disagreement has been the reference, not the analyzer.**
+`syn` reports associated constants as `ImplItem::Const`, declares items inside
+function bodies and closures, keeps the escape on a raw identifier, and counts
+a tuple-struct construction as a call. Each looked exactly like a defect until
+it was read. A differential says the two readers disagree; it never says which
+one is wrong.
