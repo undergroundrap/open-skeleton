@@ -46,6 +46,10 @@ ANALYZER_NAME = "rust-lexical"
 ANALYZER_VERSION = "rust-lexical/v1"
 ELIGIBLE_LANGUAGES = frozenset({"Rust"})
 
+# `const fn` and `async fn` declare functions. The qualifier comes first, so
+# a reader looking for `const <name>` finds `fn` and records a constant
+# called `fn` -- a name no crate contains.
+FUNCTION_QUALIFIERS = frozenset({"fn", "async", "unsafe", "extern"})
 ITEM_KEYWORDS = {
     "fn": "function",
     "struct": "struct",
@@ -262,13 +266,26 @@ def _constants(tokens: list[Token]) -> dict[str, dict[str, Any]]:
 
     found: dict[str, dict[str, Any]] = {}
     total = len(tokens)
+    # `_declared_items` and `_trait_implementations` both skip macro bodies and
+    # this did not, so a constant inside `rgtest! { ... }` was recorded while a
+    # function beside it was not. Whether a macro body is a template or real
+    # code cannot be told lexically, so the module applies one rule rather than
+    # a different answer per extractor.
+    templates = _macro_body_spans(tokens)
     for index, token in enumerate(tokens):
         if token.kind != "identifier" or token.value not in {"const", "static"}:
+            continue
+        if any(start < index < end for start, end in templates):
             continue
         step = index + 1
         if step < total and tokens[step].value == "mut":
             step += 1
         if step >= total or tokens[step].kind != "identifier":
+            continue
+        # `const fn parse(...)` declares a function. The qualifier comes first,
+        # so a reader looking for `const <name>` finds `fn` and records a
+        # constant called `fn`, which no crate contains.
+        if tokens[step].value in FUNCTION_QUALIFIERS:
             continue
         name = tokens[step].value
         # `const NAME: Type = value;`

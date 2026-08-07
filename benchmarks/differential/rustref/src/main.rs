@@ -28,6 +28,7 @@ fn walk(
     names: &mut Vec<String>,
     decls: &mut Vec<String>,
     impls: &mut Vec<(String, String)>,
+    consts: &mut Vec<(String, String)>,
 ) {
     for item in items {
         match item {
@@ -47,7 +48,7 @@ fn walk(
                         _ => None,
                     })
                     .collect();
-                walk(&nested, names, decls, impls);
+                walk(&nested, names, decls, impls, consts);
             }
             Item::Struct(node) => {
                 names.push(node.ident.to_string());
@@ -76,8 +77,14 @@ fn walk(
             }
             Item::Mod(node) => {
                 if let Some((_, inner)) = &node.content {
-                    walk(inner, names, decls, impls);
+                    walk(inner, names, decls, impls, consts);
                 }
+            }
+            Item::Const(node) => {
+                consts.push((node.ident.to_string(), type_name(&node.ty)));
+            }
+            Item::Static(node) => {
+                consts.push((node.ident.to_string(), type_name(&node.ty)));
             }
             Item::Impl(node) => {
                 let owner = type_name(&node.self_ty);
@@ -87,6 +94,11 @@ fn walk(
                     }
                 }
                 for sub in &node.items {
+                    if let syn::ImplItem::Const(item) = sub {
+                        // An associated constant is still a constant. Walking
+                        // only module scope reported real ones as absent.
+                        consts.push((item.ident.to_string(), type_name(&item.ty)));
+                    }
                     if let syn::ImplItem::Fn(method) = sub {
                         names.push(method.sig.ident.to_string());
                         let nested: Vec<Item> = method
@@ -98,7 +110,7 @@ fn walk(
                                 _ => None,
                             })
                             .collect();
-                        walk(&nested, names, decls, impls);
+                        walk(&nested, names, decls, impls, consts);
                     }
                 }
             }
@@ -113,6 +125,7 @@ fn walk(
 #[derive(Default)]
 struct Calls {
     names: Vec<String>,
+    consts: Vec<(String, String)>,
 }
 
 impl<'ast> Visit<'ast> for Calls {
@@ -128,6 +141,23 @@ impl<'ast> Visit<'ast> for Calls {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         self.names.push(node.method.to_string());
         visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+        // A constant can be declared inside a closure or an `if` block, which
+        // no walk over top-level statements reaches. The visitor sees them all.
+        self.consts.push((node.ident.to_string(), type_name(&node.ty)));
+        visit::visit_item_const(self, node);
+    }
+
+    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+        self.consts.push((node.ident.to_string(), type_name(&node.ty)));
+        visit::visit_item_static(self, node);
+    }
+
+    fn visit_impl_item_const(&mut self, node: &'ast syn::ImplItemConst) {
+        self.consts.push((node.ident.to_string(), type_name(&node.ty)));
+        visit::visit_impl_item_const(self, node);
     }
 
     fn visit_item_macro(&mut self, _node: &'ast syn::ItemMacro) {
@@ -159,10 +189,12 @@ fn main() {
     let mut names = Vec::new();
     let mut decls = Vec::new();
     let mut impls = Vec::new();
-    walk(&parsed.items, &mut names, &mut decls, &mut impls);
+    let mut consts = Vec::new();
+    walk(&parsed.items, &mut names, &mut decls, &mut impls, &mut consts);
     let pairs: Vec<_> = impls
         .into_iter()
         .map(|(owner, trait_name)| json!({"owner": owner, "trait": trait_name}))
         .collect();
-    println!("{}", json!({"parsed": true, "names": names, "decls": decls, "impls": pairs, "calls": calls.names}));
+    println!("{}", json!({"parsed": true, "names": names, "decls": decls, "impls": pairs, "calls": calls.names,
+        "consts": calls.consts.iter().map(|(n, t)| json!({"name": n, "type": t})).collect::<Vec<_>>()}));
 }

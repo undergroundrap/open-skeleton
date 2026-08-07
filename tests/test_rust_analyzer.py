@@ -409,3 +409,32 @@ class CallSitePrecisionTests(TestCase):
 
     def test_a_path_call_records_its_last_segment(self) -> None:
         self.assertEqual([name for name, _ in _call_sites(tokenize("fn f() { a::b(z); }"))], ["b"])
+
+
+class ConstantPrecisionTests(TestCase):
+    """`const fn` declares a function, and macro bodies follow one rule.
+
+    Comparing the tunable index against `syn` found a constant named `fn` --
+    `const fn parse(...)` puts the qualifier before the name, so a reader
+    looking for `const <name>` finds the keyword. No crate contains a constant
+    called `fn`.
+    """
+
+    def test_a_const_function_is_not_a_constant(self) -> None:
+        self.assertEqual(_constants(tokenize("const fn parse(x: u8) -> u8 { x }")), {})
+
+    def test_a_const_unsafe_function_is_not_a_constant(self) -> None:
+        self.assertEqual(_constants(tokenize("pub const unsafe fn raw() {}")), {})
+
+    def test_a_real_constant_survives(self) -> None:
+        self.assertEqual(sorted(_constants(tokenize("const MAX: u32 = 5;"))), ["MAX"])
+
+    def test_a_mutable_static_survives(self) -> None:
+        self.assertEqual(sorted(_constants(tokenize("static mut N: usize = 0;"))), ["N"])
+
+    def test_a_constant_inside_a_macro_body_follows_the_module_rule(self) -> None:
+        # `_declared_items` and `_trait_implementations` both skip macro bodies.
+        # Whether a body is a template or real code cannot be told lexically, so
+        # one rule applies rather than a different answer per extractor.
+        source = 'rgtest!(name, |dir| { const HAYSTACK: &str = "x"; });\nconst REAL: u8 = 1;\n'
+        self.assertEqual(sorted(_constants(tokenize(source))), ["REAL"])
