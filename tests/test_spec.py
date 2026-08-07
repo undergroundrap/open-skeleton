@@ -1327,3 +1327,49 @@ class CandidateProbeTests(TestCase):
             "Adjacent to this concern and present" in markdown
             or "Nothing adjacent is present either" in markdown
         )
+
+
+class ClaimRoutingTests(TestCase):
+    """A claim past a section's limit is routed, not unmapped.
+
+    `_select` truncates to the selector's limit and only the printed claims
+    were marked taken, so the remainder fell through to the catch-all and were
+    reported under "Claims Not Mapped to an Outline Section". That was false:
+    they were mapped, and the section says so in the sentence directly above
+    them -- "N further claim(s) match this section's selector".
+
+    Found while checking whether six extractors added in one sitting actually
+    reach the document. Seventy-eight claims were sitting in the catch-all;
+    most needed routing, and four of them exposed this.
+    """
+
+    def _document(self) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            return build_spec(ledger, load_profile())
+
+    def test_every_claim_still_reaches_exactly_one_section(self) -> None:
+        document = self._document()
+        rendered = [claim.claim_id for section in document.sections for claim in section.findings]
+        self.assertEqual(len(rendered), len(set(rendered)))
+
+    def test_a_truncated_claim_is_not_reported_as_unmapped(self) -> None:
+        document = self._document()
+        unmapped = next(
+            (item for item in document.sections if item.section_id == "maintenance.unmapped"),
+            None,
+        )
+        self.assertIsNotNone(unmapped)
+        assert unmapped is not None
+        # Any section that omitted claims has genuinely claimed them, so no
+        # category it selects may also appear in the catch-all.
+        for section in document.sections:
+            if not section.omitted_findings or not section.findings:
+                continue
+            claimed = {claim.category for claim in section.findings}
+            leaked = claimed & {claim.category for claim in unmapped.findings}
+            self.assertEqual(leaked, set(), f"§{section.number} leaked {leaked} into the catch-all")

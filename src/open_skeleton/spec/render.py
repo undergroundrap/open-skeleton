@@ -271,13 +271,27 @@ def _select(
     selector: SpecSelector | None,
     claims: Iterable[dict[str, Any]],
     used: set[str],
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """Claims this selector takes, how many it could not print, and every id it claimed.
+
+    The third return value exists because a claim past the limit has still been
+    routed. Marking only the printed ones as taken left the remainder
+    unclaimed, so they fell through to the catch-all and were reported under
+    "Claims Not Mapped to an Outline Section" -- which was false. They were
+    mapped; the section simply declined to print them, and says so in the
+    sentence directly above.
+    """
+
     if selector is None:
-        return [], 0
+        return [], 0, []
     eligible = [
         claim for claim in claims if selector.accepts(claim) and claim["claim_id"] not in used
     ]
-    return eligible[: selector.limit], max(0, len(eligible) - selector.limit)
+    return (
+        eligible[: selector.limit],
+        max(0, len(eligible) - selector.limit),
+        [str(item["claim_id"]) for item in eligible],
+    )
 
 
 def _citations(
@@ -378,9 +392,9 @@ def build_spec(
             verdict = "not_applicable"
         decided[section.section_id] = verdict
         unmet_requirements = tuple(unmet) if verdict == "not_applicable" else ()
-        selected, omitted = _select(section.findings, claims, used)
-        used.update(str(item["claim_id"]) for item in selected)
-        constraint_claims, _ = _select(section.constraints, claims, set())
+        selected, omitted, routed = _select(section.findings, claims, used)
+        used.update(routed)
+        constraint_claims, _, _ = _select(section.constraints, claims, set())
 
         findings = tuple(
             RenderedClaim(

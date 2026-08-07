@@ -23,7 +23,14 @@
             "largest_files",
             "exclusions"
           ],
-          "framing": "Every percentage elsewhere in this document is relative to the included set below. Excluded content was never read."
+          "framing": "Every percentage elsewhere in this document is relative to the included set below. Excluded content was never read.",
+          "findings": {
+            "categories": [
+              "checked_out_revision"
+            ],
+            "min_importance": "low",
+            "limit": 40
+          }
         },
         {
           "id": "introduction.consequences",
@@ -82,6 +89,31 @@
           "diagrams": [
             "concentration"
           ]
+        },
+        {
+          "id": "introduction.commitments",
+          "number": "1.5",
+          "title": "Declared Obligations and Non-Goals",
+          "concern": "What this repository wrote down that it must, and must not, do.",
+          "framing": "Source code states what a system does. It cannot state what the people who wrote it decided it should do, and that lives in prose: a requirements document, a threat model, a contributing guide, an architecture decision record. These claims record that a commitment was made. Whether the code keeps it is a separate question, and nothing here answers it.",
+          "probes": [
+            {
+              "name": "Declared obligations",
+              "kind": "claim_category",
+              "terms": [
+                "declared_commitment",
+                "declared_non_goal"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "declared_commitment",
+              "declared_non_goal"
+            ],
+            "min_importance": "low",
+            "limit": 60
+          }
         }
       ]
     },
@@ -155,9 +187,12 @@
           "findings": {
             "categories": [
               "api_documentation_drift",
-              "documented_http_route_inventory"
+              "deprecation",
+              "documented_http_route_inventory",
+              "public_api"
             ],
-            "limit": 20
+            "limit": 20,
+            "min_importance": "low"
           }
         },
         {
@@ -543,9 +578,11 @@
             "categories": [
               "storage",
               "storage_schema",
-              "storage_serialization"
+              "storage_serialization",
+              "test_storage"
             ],
-            "limit": 25
+            "limit": 25,
+            "min_importance": "low"
           },
           "cross_references": [
             "state.process-local"
@@ -727,7 +764,15 @@
           ],
           "requires": [
             "state.durable"
-          ]
+          ],
+          "findings": {
+            "categories": [
+              "schema_migration",
+              "test_storage_schema"
+            ],
+            "min_importance": "low",
+            "limit": 40
+          }
         },
         {
           "id": "state.relational-store",
@@ -874,9 +919,12 @@
           "findings": {
             "categories": [
               "ai_failure_behavior",
+              "caught_exception",
+              "exception_type",
               "http_framework_behavior"
             ],
-            "limit": 20
+            "limit": 20,
+            "min_importance": "low"
           }
         },
         {
@@ -1703,10 +1751,14 @@
           ],
           "findings": {
             "categories": [
+              "test_concentration",
+              "test_configuration_read",
+              "test_route",
               "testing",
               "testing_census"
             ],
-            "limit": 25
+            "limit": 25,
+            "min_importance": "low"
           }
         },
         {
