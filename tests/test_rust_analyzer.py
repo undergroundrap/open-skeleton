@@ -13,6 +13,7 @@ from open_skeleton.analyzers.rust_lexical import (
     _declared_items,
     _error_surface,
     _impl_methods,
+    _module_name,
     _mutable_statics,
     _name_index,
     _struct_fields,
@@ -438,3 +439,37 @@ class ConstantPrecisionTests(TestCase):
         # one rule applies rather than a different answer per extractor.
         source = 'rgtest!(name, |dir| { const HAYSTACK: &str = "x"; });\nconst REAL: u8 = 1;\n'
         self.assertEqual(sorted(_constants(tokenize(source))), ["REAL"])
+
+
+class ModulePathTests(TestCase):
+    """A Rust module path is the language's, not the filesystem's.
+
+    Joining directories verbatim produced
+    `crates::warmboot-core::src::catalog::layout` -- a name that appears in no
+    `use` statement anywhere and that a reader cannot paste into one. Cargo
+    does not put `src` in a module path, and a crate directory named
+    `warmboot-core` is `warmboot_core` to the language.
+
+    The receipt still names the file exactly. Only the module path changes,
+    because a path nobody can use is a name this engine made up.
+    """
+
+    def test_a_workspace_crate_drops_its_directory_scaffolding(self) -> None:
+        found = _module_name("crates/warmboot-core/src/catalog/layout.rs")
+        self.assertEqual(found, "warmboot_core::catalog::layout")
+
+    def test_a_single_crate_root_is_the_crate(self) -> None:
+        self.assertEqual(_module_name("src/main.rs"), "crate")
+        self.assertEqual(_module_name("src/lib.rs"), "crate")
+
+    def test_a_module_beside_the_root_keeps_its_own_name(self) -> None:
+        self.assertEqual(_module_name("src/power.rs"), "power")
+
+    def test_a_hyphenated_crate_becomes_an_identifier(self) -> None:
+        # `warmboot-core` is a package name; `warmboot_core` is the module.
+        self.assertEqual(_module_name("crates/cli/src/lib.rs"), "cli")
+        self.assertTrue("-" not in _module_name("crates/a-b/src/lib.rs"))
+
+    def test_a_path_without_src_is_left_alone(self) -> None:
+        # Integration tests and benches are not inside a crate's `src`.
+        self.assertEqual(_module_name("tests/compat.rs"), "tests::compat")

@@ -938,10 +938,25 @@ def _impl_methods(tokens: list[Token]) -> list[tuple[str, str, int]]:
 
 
 def _module_name(path: str) -> str:
+    """The Rust path for a file, which is not the same as its directory path.
+
+    Cargo does not put `src` in a module path and a crate directory named
+    `warmboot-core` is `warmboot_core` to the language, so joining directories
+    verbatim produced `crates::warmboot-core::src::catalog::layout` -- a name
+    that appears in no `use` statement anywhere and that a reader cannot paste
+    into one. The file is still named exactly by its receipt; only the module
+    path is the language's rather than the filesystem's.
+    """
+
     parts = path.removesuffix(".rs").split("/")
     if parts[-1] in {"mod", "lib", "main"} and len(parts) > 1:
         parts = parts[:-1]
-    return "::".join(parts) or "crate"
+    # A workspace lays crates out as `crates/<name>/src/...`; a single crate as
+    # `src/...`. Both put the module root immediately after `src`.
+    if "src" in parts:
+        crate = parts[parts.index("src") - 1] if parts.index("src") > 0 else ""
+        parts = ([crate] if crate else []) + parts[parts.index("src") + 1 :]
+    return "::".join(item.replace("-", "_") for item in parts if item) or "crate"
 
 
 def _use_target(tokens: list[Token], start: int) -> tuple[str, int]:
