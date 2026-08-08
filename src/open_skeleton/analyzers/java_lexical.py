@@ -690,7 +690,15 @@ class JavaLexicalAnalyzer:
                 symbols.append(
                     SymbolRecord(
                         symbol_id=stable_id(
-                            "symbol", (snapshot.snapshot_id, path, qualified, ANALYZER_VERSION)
+                            # The line is part of the identity because a name
+                            # can legitimately repeat in one file: `ReduceOps`
+                            # declares a local class called `ReducingSink`
+                            # twelve times, once inside each method. Keying on
+                            # the name alone collapsed all twelve into a single
+                            # row and lost twenty-four symbols across
+                            # `java.base` without reporting anything.
+                            "symbol",
+                            (snapshot.snapshot_id, path, qualified, item.line, ANALYZER_VERSION),
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         path=path,

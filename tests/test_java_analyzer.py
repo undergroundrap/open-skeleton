@@ -237,3 +237,32 @@ class JavaClaimTests(TestCase):
         self.assertEqual(coverage.eligible_files, 2)
         self.assertEqual(coverage.analyzed_files, 2)
         self.assertEqual(coverage.failed_files, 0)
+
+
+class SymbolIdentityTests(TestCase):
+    """A name that repeats in one file is more than one symbol.
+
+    `java.util.stream.ReduceOps` declares a local class called `ReducingSink`
+    twelve times, once inside each method. Keying identity on the name alone
+    collapsed all twelve into a single ledger row, and twenty-four symbols
+    disappeared across `java.base` with nothing reporting it.
+    """
+
+    SOURCE = """package p;
+class ReduceOps {
+    static void first() { class Sink {} }
+    static void second() { class Sink {} }
+    static void third() { class Sink {} }
+}
+"""
+
+    def test_each_declaration_keeps_its_own_identity(self) -> None:
+        result = _analyze({"ReduceOps.java": self.SOURCE})
+        sinks = [item for item in result.symbols if item.qualified_name.endswith(".Sink")]
+        self.assertEqual(len(sinks), 3)
+        self.assertEqual(len({item.symbol_id for item in sinks}), 3)
+
+    def test_no_symbol_identity_repeats(self) -> None:
+        result = _analyze({"ReduceOps.java": self.SOURCE})
+        identities = [item.symbol_id for item in result.symbols]
+        self.assertEqual(len(identities), len(set(identities)))

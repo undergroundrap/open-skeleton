@@ -834,9 +834,12 @@ class EvidenceLedger:
         status: str | None = None,
         category: str | None = None,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         if limit < 1 or limit > 5_000:
             raise ValueError("Claim limit must be between 1 and 5000")
+        if offset < 0:
+            raise ValueError("Claim offset must not be negative")
         clauses = ["snapshot_id = ?"]
         parameters: list[object] = [snapshot_id]
         if status is not None:
@@ -846,6 +849,7 @@ class EvidenceLedger:
             clauses.append("category = ?")
             parameters.append(category)
         parameters.append(limit)
+        parameters.append(offset)
         with self._session() as connection:
             rows = connection.execute(
                 f"""
@@ -859,8 +863,9 @@ class EvidenceLedger:
                         WHEN 'medium' THEN 2 ELSE 3
                     END,
                     category,
-                    claim
-                LIMIT ?
+                    claim,
+                    claim_id
+                LIMIT ? OFFSET ?
                 """,
                 tuple(parameters),
             ).fetchall()
@@ -1032,9 +1037,12 @@ class EvidenceLedger:
         query: str | None = None,
         kind: str | None = None,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         if limit < 1 or limit > 5_000:
             raise ValueError("Symbol limit must be between 1 and 5000")
+        if offset < 0:
+            raise ValueError("Symbol offset must not be negative")
         clauses = ["snapshot_id = ?"]
         parameters: list[object] = [snapshot_id]
         if query:
@@ -1044,6 +1052,7 @@ class EvidenceLedger:
             clauses.append("kind = ?")
             parameters.append(kind)
         parameters.append(limit)
+        parameters.append(offset)
         with self._session() as connection:
             rows = connection.execute(
                 f"""
@@ -1051,8 +1060,8 @@ class EvidenceLedger:
                        end_line, language, analyzer, metadata_json
                 FROM symbols
                 WHERE {" AND ".join(clauses)}
-                ORDER BY qualified_name, path, start_line
-                LIMIT ?
+                ORDER BY qualified_name, path, start_line, symbol_id
+                LIMIT ? OFFSET ?
                 """,
                 tuple(parameters),
             ).fetchall()

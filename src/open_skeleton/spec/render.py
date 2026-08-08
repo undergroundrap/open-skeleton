@@ -151,6 +151,7 @@ class RenderedSection:
     cross_references: tuple[str, ...]
     omitted_findings: int
     depth: int
+    omitted_claim_ids: tuple[str, ...] = ()
     degenerate_threshold: int = 0
     examined_files: tuple[tuple[str, int], ...] = ()
     unmet_requirements: tuple[str, ...] = ()
@@ -171,6 +172,7 @@ class RenderedSection:
             "panels": [item.to_dict() for item in self.panels],
             "cross_references": list(self.cross_references),
             "omitted_findings": self.omitted_findings,
+            "omitted_claim_ids": list(self.omitted_claim_ids),
             "depth": self.depth,
             "examined_files": [
                 {"path": path, "receipts": count} for path, count in self.examined_files
@@ -336,6 +338,47 @@ def _citations(
     return tuple(citations)
 
 
+CLAIM_PAGE = 5_000
+
+
+def _every_claim(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any]]:
+    """All claims for a snapshot, not the first page of them.
+
+    The ledger caps a single query at 5,000 because the interactive commands
+    that share it should not stream a whole repository into a terminal. The
+    specification builder asked for exactly that cap and reported what came
+    back as the ledger's total, so a snapshot with more claims lost the
+    remainder without saying so: `java.base` produces 8,707 and the document
+    announced "Claims in ledger: 5,000".
+
+    Nothing smaller than a real repository reached the limit, which is why it
+    survived every corpus until a language with 3,000 files in one module.
+    """
+
+    found: list[dict[str, Any]] = []
+    while True:
+        page = ledger.list_claims(snapshot_id, limit=CLAIM_PAGE, offset=len(found))
+        found.extend(page)
+        if len(page) < CLAIM_PAGE:
+            return found
+
+
+def _every_symbol(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any]]:
+    """All symbols for a snapshot, for the same reason as `_every_claim`.
+
+    The index projection exists to carry the complete inventory that the
+    document deliberately leaves out, so truncating it at one page defeats
+    the split: `java.base` declares 5,638 symbols and the index held 5,000.
+    """
+
+    found: list[dict[str, Any]] = []
+    while True:
+        page = ledger.list_symbols(snapshot_id, limit=CLAIM_PAGE, offset=len(found))
+        found.extend(page)
+        if len(page) < CLAIM_PAGE:
+            return found
+
+
 def build_spec(
     ledger: EvidenceLedger,
     profile: SpecProfile,
@@ -353,8 +396,8 @@ def build_spec(
 
     files = tuple(ledger.list_files(resolved_id))
     exclusions = tuple(ledger.list_exclusions(resolved_id))
-    claims = tuple(ledger.list_claims(resolved_id, limit=5_000))
-    symbols = tuple(ledger.list_symbols(resolved_id, limit=5_000))
+    claims = tuple(_every_claim(ledger, resolved_id))
+    symbols = tuple(_every_symbol(ledger, resolved_id))
     edges = tuple(ledger.list_edges(resolved_id))
     evidence_by_id = {str(item["evidence_id"]): item for item in ledger.list_evidence(resolved_id)}
     corpus = LedgerCorpus(
@@ -500,6 +543,9 @@ def build_spec(
                 cross_references=section.cross_references,
                 omitted_findings=omitted,
                 depth=depth,
+                omitted_claim_ids=tuple(
+                    item for item in routed if item not in {c.claim_id for c in findings}
+                ),
                 degenerate_threshold=section.degenerate_below,
                 examined_files=_examined_files(findings, constraints),
                 unmet_requirements=unmet_requirements,
