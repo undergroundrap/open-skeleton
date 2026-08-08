@@ -926,3 +926,53 @@ class ModuleNameTests(TestCase):
         packages = frozenset({"a/src/pkg", "b/src/pkg", "c/src/pkg"})
         found = _module_names(paths, packages)
         self.assertEqual(len(set(found.values())), len(paths))
+
+
+class DeeplyNestedSourceTests(TestCase):
+    """One unreadable file is a coverage failure, not an aborted run.
+
+    `sympy/polys/numberfields/resolvent_lookup.py` is a single arithmetic
+    expression nested about four hundred nodes deep. `ast.NodeVisitor` recurses
+    once per node, so walking it raised `RecursionError` -- from the walk,
+    which sat outside the handler that covered parsing -- and a 2,600-file
+    repository produced no analysis at all.
+
+    A file this analyzer cannot finish is a file it did not read, and it
+    already knows how to say that.
+    """
+
+    def _repository(self, root: Path) -> None:
+        # A left-associative chain, not nested parentheses. Parentheses hit
+        # the parser's own limit and raise `SyntaxError`, which was always
+        # handled -- a fixture built from them passes with the guard removed
+        # and proves nothing. This parses cleanly into a tree about two
+        # thousand nodes deep and fails in the walk, which is the real case.
+        (root / "deep.py").write_text("value = " + "+".join(["1"] * 2000) + "\n", encoding="utf-8")
+        (root / "shallow.py").write_text("def answer():\n    return 42\n", encoding="utf-8")
+
+    def test_the_run_survives_and_names_the_file_it_could_not_read(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._repository(root)
+            result = analyze_snapshot(scan_repository(root))
+
+        coverage = next(item for item in result.coverage if "python" in item.analyzer)
+        self.assertEqual(coverage.failed_files, 1)
+        self.assertTrue(any("deep.py" in item for item in coverage.failures))
+
+    def test_the_readable_file_is_still_analyzed(self) -> None:
+        # The point of the guard is that one file's depth costs one file.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._repository(root)
+            result = analyze_snapshot(scan_repository(root))
+
+        self.assertTrue(any(item.path == "shallow.py" for item in result.symbols))
+
+    def test_no_partial_record_from_the_failed_file_reaches_the_result(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._repository(root)
+            result = analyze_snapshot(scan_repository(root))
+
+        self.assertEqual([item for item in result.symbols if item.path == "deep.py"], [])

@@ -2203,20 +2203,35 @@ class PythonAstAnalyzer:
                     raise ValueError("content changed after snapshot")
                 source = payload.decode("utf-8", errors="strict")
                 tree = ast.parse(source, filename=file_record.path, type_comments=True)
-            except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc:
+                analyzer = _PythonFileAnalyzer(
+                    snapshot=snapshot,
+                    file_record=file_record,
+                    source=source,
+                    tree=tree,
+                    created_at=created_at,
+                    module=module_names[file_record.path],
+                )
+                analyzer.visit(tree)
+                analyzer.finalize()
+            # Walking the tree is inside this guard, not only parsing it. One
+            # file in sympy is a single arithmetic expression nested 401 nodes
+            # deep, and `ast.NodeVisitor` recurses per node: it raised
+            # `RecursionError` from the walk, which no handler covered, and a
+            # 2,600-file repository produced nothing at all. A file this
+            # analyzer cannot finish is a file it did not read, which is a
+            # coverage failure it already knows how to report.
+            except (
+                OSError,
+                UnicodeDecodeError,
+                SyntaxError,
+                ValueError,
+                RecursionError,
+            ) as exc:
                 failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
                 continue
 
-            analyzer = _PythonFileAnalyzer(
-                snapshot=snapshot,
-                file_record=file_record,
-                source=source,
-                tree=tree,
-                created_at=created_at,
-                module=module_names[file_record.path],
-            )
-            analyzer.visit(tree)
-            analyzer.finalize()
+            # Nothing partial reaches the result: a file contributes every
+            # record it produced or none of them.
             symbols.extend(analyzer.symbols)
             edges.extend(analyzer.edges)
             evidence.extend(analyzer.evidence)
