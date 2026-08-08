@@ -33,6 +33,13 @@ MAX_EXAMINED_FILES = 12
 # without routing any of them, and seventy-eight claims sat in the catch-all
 # unnoticed because nothing counted them where a reader would look.
 UNMAPPED_ATTENTION_SHARE = 0.05
+# `docs/SPEC.md` states why the symbol inventory was split out of the JSON:
+# the inventories "scale with the repository rather than with what is
+# interesting in it". That reasoning was applied to one output and not the
+# other, and a 942-row table was 27% of a Rust specification. The rows stay
+# complete in `spec.json`; the document shows enough to read and says where
+# the rest is.
+MAX_PANEL_ROWS = 25
 # Probe kinds whose matches are things a person can read. The rest match on
 # claim, symbol or edge identifiers, which are content digests: useful in
 # the JSON projection for an agent resolving a reference, and twelve lines
@@ -968,6 +975,12 @@ def render_spec_markdown(document: SpecDocument) -> str:
             lines.extend(render_dossiers(document.dossiers))
 
         for panel in section.panels:
+            # A panel with nothing in it repeats a verdict the section already
+            # gave. In an `absent` section that is nine words to say what the
+            # determination said; in an `applicable` one it is a real finding,
+            # because the concern is present and this facet of it is not.
+            if not panel.rows and section.verdict in {"absent", "not_applicable", "structural"}:
+                continue
             lines.append(f"**{panel.title}**\n\n")
             if not panel.rows:
                 lines.append("_No entries._\n\n")
@@ -978,8 +991,15 @@ def render_spec_markdown(document: SpecDocument) -> str:
                     + "|".join("---:" if item == "right" else "---" for item in panel.alignments)
                     + "|\n"
                 )
-                for row in panel.rows:
+                for row in panel.rows[:MAX_PANEL_ROWS]:
                     lines.append("| " + " | ".join(_escape(cell) for cell in row) + " |\n")
+                withheld = len(panel.rows) - MAX_PANEL_ROWS
+                if withheld > 0:
+                    lines.append(
+                        f"\n_{withheld:,} further row(s) are carried in `spec.json` and "
+                        "`spec.index.json`, which scale with the repository where this "
+                        "document scales with what is interesting in it._\n"
+                    )
                 lines.append("\n")
             if panel.note:
                 lines.append(f"_{panel.note}_\n\n")

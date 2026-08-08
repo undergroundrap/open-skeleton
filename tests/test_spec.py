@@ -19,6 +19,7 @@ from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import (
+    MAX_PANEL_ROWS,
     Citation,
     RenderedClaim,
     _excerpt,
@@ -1485,3 +1486,75 @@ class CatchAllOrderingTests(TestCase):
             [item for item in catch.findings if item.category == "testing"],
             "the catch-all took a claim a later filtered section was written to hold",
         )
+
+
+class PanelPresentationTests(TestCase):
+    """Panels obey the rule the JSON projection already follows.
+
+    `docs/SPEC.md` states why the symbol inventory was split out of
+    `spec.json`: the inventories "scale with the repository rather than with
+    what is interesting in it", and on a 523-file tree they were 37% of a
+    six-megabyte file. That reasoning was applied to one output and not the
+    other -- a 942-row symbol table was 27% of a Rust specification.
+
+    An empty panel has the same shape of problem. In a section already
+    determined absent it spends four lines repeating the determination.
+    """
+
+    def _document(self) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            return build_spec(ledger, load_profile()), render_spec_markdown(
+                build_spec(ledger, load_profile())
+            )
+
+    def test_no_table_in_the_document_exceeds_the_row_cap(self) -> None:
+        _, markdown = self._document()
+        run = 0
+        for line in markdown.splitlines():
+            if line.startswith("|"):
+                run += 1
+                # Two header lines plus the cap, plus slack for claim tables.
+                self.assertLessEqual(run, MAX_PANEL_ROWS + 45, "a table ran past the cap")
+            else:
+                run = 0
+
+    def test_a_truncated_panel_says_where_the_rest_is(self) -> None:
+        document, markdown = self._document()
+        oversized = [
+            panel
+            for section in document.sections
+            for panel in section.panels
+            if len(panel.rows) > MAX_PANEL_ROWS
+        ]
+        if oversized:
+            self.assertIn("further row(s) are carried in `spec.json`", markdown)
+
+    def test_an_empty_panel_is_dropped_where_the_verdict_already_said_so(self) -> None:
+        document, markdown = self._document()
+        silent = [
+            panel.title
+            for section in document.sections
+            for panel in section.panels
+            if not panel.rows and section.verdict in {"absent", "not_applicable", "structural"}
+        ]
+        for title in silent:
+            self.assertNotIn(f"**{title}**", markdown)
+
+    def test_the_json_projection_keeps_every_row(self) -> None:
+        # Shortening the document must not shorten the data.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+            payload = json.loads(render_spec_json(document))
+        for section, rendered in zip(payload["sections"], document.sections, strict=True):
+            for panel, source in zip(section["panels"], rendered.panels, strict=True):
+                self.assertEqual(len(panel["rows"]), len(source.rows))
