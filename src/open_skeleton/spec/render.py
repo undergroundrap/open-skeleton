@@ -371,6 +371,21 @@ def build_spec(
     )
 
     used: set[str] = set()
+    # A selector with no category filter takes whatever is left, so it must not
+    # run until every filtered selector has had its turn. The catch-all sat at
+    # §9.4 and quietly took the claims §9.6 was written to hold, which read as
+    # "not mapped to an outline section" for a family that had a section two
+    # entries later. Claiming in this order makes the outline's own ordering
+    # irrelevant to which section a fact lands in.
+    for candidate in profile.walk():
+        selector = candidate.findings
+        if selector is None or not selector.categories:
+            continue
+        taken, _, routed = _select(selector, claims, used)
+        del taken
+        used.update(routed)
+    filtered_claims = set(used)
+    used = set()
     # Verdicts as they are decided, so a section can read what it presupposes.
     decided: dict[str, str] = {}
     rendered: list[RenderedSection] = []
@@ -397,7 +412,13 @@ def build_spec(
             verdict = "not_applicable"
         decided[section.section_id] = verdict
         unmet_requirements = tuple(unmet) if verdict == "not_applicable" else ()
-        selected, omitted, routed = _select(section.findings, claims, used)
+        selector = section.findings
+        # A catch-all sees only what no filtered section claimed; a filtered
+        # section competes normally with its peers in document order.
+        taken_before = (
+            used | filtered_claims if selector is not None and not selector.categories else used
+        )
+        selected, omitted, routed = _select(selector, claims, taken_before)
         used.update(routed)
         constraint_claims, _, _ = _select(section.constraints, claims, set())
 

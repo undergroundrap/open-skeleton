@@ -1432,3 +1432,56 @@ class UnmappedAttentionTests(TestCase):
         if unmapped.findings:
             self.assertIn("nowhere to put", markdown)
             self.assertIn("matched no section's selector", markdown)
+
+
+class CatchAllOrderingTests(TestCase):
+    """A catch-all claims last, wherever the outline puts it.
+
+    `maintenance.unmapped` sits at §9.4 and takes any claim no selector
+    filtered. Claiming in document order let it swallow what §9.6 was written
+    to hold, so `failure_surface` was reported as having no section two entries
+    before the section that had it.
+
+    The ordering of an outline is a reading order. It should not decide which
+    section a fact lands in.
+    """
+
+    def test_a_later_section_still_claims_its_own_category(self) -> None:
+        payload = {
+            "schema": "open-skeleton.spec_profile.v1",
+            "profile_id": "p",
+            "profile_version": "v1",
+            "title": "t",
+            "sections": [
+                {
+                    "id": "catch",
+                    "number": "1",
+                    "title": "Everything Else",
+                    "probes": [{"name": "P", "kind": "claim_category", "terms": ["testing"]}],
+                    "findings": {"min_importance": "low", "limit": 100},
+                },
+                {
+                    "id": "specific",
+                    "number": "2",
+                    "title": "Automated Tests",
+                    "probes": [{"name": "Q", "kind": "claim_category", "terms": ["testing"]}],
+                    "findings": {"categories": ["testing"], "min_importance": "low", "limit": 100},
+                },
+            ],
+        }
+        profile = parse_profile(payload)
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, profile)
+        catch = next(item for item in document.sections if item.section_id == "catch")
+        specific = next(item for item in document.sections if item.section_id == "specific")
+        storage = [item for item in specific.findings if item.category == "testing"]
+        self.assertTrue(storage, "the filtered section must receive its own category")
+        self.assertFalse(
+            [item for item in catch.findings if item.category == "testing"],
+            "the catch-all took a claim a later filtered section was written to hold",
+        )

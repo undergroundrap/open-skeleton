@@ -146,9 +146,13 @@
           ],
           "findings": {
             "categories": [
-              "http_route_inventory"
+              "http_client_inventory",
+              "http_route",
+              "http_route_inventory",
+              "route_mount"
             ],
-            "limit": 10
+            "limit": 60,
+            "min_importance": "low"
           },
           "diagrams": [
             "route_surface",
@@ -364,6 +368,29 @@
             "surface.payload-shapes",
             "state.declared-models"
           ]
+        },
+        {
+          "id": "surface.type-contracts",
+          "number": "2.12",
+          "title": "Contracts a Type Satisfies",
+          "concern": "Which types can be used where a behaviour is required.",
+          "framing": "A trait implementation is the closest a language gets to stating that one thing may stand in for another. It is the same question a route answers for a service -- what can this be asked to do -- and it is answered at the type rather than at an endpoint.",
+          "probes": [
+            {
+              "name": "Trait implementations",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "trait_implementation"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "trait_implementation"
+            ],
+            "min_importance": "low",
+            "limit": 60
+          }
         }
       ]
     },
@@ -607,9 +634,12 @@
           ],
           "findings": {
             "categories": [
-              "process_local_state"
+              "browser_storage",
+              "process_local_state",
+              "ui_state"
             ],
-            "limit": 25
+            "limit": 25,
+            "min_importance": "low"
           },
           "cross_references": [
             "operations.orchestration"
@@ -890,9 +920,15 @@
           ],
           "findings": {
             "categories": [
-              "runtime_topology"
+              "external_call",
+              "hardcoded_endpoint",
+              "http_client_route",
+              "http_client_route_prefix",
+              "runtime_topology",
+              "third_party_origin"
             ],
-            "limit": 20
+            "limit": 60,
+            "min_importance": "low"
           }
         },
         {
@@ -914,16 +950,24 @@
               "terms": [
                 "http_framework_behavior"
               ]
+            },
+            {
+              "name": "Declared error surface",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "error_surface"
+              ]
             }
           ],
           "findings": {
             "categories": [
               "ai_failure_behavior",
               "caught_exception",
+              "error_surface",
               "exception_type",
               "http_framework_behavior"
             ],
-            "limit": 20,
+            "limit": 60,
             "min_importance": "low"
           }
         },
@@ -953,9 +997,11 @@
           ],
           "findings": {
             "categories": [
-              "configuration_read"
+              "configuration_read",
+              "environment_setting"
             ],
-            "limit": 20
+            "limit": 20,
+            "min_importance": "low"
           }
         },
         {
@@ -2584,7 +2630,14 @@
           "cross_references": [
             "surface.http",
             "integration.failure"
-          ]
+          ],
+          "findings": {
+            "categories": [
+              "failure_surface"
+            ],
+            "min_importance": "low",
+            "limit": 40
+          }
         },
         {
           "id": "maintenance.data-tables",
