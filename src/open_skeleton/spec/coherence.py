@@ -232,25 +232,34 @@ def check_conservation(
 
     Reconciling against the ledger is the only way to see that, so this takes
     counts measured at the source rather than anything the document computed.
+
+    Edges are reconciled here too, through the counts the builder recorded,
+    because they never reach the rendered document and so cannot be counted
+    from it. They matter more than that invisibility suggests: capability
+    traceability is computed from edges, so a call edge lost to a page
+    boundary reports a capability as reached by no test when a test reaches
+    it. That truncation ran undetected until someone thought to look.
     """
 
     found: list[Incoherence] = []
-    claims_held = ledger_counts.get("claims")
-    if claims_held is not None and claims_held != document.total_claims:
-        found.append(
-            Incoherence(
-                "claims-not-conserved",
-                f"the document reports {document.total_claims:,} claim(s) and the "
-                f"ledger holds {claims_held:,} for this snapshot.",
+    for kind, held in sorted(ledger_counts.items()):
+        read = document.source_counts.get(kind)
+        if read is not None and read != held:
+            found.append(
+                Incoherence(
+                    f"{kind}-not-conserved",
+                    f"the document was built from {read:,} {kind} row(s) and the "
+                    f"ledger holds {held:,} for this snapshot.",
+                )
             )
-        )
-    symbols_held = ledger_counts.get("symbols")
-    if symbols_held is not None and document.symbols and symbols_held != len(document.symbols):
+    # The headline total is written separately from the rows it summarises, so
+    # it can drift from them even when nothing was truncated.
+    if document.total_claims != document.source_counts.get("claims", document.total_claims):
         found.append(
             Incoherence(
-                "symbols-not-conserved",
-                f"the index projection carries {len(document.symbols):,} symbol(s) and "
-                f"the ledger holds {symbols_held:,} for this snapshot.",
+                "claim-total-misreported",
+                f"the document reports {document.total_claims:,} claim(s) and was built "
+                f"from {document.source_counts['claims']:,}.",
             )
         )
     return tuple(found)

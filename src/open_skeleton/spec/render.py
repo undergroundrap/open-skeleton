@@ -205,6 +205,11 @@ class SpecDocument:
     roles: tuple[MultiRole, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
     name_index: dict[str, dict[str, int]] = field(default_factory=dict)
+    # How many rows of each kind this document was built from. Recorded so
+    # the totals can be reconciled against the ledger: edges never reach
+    # the rendered document, so without this there is nothing to compare
+    # and a truncated graph is undetectable after the fact.
+    source_counts: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -635,6 +640,11 @@ def build_spec(
         stale_claim_count=len(ledger.stale_claims(resolved_id)),
         total_claims=len(claims),
         cited_claims=cited,
+        source_counts={
+            "claims": len(claims),
+            "symbols": len(symbols),
+            "edges": len(edges),
+        },
         capabilities=capabilities,
         consequences=consequences,
         dossiers=dossiers,

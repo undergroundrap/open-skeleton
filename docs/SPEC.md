@@ -328,8 +328,10 @@ invocation, not only under `--verify`:
 | `absence-tally-disagrees` | A summary absence count unmatched by the sections carrying one |
 | `capability-tally-disagrees` | A capability tally unmatched by the catalog |
 | `claim-rendered-twice` | One claim reaching more than one section |
-| `claims-not-conserved` | A claim total the ledger does not support |
-| `symbols-not-conserved` | An index projection carrying fewer symbols than the ledger holds |
+| `claims-not-conserved` | Fewer claims read than the ledger holds |
+| `symbols-not-conserved` | Fewer symbols read than the ledger holds |
+| `edges-not-conserved` | Fewer relationship edges read than the ledger holds |
+| `claim-total-misreported` | A headline total that drifts from the rows it summarises |
 
 The last two answer a different question from the rest, and the difference
 matters. Everything above them compares the document against itself, which
@@ -339,6 +341,13 @@ the total, so the document announced 5,000 claims for a snapshot holding
 8,707 while every internal check passed. The conservation checks reconcile
 against counts measured at the ledger, which is the only way that class of
 defect is visible at all.
+
+Edges are reconciled through counts the builder records rather than from
+the document, because they never appear in it. They are the case that
+matters most: capability traceability is computed from edges, so a call
+edge lost to a page boundary reports a capability as reached by no test
+when a test reaches it. The default page was 20,000 against a corpus
+holding 21,865, and nothing in the document could have shown it.
 
 The command exits non-zero when any of these fire. Each is a defect that
 shipped and was found by reading; the reason they are checks now is that

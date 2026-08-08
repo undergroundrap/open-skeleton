@@ -178,21 +178,35 @@ class ConservationTests(TestCase):
 
     def test_a_document_holding_everything_reports_nothing(self) -> None:
         document = self._document()
-        counts = {"claims": document.total_claims, "symbols": len(document.symbols)}
-        self.assertEqual(check_conservation(document, counts), ())
+        self.assertEqual(check_conservation(document, dict(document.source_counts)), ())
 
     def test_a_truncated_claim_total_is_caught(self) -> None:
         document = self._document()
-        counts = {"claims": document.total_claims + 3_707, "symbols": len(document.symbols)}
+        counts = {"claims": document.total_claims + 3_707}
         found = {item.check for item in check_conservation(document, counts)}
         self.assertIn("claims-not-conserved", found)
 
     def test_a_truncated_symbol_index_is_caught(self) -> None:
         document = self._document()
         self.assertTrue(document.symbols, "the fixture should carry symbols")
-        counts = {"claims": document.total_claims, "symbols": len(document.symbols) + 638}
+        counts = {"symbols": len(document.symbols) + 638}
         found = {item.check for item in check_conservation(document, counts)}
         self.assertIn("symbols-not-conserved", found)
+
+    def test_a_truncated_edge_graph_is_caught(self) -> None:
+        # Edges never reach the rendered document, so nothing could be
+        # counted from it. Capability traceability is computed from them: a
+        # call edge lost to a page boundary reports a capability as reached
+        # by no test when a test reaches it.
+        document = self._document()
+        counts = {"edges": document.source_counts["edges"] + 1_865}
+        found = {item.check for item in check_conservation(document, counts)}
+        self.assertIn("edges-not-conserved", found)
+
+    def test_a_headline_total_that_drifts_from_its_rows_is_caught(self) -> None:
+        document = replace(self._document(), total_claims=5_000)
+        found = {item.check for item in check_conservation(document, {})}
+        self.assertIn("claim-total-misreported", found)
 
     def test_counts_the_ledger_cannot_supply_are_not_invented(self) -> None:
         # A caller that measured nothing gets no verdict, rather than a

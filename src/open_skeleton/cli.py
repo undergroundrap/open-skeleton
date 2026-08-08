@@ -583,6 +583,7 @@ def _spec(args: argparse.Namespace) -> int:
         {
             "claims": ledger.count_rows(document.snapshot_id, "claims"),
             "symbols": ledger.count_rows(document.snapshot_id, "symbols"),
+            "edges": ledger.count_rows(document.snapshot_id, "edges"),
         },
     )
     summary["incoherences"] = [
