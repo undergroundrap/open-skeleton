@@ -119,12 +119,50 @@ environment settings is the entire job of the library — 30 recorded against 33
 read sites in its source. The number to watch is the silent column: a package
 that says nothing names a category that does not exist yet.
 
+## Whole-document sweep across unseen repositories
+
+```
+python benchmarks/robustness/run_document_sweep.py --root .venv/Lib/site-packages
+```
+
+The robustness sweep above stops at analysis. This renders a specification for
+each repository and asks the two questions that only matter once a document
+exists: does it agree with itself, and does it account for everything the
+ledger holds.
+
+Both classes are invisible in any single repository, and each was found this
+way rather than by reasoning. The first sweep turned up a crash instead of an
+incoherence — one file in `sympy` is an arithmetic expression nested about
+four hundred nodes deep, `ast.NodeVisitor` recurses per node, and the handler
+covering parse did not cover the walk, so a 2,600-file repository produced no
+analysis at all rather than a thin one.
+
+The second class needed size rather than variety. A projection read one page
+of claims and reported the page size as the ledger's contents; nothing smaller
+than `java.base` had ever exceeded a page, so it sat behind every corpus until
+one arrived holding 8,707 claims.
+
+Exit status is non-zero when anything crashed or any document disagreed with
+itself, which makes this usable as a gate over a corpus a team already trusts.
+
 ## Differential comparison against a real parser
 
 ```
 npm install esbuild
 python benchmarks/differential/run_differential.py --root some/typescript/project
+python benchmarks/differential/run_java_differential.py --jdk-sources
 ```
+
+The Java harness needs no setup at all: `--jdk-sources` reads `java.base` out
+of the running JDK's own `lib/src.zip`, which is 3,064 files of real Java that
+every installation already has. `javac -Xprint` runs the compiler front end
+without generating code, so it works on a checkout that was never built.
+
+It has one silent limit worth stating, because it decides what the harness can
+and cannot certify. With an incomplete classpath `javac -Xprint` drops every
+annotation from its output, reports the errors only on stderr, and exits zero.
+Java puts its routes in annotations, so the declaration half is oracle-checked
+and route extraction is fixture-tested — no compiler ever agreed with it.
 
 Every other check here needs someone to imagine the input first. Fixtures are
 written by a person who already knows the answer, and a corpus sweep only
