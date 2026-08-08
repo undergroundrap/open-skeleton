@@ -19,6 +19,9 @@ from open_skeleton.analyzers.python_ast import (
     _external_calls,
     _imported_names,
     _model_fields,
+    _module_name,
+    _module_names,
+    _package_directories,
     _payload_shapes,
     _signatures,
     _string_constants,
@@ -853,3 +856,73 @@ class ExceptionContractTests(TestCase):
         # and a reader should be able to find it.
         source = "try:\n    go()\nexcept:\n    pass\n"
         self.assertEqual(_caught_families(self._parse(source)), [("*", 3)])
+
+
+class ModuleNameTests(TestCase):
+    """A module is named by what could import it, not by where it sits.
+
+    Joining every path segment produced `src.open_skeleton.ledger`, which no
+    interpreter can import. It read plausibly enough to survive five repository
+    shapes; pointing the tool at a workspace of nine projects rendered it as
+    `open-skeleton.src.open_skeleton.ledger` and made it obvious.
+    """
+
+    PACKAGE = frozenset({"src/open_skeleton", "src/open_skeleton/analyzers"})
+
+    def test_a_package_root_is_not_part_of_the_name(self) -> None:
+        self.assertEqual(
+            _module_name("src/open_skeleton/ledger.py", self.PACKAGE), "open_skeleton.ledger"
+        )
+
+    def test_a_nested_package_keeps_every_package_segment(self) -> None:
+        self.assertEqual(
+            _module_name("src/open_skeleton/analyzers/python_ast.py", self.PACKAGE),
+            "open_skeleton.analyzers.python_ast",
+        )
+
+    def test_an_init_module_is_named_for_its_package(self) -> None:
+        self.assertEqual(
+            _module_name("src/open_skeleton/__init__.py", self.PACKAGE), "open_skeleton"
+        )
+
+    def test_a_layout_with_no_init_anywhere_is_left_alone(self) -> None:
+        # A directory without `__init__.py` can still be a package: PEP 420
+        # namespace packages are importable, and `from app.core.used import
+        # value` proves this one is. Trimming on the absence of a file would
+        # rename it to `used` and orphan the import that names it.
+        self.assertEqual(_module_name("app/core/used.py", frozenset()), "app.core.used")
+
+    def test_a_file_at_the_root_names_itself(self) -> None:
+        self.assertEqual(_module_name("server.py", frozenset()), "server")
+
+    def test_packages_are_recognised_by_their_init_file(self) -> None:
+        found = _package_directories(("src/pkg/__init__.py", "src/pkg/a.py", "__init__.py"))
+        self.assertEqual(found, frozenset({"src/pkg", ""}))
+
+    def test_two_files_that_share_a_name_are_told_apart_by_import_root(self) -> None:
+        # Two distributions in one workspace can each ship a `pkg.mod`, and
+        # both names are correct where they live. Sharing a qualified name
+        # would merge two unrelated files into a single identity.
+        packages = frozenset({"alpha/src/pkg", "beta-app/src/pkg"})
+        found = _module_names(("alpha/src/pkg/mod.py", "beta-app/src/pkg/mod.py"), packages)
+        self.assertEqual(
+            found,
+            {
+                "alpha/src/pkg/mod.py": "alpha.src.pkg.mod",
+                "beta-app/src/pkg/mod.py": "beta_app.src.pkg.mod",
+            },
+        )
+
+    def test_a_name_that_does_not_collide_carries_no_prefix(self) -> None:
+        packages = frozenset({"alpha/src/pkg", "beta/src/other"})
+        found = _module_names(("alpha/src/pkg/mod.py", "beta/src/other/mod.py"), packages)
+        self.assertEqual(
+            found,
+            {"alpha/src/pkg/mod.py": "pkg.mod", "beta/src/other/mod.py": "other.mod"},
+        )
+
+    def test_every_path_resolves_to_a_distinct_name(self) -> None:
+        paths = ("a/src/pkg/mod.py", "b/src/pkg/mod.py", "c/src/pkg/mod.py", "d/other.py")
+        packages = frozenset({"a/src/pkg", "b/src/pkg", "c/src/pkg"})
+        found = _module_names(paths, packages)
+        self.assertEqual(len(set(found.values())), len(paths))

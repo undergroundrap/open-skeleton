@@ -791,7 +791,14 @@ def _executive_summary(document: SpecDocument) -> list[str]:
         lines.append("\n")
 
     if untraced:
-        names = ", ".join(f"`{item.label}`" for item in untraced[:MAX_SUMMARY_ROWS])
+        shown = untraced[:MAX_SUMMARY_ROWS]
+        names = ", ".join(f"`{item.label}`" for item in shown)
+        # The count and the list disagree once there are more than ten, and a
+        # reader who cannot see that stops at the tenth name believing it is
+        # the whole set. Every single-project run had fewer than ten, so the
+        # truncation only became visible against a workspace of nine.
+        if len(untraced) > len(shown):
+            names += f", and {len(untraced) - len(shown):,} more"
         lines.append(
             f"### Capabilities with no verifying reference\n\n"
             f"{len(untraced):,} of {len(document.capabilities):,}: {names}. "

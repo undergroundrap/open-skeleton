@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
+from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.rust_lexical import (
     RustLexicalAnalyzer,
     _call_sites,
@@ -481,3 +482,68 @@ class ModulePathTests(TestCase):
         self.assertEqual(_module_name("crates/warmboot-core/tests/compat.rs"), "compat")
         self.assertEqual(_module_name("benches/bench.rs"), "bench")
         self.assertEqual(_module_name("examples/demo.rs"), "demo")
+
+
+class ConfiguredDuplicateClaimTests(TestCase):
+    """One fact stated by two sites keeps both receipts.
+
+    `#[cfg]` is how Rust writes a platform split: the trait is implemented once
+    for Windows and once for everything else, both impls are real, and exactly
+    one compiles per platform. The claim text is identical, so both records
+    carry the same identifier.
+
+    The ledger keys claims by that identifier and rewrote the evidence link per
+    claim, so the second impl deleted the first one's receipt. The run reported
+    635 claims, stored 634, and cited whichever impl happened to be written
+    last -- which on the other platform is the dead one.
+    """
+
+    SOURCE = """\
+pub trait FileReadAdapter {
+    fn read_text(&mut self) -> String;
+}
+
+pub struct HostFileReadAdapter;
+
+#[cfg(not(windows))]
+impl FileReadAdapter for HostFileReadAdapter {
+    fn read_text(&mut self) -> String {
+        String::new()
+    }
+}
+
+#[cfg(windows)]
+impl FileReadAdapter for HostFileReadAdapter {
+    fn read_text(&mut self) -> String {
+        String::from("windows")
+    }
+}
+"""
+
+    def _result(self) -> AnalysisResult:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lib.rs").write_text(self.SOURCE, encoding="utf-8")
+            return analyze_snapshot(scan_repository(root))
+
+    def test_the_claim_is_reported_once(self) -> None:
+        result = self._result()
+        matching = [item for item in result.claims if "implements FileReadAdapter" in item.claim]
+        self.assertEqual(len(matching), 1)
+
+    def test_both_implementations_are_still_cited(self) -> None:
+        result = self._result()
+        claim = next(item for item in result.claims if "implements FileReadAdapter" in item.claim)
+        lines = {
+            record.start_line
+            for record in result.evidence
+            if record.evidence_id in claim.supporting_evidence
+        }
+        # Line 8 is the non-Windows impl and line 15 the Windows one. Citing
+        # one of them would be citing dead code on the other platform.
+        self.assertEqual(lines, {8, 15})
+
+    def test_no_claim_identifier_is_reported_twice(self) -> None:
+        result = self._result()
+        identifiers = [item.claim_id for item in result.claims]
+        self.assertEqual(len(identifiers), len(set(identifiers)))

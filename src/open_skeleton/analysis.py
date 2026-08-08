@@ -466,6 +466,48 @@ def _attribute_claim_yield(
 AnalysisEventCallback = Callable[[str, int, int], None]
 
 
+def _merge_duplicate_claims(claims: list[ClaimRecord]) -> list[ClaimRecord]:
+    """Fold claims sharing an identifier into one, keeping every receipt.
+
+    Two sites can state the same fact. Rust's ``#[cfg]`` is the ordinary case:
+    a trait is implemented once for Windows and once for everything else, both
+    impls are real, and exactly one compiles per platform. The claim text is
+    identical, so both records carry the same identifier.
+
+    Storing them separately was impossible -- the ledger keys claims by that
+    identifier -- and storing them in sequence deleted the first receipt while
+    writing the second, so the run reported 635 claims and persisted 634 with
+    one citation pointing at whichever impl happened to be written last.
+    Merging the evidence keeps both lines, which is also the more useful
+    reading: it shows a reader that the fact holds by two different routes.
+    """
+
+    merged: dict[str, ClaimRecord] = {}
+    for claim in sorted(claims, key=lambda item: item.claim_id):
+        existing = merged.get(claim.claim_id)
+        if existing is None:
+            merged[claim.claim_id] = claim
+            continue
+        merged[claim.claim_id] = replace(
+            existing,
+            supporting_evidence=_union(existing.supporting_evidence, claim.supporting_evidence),
+            contradicting_evidence=_union(
+                existing.contradicting_evidence, claim.contradicting_evidence
+            ),
+            invalidation_keys=_union(existing.invalidation_keys, claim.invalidation_keys),
+            alternative_hypotheses=_union(
+                existing.alternative_hypotheses, claim.alternative_hypotheses
+            ),
+        )
+    return list(merged.values())
+
+
+def _union(first: tuple[str, ...], second: tuple[str, ...]) -> tuple[str, ...]:
+    """Both sequences, order preserved, without repeats."""
+
+    return tuple(dict.fromkeys((*first, *second)))
+
+
 def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Analyzer, ...]:
     """The analyzers a run consults, in the order their claims are merged.
 
@@ -605,6 +647,6 @@ def analyze_snapshot(
         ),
         edges=tuple(sorted(edges, key=lambda item: item.edge_id)),
         evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
-        claims=tuple(sorted(claims, key=lambda item: item.claim_id)),
+        claims=tuple(_merge_duplicate_claims(claims)),
         coverage=coverage,
     )

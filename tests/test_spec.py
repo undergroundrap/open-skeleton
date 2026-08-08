@@ -15,6 +15,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, verify_spec
+from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.panels import PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
@@ -1667,3 +1668,53 @@ class UnreadLanguageTests(TestCase):
             ),
         )
         self.assertNotIn("could not read", render_spec_markdown(idle))
+
+
+class UntracedCapabilityDisclosureTests(TestCase):
+    """A count and a list that disagree must say so.
+
+    The summary reported "21 of 48" and then named ten, with no ellipsis and
+    no remainder. A reader who cannot see the truncation stops at the tenth
+    name believing it is the whole set -- and this is the one number in the
+    summary that is meant to drive review.
+
+    Every single-project run had fewer than ten untraced capabilities, so the
+    branch never truncated and the defect stayed invisible through five
+    repository shapes. Pointing the tool at a workspace of nine projects is
+    what produced the eleventh.
+    """
+
+    def _rendered(self, count: int) -> str:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+        capabilities = tuple(
+            Capability(
+                capability_id=f"C-{index:03d}",
+                label=f"feature{index}",
+                kind="module",
+                routes=(),
+                symbols=(f"pkg.feature{index}.run",),
+                paths=(f"pkg/feature{index}.py",),
+                claim_ids=(),
+                evidence_ids=(),
+                exercised_by=(),
+            )
+            for index in range(1, count + 1)
+        )
+        return render_spec_markdown(replace(document, capabilities=capabilities))
+
+    def test_a_truncated_list_discloses_what_it_left_out(self) -> None:
+        markdown = self._rendered(25)
+        self.assertIn("25 of 25", markdown)
+        self.assertIn("and 15 more", markdown)
+
+    def test_a_complete_list_claims_no_remainder(self) -> None:
+        markdown = self._rendered(4)
+        self.assertIn("4 of 4", markdown)
+        # The list is whole, so it ends at the last name and says nothing else.
+        self.assertIn("`feature4`. Static resolution", markdown)

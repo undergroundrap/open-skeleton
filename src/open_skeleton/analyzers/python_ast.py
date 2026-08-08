@@ -9,6 +9,7 @@ import hashlib
 import re
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -105,11 +106,77 @@ ALTER_TABLE_PATTERN = re.compile(
 )
 
 
-def _module_name(path: str) -> str:
+def _package_directories(paths: Iterable[str]) -> frozenset[str]:
+    """Directories carrying an ``__init__.py``, which is what makes them packages.
+
+    Derived from the file list rather than assumed from layout conventions, so
+    a project that puts its package somewhere unusual is read correctly and a
+    directory merely named ``src`` is not given meaning it has not earned.
+    """
+
+    return frozenset(
+        path.rsplit("/", 1)[0] if "/" in path else ""
+        for path in paths
+        if path.rsplit("/", 1)[-1] == "__init__.py"
+    )
+
+
+def _module_parts(path: str, packages: frozenset[str]) -> tuple[str, str]:
+    """The import root and the importable module name for a Python file.
+
+    A module's name is only meaningful relative to the directory that would sit
+    on ``sys.path``. Joining the whole path instead produced
+    ``src.open_skeleton.ledger`` -- a name nothing can import, and one that
+    reads plausibly enough to survive five repository shapes unnoticed. It took
+    a workspace of nine projects, where the same defect rendered as
+    ``open-skeleton.src.open_skeleton.ledger``, to make it visible.
+
+    The name therefore begins at the first ancestor carrying an
+    ``__init__.py``. When no ancestor has one the path is left exactly as it
+    was, because absence of that file is not evidence of a layout: PEP 420
+    namespace packages are importable without it, and assuming otherwise
+    renamed ``app.core.used`` to ``used`` and lost the import that referenced
+    it. Rewriting only on positive evidence is the whole rule.
+    """
+
     parts = path.removesuffix(".py").split("/")
     if parts[-1] == "__init__":
         parts = parts[:-1]
-    return ".".join(parts) or "__root__"
+    if not parts:
+        return "", "__root__"
+    for index in range(len(parts)):
+        if "/".join(parts[: index + 1]) in packages:
+            return "/".join(parts[:index]), ".".join(parts[index:])
+    return "", ".".join(parts)
+
+
+def _module_name(path: str, packages: frozenset[str] = frozenset()) -> str:
+    return _module_parts(path, packages)[1]
+
+
+def _module_names(paths: Iterable[str], packages: frozenset[str]) -> dict[str, str]:
+    """Importable name per path, qualified further only where two files collide.
+
+    Two distributions in one workspace can each own a ``server.py``, and both
+    are importable as ``server``. Letting them share a qualified name would
+    merge two unrelated files into one identity, so a colliding name is
+    prefixed with its import root -- which is the only thing that actually
+    distinguishes them. Names that do not collide are left alone, because the
+    prefix carries no information there.
+    """
+
+    claimed: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for path in paths:
+        root, name = _module_parts(path, packages)
+        claimed[name].append((root, path))
+    resolved: dict[str, str] = {}
+    for name, owners in claimed.items():
+        for root, path in owners:
+            if len(owners) == 1 or not root:
+                resolved[path] = name
+            else:
+                resolved[path] = f"{root.replace('-', '_').replace('/', '.')}.{name}"
+    return resolved
 
 
 def _expr_name(node: ast.AST | None) -> str | None:
@@ -1061,11 +1128,12 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         source: str,
         tree: ast.Module,
         created_at: str,
+        module: str,
     ) -> None:
         self.snapshot = snapshot
         self.file_record = file_record
         self.path = file_record.path
-        self.module = _module_name(file_record.path)
+        self.module = module
         self.source = source
         self.source_lines = source.splitlines(keepends=True)
         self.tree = tree
@@ -2120,6 +2188,11 @@ class PythonAstAnalyzer:
         typed_route_evidence: list[str] = []
         eligible = [item for item in snapshot.files if item.language == "Python"]
         analyzed_files = 0
+        # Package roots come from every path in the snapshot, not just the
+        # readable ones: an `__init__.py` that fails to parse still marks its
+        # directory as a package, and losing that would rename its siblings.
+        packages = _package_directories(item.path for item in snapshot.files)
+        module_names = _module_names((item.path for item in eligible), packages)
 
         for file_record in eligible:
             source_path = snapshot.root / Path(file_record.path)
@@ -2140,6 +2213,7 @@ class PythonAstAnalyzer:
                 source=source,
                 tree=tree,
                 created_at=created_at,
+                module=module_names[file_record.path],
             )
             analyzer.visit(tree)
             analyzer.finalize()
