@@ -527,3 +527,45 @@ class ExportFormTests(TestCase):
 
     def test_array_destructuring_binds_each_position(self) -> None:
         self.assertEqual(_exported_names(_tokens("export const [p, q] = y;")), ["p", "q"])
+
+
+class NestedExportScopeTests(TestCase):
+    """Only a top-level `export` names something an importer can ask for.
+
+    The scan took every `export` token in a file regardless of nesting, so
+    names declared inside a namespace or a module augmentation were flattened
+    into the module's surface. Both are wrong in the same way the Java reader
+    was wrong about a class declared inside a method: the name exists, and it
+    is not reachable by the name reported.
+
+    Real repositories here were unaffected -- none uses either form -- which
+    is exactly why this needed constructing rather than sampling. Library and
+    `@types`-style code uses both constantly.
+    """
+
+    def test_a_namespace_publishes_itself_not_its_contents(self) -> None:
+        # An importer writes `import { N }` and then `N.inner`. Reporting a
+        # bare `inner` says `import { inner }` works, and it does not.
+        source = "export namespace N { export const inner = 1; }\n"
+        self.assertEqual(_exported_names(_tokens(source)), ["N"])
+
+    def test_a_module_augmentation_exports_nothing_from_this_file(self) -> None:
+        # `declare module 'x'` adds to a different module entirely.
+        source = "declare module 'x' { export const inner: number; }\nexport const outer = 1;\n"
+        self.assertEqual(_exported_names(_tokens(source)), ["outer"])
+
+    def test_a_global_augmentation_does_not_contribute_a_name(self) -> None:
+        source = "declare global { interface Window { z: number } }\nexport const w = 1;\n"
+        self.assertEqual(_exported_names(_tokens(source)), ["w"])
+
+    def test_a_braced_export_list_is_still_read(self) -> None:
+        # The list's own braces must not be mistaken for nesting.
+        self.assertEqual(_exported_names(_tokens("export {\n a,\n b,\n};\n")), ["a", "b"])
+
+    def test_a_declaration_with_a_body_is_still_exported(self) -> None:
+        source = "export class C { m() { return 1; } }\nexport const n = 2;\n"
+        self.assertEqual(_exported_names(_tokens(source)), ["C", "n"])
+
+    def test_an_export_after_a_nested_block_is_still_found(self) -> None:
+        source = "function outer() { { const deep = 1; } }\nexport const tail = 3;\n"
+        self.assertEqual(_exported_names(_tokens(source)), ["tail"])

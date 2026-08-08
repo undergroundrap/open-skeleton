@@ -661,8 +661,24 @@ def _exported_names(tokens: list[Token]) -> list[str]:
 
     exported: list[str] = []
     total = len(tokens)
+    # Only a top-level `export` names something an importer can ask this
+    # module for. `export namespace N { export const inner = 1 }` publishes
+    # `N`, and `inner` is reached as `N.inner`; reporting a bare `inner`
+    # tells a reader that `import { inner }` works, and it does not.
+    # `declare module 'x' { ... }` is worse: it augments a different module
+    # entirely, so its names are not this file's surface at all.
+    depth = 0
+    depths: list[int] = []
+    for token in tokens:
+        if token.kind == "punctuation" and token.value == "}":
+            depth = max(0, depth - 1)
+        depths.append(depth)
+        if token.kind == "punctuation" and token.value == "{":
+            depth += 1
     for index, token in enumerate(tokens):
         if token.kind != "identifier" or token.value != "export" or index + 1 >= total:
+            continue
+        if depths[index]:
             continue
         following = tokens[index + 1]
         # `export type { Foo }` is a type-only list. The keyword sits between
