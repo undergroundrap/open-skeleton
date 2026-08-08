@@ -75,6 +75,7 @@ def run(
     hum_index: list[Path],
     required: list[str],
     fast: bool,
+    minimum_coverage: float,
 ) -> int:
     snapshot = scan_repository(repository)
     result = analyze_snapshot(snapshot, hum_index=hum_index or None)
@@ -87,17 +88,25 @@ def run(
 
     # A language the scanner found and no analyzer read is a silent hole, and
     # a gate that stays green through one is worse than no gate.
+    # Coverage is a ratio, not a boolean. Requiring only that *something*
+    # was read let a stale index covering one file of 229 pass green while
+    # 99.6% of the language went unexamined -- which is the shape a
+    # regenerated index takes when part of it fails, not a hypothetical.
     unread = [
-        f"{item.language}: {item.eligible_files:,} file(s) eligible, {item.analyzed_files:,} read"
+        (
+            item.language,
+            f"{item.language}: {item.analyzed_files:,} of {item.eligible_files:,} "
+            f"file(s) read ({item.coverage_ratio:.0%})",
+        )
         for item in result.coverage
-        if item.eligible_files and not item.analyzed_files
+        if item.eligible_files and item.coverage_ratio < minimum_coverage
     ]
-    blocking = [line for line in unread if line.split(":")[0] in required]
+    blocking = [line for language, line in unread if language in required]
     if blocking:
-        _emit("UNREAD LANGUAGE — required by --require-language:", blocking)
+        _emit("COVERAGE BELOW THRESHOLD — required by --require-language:", blocking)
         problems += 1
     elif unread:
-        _emit("unread language (not required, reported once):", unread)
+        _emit("thin coverage (not required, reported once):", [line for _, line in unread])
 
     findings = audit_claims(
         tuple(item.to_dict() for item in result.claims),
@@ -174,7 +183,16 @@ def main() -> int:
         "--require-language",
         action="append",
         default=[],
-        help="Fail when this language is eligible and unread. Repeatable.",
+        help="Fail when this language reads below --min-coverage. Repeatable.",
+    )
+    parser.add_argument(
+        "--min-coverage",
+        type=float,
+        default=0.95,
+        help=(
+            "Share of a required language's eligible files that must be read "
+            "(default 0.95). A partial index is the usual cause."
+        ),
     )
     arguments = parser.parse_args()
 
@@ -205,6 +223,7 @@ def main() -> int:
             arguments.hum_index,
             arguments.require_language,
             arguments.fast,
+            arguments.min_coverage,
         )
     except (OSError, sqlite3.Error) as exc:
         # A gate that cannot run has not judged the work. Saying so with a
