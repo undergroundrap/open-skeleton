@@ -170,12 +170,24 @@ def _route_surface(claims: tuple[dict[str, Any], ...]) -> Diagram:
 
 
 def _concentration(files: tuple[dict[str, Any], ...]) -> Diagram:
-    name, title = "concentration", "Line-count concentration by file"
-    ranked = sorted(files, key=lambda item: -int(item["line_count"]))[:10]
-    if not ranked or int(ranked[0]["line_count"]) == 0:
-        return _omitted(name, title, "No file in this snapshot recorded a positive line count.")
+    """Where the lines are, among the files somebody wrote.
 
-    total = sum(int(item["line_count"]) for item in files) or 1
+    The claim behind this diagram counts only `source` and `test` roles. The
+    diagram counted everything, so a Rust repository was told its largest
+    architectural concentration was `Cargo.lock` at 24.7% and its fifth was
+    `LICENSE`. Neither is architecture, and a resolver is not a design
+    decision. The two now answer the same question.
+    """
+
+    name, title = "concentration", "Line-count concentration by file"
+    written = [item for item in files if str(item.get("role", "")) in {"source", "test"}]
+    ranked = sorted(written, key=lambda item: -int(item["line_count"]))[:10]
+    if not ranked or int(ranked[0]["line_count"]) == 0:
+        return _omitted(
+            name, title, "No authored file in this snapshot recorded a positive line count."
+        )
+
+    total = sum(int(item["line_count"]) for item in written) or 1
     lines = ["flowchart TD", '    REPO["Repository"]']
     for item in ranked:
         share = int(item["line_count"]) / total
@@ -188,7 +200,7 @@ def _concentration(files: tuple[dict[str, Any], ...]) -> Diagram:
         mermaid="\n".join(lines),
         node_count=len(ranked) + 1,
         edge_count=len(ranked),
-        truncated=len(files) > len(ranked),
+        truncated=len(written) > len(ranked),
     )
 
 

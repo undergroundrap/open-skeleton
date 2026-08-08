@@ -470,6 +470,14 @@ class ModulePathTests(TestCase):
         self.assertEqual(_module_name("crates/cli/src/lib.rs"), "cli")
         self.assertTrue("-" not in _module_name("crates/a-b/src/lib.rs"))
 
-    def test_a_path_without_src_is_left_alone(self) -> None:
-        # Integration tests and benches are not inside a crate's `src`.
-        self.assertEqual(_module_name("tests/compat.rs"), "tests::compat")
+    def test_an_integration_test_is_named_as_its_own_crate(self) -> None:
+        # `tests/`, `benches/` and `examples/` each compile as a separate crate
+        # rather than as a module of the one beside them, so the file names it
+        # and the directories around it are Cargo's layout rather than a path.
+        # This asserted `tests::compat` until the diagram showed
+        # `crates::warmboot_core::tests::compat`, which names three modules
+        # that do not exist.
+        self.assertEqual(_module_name("tests/compat.rs"), "compat")
+        self.assertEqual(_module_name("crates/warmboot-core/tests/compat.rs"), "compat")
+        self.assertEqual(_module_name("benches/bench.rs"), "bench")
+        self.assertEqual(_module_name("examples/demo.rs"), "demo")

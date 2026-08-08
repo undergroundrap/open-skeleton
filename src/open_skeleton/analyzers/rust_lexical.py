@@ -953,9 +953,17 @@ def _module_name(path: str) -> str:
         parts = parts[:-1]
     # A workspace lays crates out as `crates/<name>/src/...`; a single crate as
     # `src/...`. Both put the module root immediately after `src`.
-    if "src" in parts:
-        crate = parts[parts.index("src") - 1] if parts.index("src") > 0 else ""
-        parts = ([crate] if crate else []) + parts[parts.index("src") + 1 :]
+    for root in ("src", "tests", "benches", "examples"):
+        if root not in parts:
+            continue
+        index = parts.index(root)
+        crate = parts[index - 1] if index > 0 else ""
+        tail = parts[index + 1 :]
+        # `tests/`, `benches/` and `examples/` each compile as their own crate
+        # rather than as a module of the one beside them, so the file names it
+        # and the surrounding directories are Cargo's layout, not a path.
+        parts = ([crate] if crate and root == "src" else []) + tail
+        break
     return "::".join(item.replace("-", "_") for item in parts if item) or "crate"
 
 
