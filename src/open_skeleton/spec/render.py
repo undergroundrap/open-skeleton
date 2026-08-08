@@ -753,10 +753,19 @@ def _executive_summary(document: SpecDocument) -> list[str]:
             f"conflict(s) between sources, and {len(untraced):,} implemented "
             "capability(ies) that no test or harness reaches.\n\n"
         )
-    else:
+    elif document.capabilities:
         lines.append(
-            "No unresolved conflicts, and every implemented capability is reached by a "
-            "test or harness.\n\n"
+            f"No unresolved conflicts, and all {len(document.capabilities):,} implemented "
+            "capability(ies) are reached by a test or harness.\n\n"
+        )
+    else:
+        # Saying every capability is covered when none was found is true and
+        # reads as a pass. A repository of documentation earned that sentence
+        # by containing no code, which is the opposite of what it announces.
+        lines.append(
+            "No unresolved conflicts. No implemented capability was clustered from this "
+            "snapshot, so there is nothing here for a test to reach and nothing this "
+            "line can tell you about coverage.\n\n"
         )
 
     if conflicts:

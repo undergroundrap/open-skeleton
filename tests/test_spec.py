@@ -1558,3 +1558,39 @@ class PanelPresentationTests(TestCase):
         for section, rendered in zip(payload["sections"], document.sections, strict=True):
             for panel, source in zip(section["panels"], rendered.panels, strict=True):
                 self.assertEqual(len(panel["rows"]), len(source.rows))
+
+
+class VacuousCoverageTests(TestCase):
+    """A repository with no capabilities has not passed a coverage check.
+
+    "No unresolved conflicts, and every implemented capability is reached by a
+    test or harness" is true when no capability was found, and it reads as a
+    pass. A repository of fourteen Markdown files earned that sentence by
+    containing no code, which is the opposite of what it announces.
+    """
+
+    def test_a_repository_with_no_capabilities_says_so(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            (root / "README.md").write_text("# Notes\n\nProse only.\n", encoding="utf-8")
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+            markdown = render_spec_markdown(document)
+        self.assertEqual(document.capabilities, ())
+        self.assertIn("No implemented capability was clustered", markdown)
+        self.assertNotIn("every implemented capability is reached", markdown)
+
+    def test_a_repository_with_covered_capabilities_counts_them(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+            markdown = render_spec_markdown(document)
+        untraced = [item for item in document.capabilities if not item.exercised_by]
+        if document.capabilities and not untraced:
+            self.assertIn(f"all {len(document.capabilities):,} implemented", markdown)
