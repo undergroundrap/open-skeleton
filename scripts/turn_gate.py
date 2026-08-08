@@ -65,7 +65,13 @@ def _emit(header: str, lines: list[str]) -> None:
         print(f"  ... and {len(lines) - MAX_LINES:,} more")
 
 
-def run(repository: Path, state: Path, hum_index: list[Path], required: list[str]) -> int:
+def run(
+    repository: Path,
+    state: Path,
+    hum_index: list[Path],
+    required: list[str],
+    fast: bool,
+) -> int:
     snapshot = scan_repository(repository)
     result = analyze_snapshot(snapshot, hum_index=hum_index or None)
 
@@ -100,6 +106,14 @@ def run(repository: Path, state: Path, hum_index: list[Path], required: list[str
             [f"[{item.check}] {item.category}: {item.detail}" for item in findings],
         )
         problems += 1
+
+    # Rendering the specification costs more than everything else here
+    # combined -- on a 70-file crate: 3.5s to analyze and 26s to build the
+    # document. A per-turn hook that takes half a minute gets removed, so
+    # `--fast` keeps the claim-level checks and defers the document-level
+    # ones to whatever runs before work is accepted.
+    if fast:
+        return 1 if problems else 0
 
     document = build_spec(ledger, load_profile())
     markdown = render_spec_markdown(document)
@@ -145,6 +159,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Skip the document checks, which cost about nine tenths of the "
+            "runtime. Keeps analysis, the audit, and the unread-language check."
+        ),
+    )
+    parser.add_argument(
         "--require-language",
         action="append",
         default=[],
@@ -167,7 +189,13 @@ def main() -> int:
             print(f"  {(completed.stderr or completed.stdout).strip().splitlines()[-1][:200]}")
             return 1
 
-    return run(repository, state, arguments.hum_index, arguments.require_language)
+    return run(
+        repository,
+        state,
+        arguments.hum_index,
+        arguments.require_language,
+        arguments.fast,
+    )
 
 
 if __name__ == "__main__":
