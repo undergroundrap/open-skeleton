@@ -16,9 +16,11 @@ seventy-four expected ones until someone went looking. Output that is always
 there is output nobody reads, and that is worse than no check, because it
 also carries the authority of having run.
 
-The exit code is the interface. `0` means every gate passed; `1` means one
-did and the reason is on stdout, bounded to a few lines so a loop can paste
-it into a turn without paying for a specification.
+The exit code is the interface. `0` means every gate passed, `1` means one
+found something and the reason is on stdout, bounded to a few lines so a loop
+can paste it into a turn without paying for a specification. `2` means the
+gate could not run at all, which is not a verdict on the work: a loop that
+treats it as one rejects good changes whenever the ledger is busy.
 
     python scripts/turn_gate.py --repo C:\\path\\to\\repository
     python scripts/turn_gate.py --repo . --hum-index build/graph.json
@@ -35,6 +37,7 @@ condition fail loudly instead.
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +56,7 @@ from open_skeleton.spec import (  # noqa: E402
     verify_spec,
 )
 from open_skeleton.spec.coherence import check_coherence, check_conservation  # noqa: E402
+from open_skeleton.state import resolve_state_dir  # noqa: E402
 
 MAX_LINES = 12
 
@@ -175,7 +179,12 @@ def main() -> int:
     arguments = parser.parse_args()
 
     repository = arguments.repo.expanduser().resolve(strict=True)
-    state = (arguments.state_dir or repository.parent / ".open-skeleton-gate").expanduser()
+    # A per-repository location, resolved the same way the CLI resolves it.
+    # A single shared directory under the parent looked tidier and made every
+    # repository in a workspace contend for one SQLite file, which surfaces as
+    # `database is locked` -- an infrastructure failure wearing the costume of
+    # a rejected change.
+    state = resolve_state_dir(repository, arguments.state_dir)
     state.mkdir(parents=True, exist_ok=True)
 
     if arguments.hum_graph_command:
@@ -189,13 +198,22 @@ def main() -> int:
             print(f"  {(completed.stderr or completed.stdout).strip().splitlines()[-1][:200]}")
             return 1
 
-    return run(
-        repository,
-        state,
-        arguments.hum_index,
-        arguments.require_language,
-        arguments.fast,
-    )
+    try:
+        return run(
+            repository,
+            state,
+            arguments.hum_index,
+            arguments.require_language,
+            arguments.fast,
+        )
+    except (OSError, sqlite3.Error) as exc:
+        # A gate that cannot run has not judged the work. Saying so with a
+        # distinct status is the difference between "this change is bad" and
+        # "ask me again"; a loop that conflates them rejects good work
+        # whenever the ledger is busy, and a traceback in a hook is noise
+        # nobody reads.
+        print(f"GATE DID NOT RUN — {exc.__class__.__name__}: {exc}")
+        return 2
 
 
 if __name__ == "__main__":
