@@ -14,6 +14,7 @@ from pathlib import Path
 
 from open_skeleton.analyzers.base import Analyzer
 from open_skeleton.analyzers.hum_semantic_index import HumSemanticIndexAnalyzer
+from open_skeleton.analyzers.java_lexical import JavaLexicalAnalyzer
 from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
 from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
 from open_skeleton.analyzers.rust_lexical import RustLexicalAnalyzer
@@ -522,6 +523,7 @@ def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Ana
         PythonAstAnalyzer(),
         TypeScriptLexicalAnalyzer(),
         RustLexicalAnalyzer(),
+        JavaLexicalAnalyzer(),
         ProjectMetadataAnalyzer(),
         HumSemanticIndexAnalyzer(hum_index),
     )

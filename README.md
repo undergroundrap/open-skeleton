@@ -44,6 +44,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Per-section provenance: which files each section's conclusions were read out of
 - Citation integrity verification that re-resolves every receipt against current source bytes
 - Self-consistency checks that read the generated document and fail it when the prose disagrees with the data it was projected from
+- Java declaration reading verified against `javac -Xprint` across all 3,064 files of `java.base`, with zero disagreements
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract
 - Machine-readable, pinned comparative benchmarks with source-receipt validation

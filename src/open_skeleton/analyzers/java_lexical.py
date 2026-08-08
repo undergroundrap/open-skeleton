@@ -1,0 +1,934 @@
+# Copyright (c) 2026 Ocean Bennett
+# SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms: see NOTICE.md for visible attribution requirements.
+
+"""Lexical reader for Java declarations.
+
+Java is read rather than parsed here, for the same reason Rust and TypeScript
+are: a parser for the whole grammar is a project of its own, and almost every
+fact worth stating about a codebase lives in its declarations.
+
+What makes Java worth doing next is that its declarations have an exact
+reference. `javac -Xprint` emits package, type kind, supertypes,
+fully-qualified signatures and precise modifiers, and it does so even when
+imports do not resolve -- so this reader can be differentially tested against
+a real compiler on any checkout, without a build.
+
+That reference has one silent limit, and it decides how this module is
+structured. With an incomplete classpath `javac -Xprint` drops every
+annotation from its output while reporting the errors only on stderr, and
+exits zero. `@RestController` and `@GetMapping("/health")` simply vanish. So
+the declaration half of this reader is oracle-verified and the annotation half
+cannot be: routes live in annotations, and annotations are exactly what the
+reference loses. Route claims are fixture-tested, and nothing here implies a
+compiler agreed with them.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from open_skeleton.ids import stable_id
+from open_skeleton.models import (
+    AnalysisResult,
+    ClaimRecord,
+    CoverageRecord,
+    EdgeRecord,
+    EvidenceRecord,
+    Snapshot,
+    SymbolRecord,
+    utc_now,
+)
+
+IDENTIFIER_START = re.compile(r"[A-Za-z_$]")
+IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_$]")
+
+# `class`, `interface` and `enum` are reserved; `record` is contextual and is
+# only a declaration when a name and `(` follow it, so it is matched by shape
+# rather than by keyword.
+TYPE_KEYWORDS = frozenset({"class", "interface", "enum"})
+MODIFIERS = frozenset(
+    {
+        "public",
+        "protected",
+        "private",
+        "static",
+        "final",
+        "abstract",
+        "native",
+        "synchronized",
+        "transient",
+        "volatile",
+        "strictfp",
+        "default",
+        "sealed",
+        "non",
+    }
+)
+# Names that can precede `(` without introducing a method.
+CONTROL_KEYWORDS = frozenset(
+    {"if", "for", "while", "switch", "catch", "return", "new", "throw", "synchronized", "do"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Token:
+    kind: str
+    value: str
+    line: int
+
+
+def _read_text_block(source: str, index: int, length: int) -> tuple[int, int]:
+    """Index and newline count just past a `\"\"\"` text block.
+
+    A text block spans lines and may contain unescaped quotes, so treating it
+    as three empty strings makes the tokenizer read its contents as code. The
+    equivalent defect in the TypeScript reader -- a regex containing a quote --
+    swallowed the remainder of every file that had one.
+    """
+
+    cursor = index + 3
+    newlines = 0
+    while cursor < length:
+        if source[cursor] == "\\":
+            newlines += source[cursor + 1 : cursor + 2] == "\n"
+            cursor += 2
+            continue
+        if source.startswith('"""', cursor):
+            return cursor + 3, newlines
+        newlines += source[cursor] == "\n"
+        cursor += 1
+    return length, newlines
+
+
+def _read_quoted(source: str, index: int, length: int, quote: str) -> int:
+    """Index just past a single- or double-quoted literal, honouring escapes."""
+
+    cursor = index + 1
+    while cursor < length:
+        character = source[cursor]
+        if character == "\\":
+            cursor += 2
+            continue
+        if character == quote:
+            return cursor + 1
+        if character == "\n":
+            return cursor
+        cursor += 1
+    return length
+
+
+def tokenize(source: str) -> list[Token]:
+    """Tokenize Java outside comments and literals.
+
+    Literals are emitted rather than discarded. A route path is a string, and
+    the Rust reader once dropped strings entirely, which made every route in
+    the crate unreachable while looking like a clean tokenizer.
+    """
+
+    tokens: list[Token] = []
+    index = 0
+    line = 1
+    length = len(source)
+    while index < length:
+        character = source[index]
+        if character == "\n":
+            line += 1
+            index += 1
+            continue
+        if character.isspace():
+            index += 1
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index)
+            index = length if newline < 0 else newline
+            continue
+        if source.startswith("/*", index):
+            # Java block comments do not nest: the first `*/` closes it, and
+            # treating them as nesting would swallow code after a comment
+            # that merely mentions `/*`.
+            end = source.find("*/", index + 2)
+            stop = length if end < 0 else end + 2
+            line += source.count("\n", index, stop)
+            index = stop
+            continue
+        if source.startswith('"""', index):
+            stop, newlines = _read_text_block(source, index, length)
+            tokens.append(Token("string", source[index:stop], line))
+            line += newlines
+            index = stop
+            continue
+        if character == '"':
+            stop = _read_quoted(source, index, length, '"')
+            tokens.append(Token("string", source[index + 1 : max(stop - 1, index + 1)], line))
+            index = stop
+            continue
+        if character == "'":
+            stop = _read_quoted(source, index, length, "'")
+            tokens.append(Token("char", source[index:stop], line))
+            index = stop
+            continue
+        if character == "@" and index + 1 < length and IDENTIFIER_START.match(source[index + 1]):
+            cursor = index + 1
+            while cursor < length and (
+                IDENTIFIER_BODY.match(source[cursor]) or source[cursor] == "."
+            ):
+                cursor += 1
+            name = source[index + 1 : cursor]
+            # `@interface` declares an annotation type; it is not a use of an
+            # annotation called `interface`. Absorbing the keyword hid every
+            # such declaration -- all twelve in `java.lang` alone -- because
+            # the `interface` token the type reader looks for was gone.
+            if name == "interface":
+                tokens.append(Token("punctuation", "@", line))
+                tokens.append(Token("identifier", "interface", line))
+                index = cursor
+                continue
+            tokens.append(Token("annotation", name, line))
+            index = cursor
+            continue
+        if character.isdigit():
+            cursor = index
+            while cursor < length and (source[cursor].isalnum() or source[cursor] in {"_", "."}):
+                cursor += 1
+            tokens.append(Token("number", source[index:cursor], line))
+            index = cursor
+            continue
+        if IDENTIFIER_START.match(character):
+            cursor = index
+            while cursor < length and IDENTIFIER_BODY.match(source[cursor]):
+                cursor += 1
+            tokens.append(Token("identifier", source[index:cursor], line))
+            index = cursor
+            continue
+        tokens.append(Token("punctuation", character, line))
+        index += 1
+    return tokens
+
+
+def package_name(tokens: list[Token]) -> str:
+    """The declared package, or an empty string for the default package."""
+
+    for position, token in enumerate(tokens):
+        if token.kind == "identifier" and token.value == "package":
+            parts: list[str] = []
+            for follower in tokens[position + 1 :]:
+                if follower.kind == "punctuation" and follower.value == ";":
+                    break
+                if follower.kind == "identifier":
+                    parts.append(follower.value)
+            return ".".join(parts)
+        if token.kind == "identifier" and token.value in TYPE_KEYWORDS:
+            break
+    return ""
+
+
+def imported_types(tokens: list[Token]) -> list[tuple[str, int]]:
+    """Every `import` target with the line that declares it."""
+
+    found: list[tuple[str, int]] = []
+    for position, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "import":
+            continue
+        parts: list[str] = []
+        for follower in tokens[position + 1 :]:
+            if follower.kind == "punctuation" and follower.value == ";":
+                break
+            if follower.kind == "identifier" and follower.value != "static":
+                parts.append(follower.value)
+            elif follower.kind == "punctuation" and follower.value == "*":
+                parts.append("*")
+        if parts:
+            found.append((".".join(parts), token.line))
+    return found
+
+
+def _annotations_before(tokens: list[Token], start: int) -> tuple[str, ...]:
+    """Annotation names attached to the declaration beginning at ``start``."""
+
+    found: list[str] = []
+    cursor = start - 1
+    depth = 0
+    while cursor >= 0:
+        token = tokens[cursor]
+        if token.kind == "punctuation" and token.value == ")":
+            depth += 1
+        elif token.kind == "punctuation" and token.value == "(":
+            depth -= 1
+        elif depth == 0 and token.kind == "annotation":
+            found.append(token.value)
+        elif (
+            depth == 0
+            and not (token.kind == "identifier" and token.value in MODIFIERS)
+            and not (token.kind == "punctuation" and token.value in {"]", "["})
+        ):
+            break
+        cursor -= 1
+    return tuple(reversed(found))
+
+
+@dataclass(frozen=True, slots=True)
+class JavaType:
+    """One declared type and where its body sits."""
+
+    name: str
+    kind: str
+    line: int
+    modifiers: tuple[str, ...]
+    annotations: tuple[str, ...]
+    supertypes: tuple[str, ...]
+    depth: int
+    local: bool = False
+
+
+def declared_types(tokens: list[Token]) -> list[JavaType]:
+    """Every type declaration, with nested types qualified by their owner.
+
+    A type declared inside a method body is marked ``local`` rather than
+    dropped. Java allows it, and it is genuinely different from a member: a
+    local class is not reachable by any qualified name, so treating one as a
+    member invents `Outer.Local` as part of a public surface it never joins.
+    `javac -Xprint` does not print them at all, which is the same judgement.
+    """
+
+    found: list[JavaType] = []
+    stack: list[tuple[str, int]] = []
+    depth = 0
+    position = 0
+    total = len(tokens)
+    while position < total:
+        token = tokens[position]
+        if token.kind == "punctuation" and token.value == "{":
+            depth += 1
+            position += 1
+            continue
+        if token.kind == "punctuation" and token.value == "}":
+            depth -= 1
+            while stack and stack[-1][1] > depth:
+                stack.pop()
+            position += 1
+            continue
+        if token.kind != "identifier":
+            position += 1
+            continue
+        kind = _type_kind(tokens, position)
+        if kind is None:
+            position += 1
+            continue
+        name_token = tokens[position + 1] if position + 1 < total else None
+        if name_token is None or name_token.kind != "identifier":
+            position += 1
+            continue
+        # A member sits directly in its owner's body. Anything deeper is
+        # inside a method, constructor or initializer.
+        owner_body_depth = stack[-1][1] if stack else 0
+        is_local = depth > owner_body_depth
+        owner = ".".join(name for name, _ in stack)
+        qualified = f"{owner}.{name_token.value}" if owner else name_token.value
+        found.append(
+            JavaType(
+                name=qualified,
+                kind=kind,
+                line=token.line,
+                modifiers=_modifiers_before(tokens, position),
+                annotations=_annotations_before(tokens, position),
+                supertypes=_supertypes_after(tokens, position + 2),
+                depth=depth,
+                local=is_local,
+            )
+        )
+        stack.append((name_token.value, depth + 1))
+        position += 2
+    return found
+
+
+@dataclass(frozen=True, slots=True)
+class JavaMember:
+    """A method or field declared directly in a type body."""
+
+    owner: str
+    name: str
+    kind: str
+    line: int
+    modifiers: tuple[str, ...]
+    annotations: tuple[str, ...]
+    # Annotation name to its first string argument, which is where a route
+    # path lives: `@GetMapping("/health")`. Empty when an annotation takes no
+    # arguments or takes no string.
+    annotation_arguments: tuple[tuple[str, str], ...] = ()
+
+
+def declared_members(tokens: list[Token]) -> list[JavaMember]:
+    """Methods and fields declared directly in a type body.
+
+    Only members are returned. A local variable sits inside a method body and
+    is not part of any declared surface, so depth decides membership exactly
+    as it does for nested types.
+    """
+
+    found: list[JavaMember] = []
+    stack: list[tuple[str, int]] = []
+    depth = 0
+    head: list[int] = []
+    position = 0
+    total = len(tokens)
+    while position < total:
+        token = tokens[position]
+        if token.kind == "punctuation" and token.value in {"{", "}", ";"}:
+            if token.value == "{":
+                kind = _type_kind_at_head(tokens, head)
+                if kind is not None:
+                    name = _head_type_name(tokens, head)
+                    if name is not None:
+                        stack.append((name, depth + 1))
+                elif head and stack and depth == stack[-1][1]:
+                    member = _classify(tokens, head, stack[-1][0])
+                    if member is not None:
+                        found.append(member)
+                depth += 1
+            elif token.value == "}":
+                depth -= 1
+                while stack and stack[-1][1] > depth:
+                    stack.pop()
+            elif head and stack and depth == stack[-1][1]:
+                member = _classify(tokens, head, stack[-1][0])
+                if member is not None:
+                    found.append(member)
+            head = []
+            position += 1
+            continue
+        head.append(position)
+        position += 1
+    return found
+
+
+def _type_kind_at_head(tokens: list[Token], head: list[int]) -> str | None:
+    for index in head:
+        if tokens[index].kind == "identifier" and _type_kind(tokens, index) is not None:
+            return _type_kind(tokens, index)
+    return None
+
+
+def _head_type_name(tokens: list[Token], head: list[int]) -> str | None:
+    for offset, index in enumerate(head):
+        if tokens[index].kind == "identifier" and _type_kind(tokens, index) is not None:
+            following = head[offset + 1] if offset + 1 < len(head) else None
+            if following is not None and tokens[following].kind == "identifier":
+                return tokens[following].value
+            return None
+    return None
+
+
+def _classify(tokens: list[Token], head: list[int], owner: str) -> JavaMember | None:
+    """Read one declaration head as a method or a field."""
+
+    annotations: list[str] = []
+    arguments: list[tuple[str, str]] = []
+    # An annotation's own argument list is not part of the declaration.
+    # Leaving it in made the scan below find `@GetMapping(` before the method's
+    # parameter list and reject the whole head, so every annotated route
+    # method disappeared while unannotated ones were read correctly.
+    rest: list[int] = []
+    position = 0
+    while position < len(head):
+        token = tokens[head[position]]
+        if token.kind != "annotation":
+            rest.append(head[position])
+            position += 1
+            continue
+        annotations.append(token.value)
+        position += 1
+        if position < len(head) and tokens[head[position]].value == "(":
+            depth = 0
+            first_string: str | None = None
+            while position < len(head):
+                current = tokens[head[position]]
+                if current.kind == "punctuation" and current.value == "(":
+                    depth += 1
+                elif current.kind == "punctuation" and current.value == ")":
+                    depth -= 1
+                    if depth == 0:
+                        position += 1
+                        break
+                elif current.kind == "string" and first_string is None:
+                    first_string = current.value
+                position += 1
+            if first_string is not None:
+                arguments.append((token.value, first_string))
+    head = rest
+    modifiers = [
+        tokens[index].value
+        for index in head
+        if tokens[index].kind == "identifier" and tokens[index].value in MODIFIERS
+    ]
+    # A method head carries a parameter list, and the name is the identifier
+    # immediately before it. `if (...)` and `new Foo(...)` also carry one, so
+    # a control keyword in that position rules the head out.
+    for offset, index in enumerate(head):
+        token = tokens[index]
+        if token.kind != "punctuation" or token.value != "(":
+            continue
+        if offset == 0:
+            return None
+        previous = tokens[head[offset - 1]]
+        if previous.kind != "identifier" or previous.value in CONTROL_KEYWORDS:
+            return None
+        return JavaMember(
+            owner=owner,
+            name=previous.value,
+            kind="method",
+            line=previous.line,
+            modifiers=tuple(modifiers),
+            annotations=tuple(annotations),
+            annotation_arguments=tuple(arguments),
+        )
+    # A field head ends at its name or at the `=` that initializes it.
+    names = [
+        index
+        for index in head
+        if tokens[index].kind == "identifier" and tokens[index].value not in MODIFIERS
+    ]
+    if len(names) < 2:
+        return None
+    for offset, index in enumerate(head):
+        if tokens[index].kind == "punctuation" and tokens[index].value == "=":
+            names = [item for item in names if item < head[offset]]
+            break
+    if len(names) < 2:
+        return None
+    last = tokens[names[-1]]
+    return JavaMember(
+        owner=owner,
+        name=last.value,
+        kind="field",
+        line=last.line,
+        modifiers=tuple(modifiers),
+        annotations=tuple(annotations),
+        annotation_arguments=tuple(arguments),
+    )
+
+
+def _type_kind(tokens: list[Token], position: int) -> str | None:
+    """The kind a type keyword at ``position`` introduces, if it is one."""
+
+    token = tokens[position]
+    if token.value in TYPE_KEYWORDS:
+        # `interface` after `@` is an annotation type declaration.
+        previous = tokens[position - 1] if position else None
+        if (
+            token.value == "interface"
+            and previous is not None
+            and previous.kind == "punctuation"
+            and previous.value == "@"
+        ):
+            return "annotation_type"
+        return token.value
+    if token.value != "record":
+        return None
+    # `record` is contextual: it names a type only when a name and a
+    # parameter list follow. Elsewhere it is an ordinary identifier, and
+    # treating it as a keyword invents a type from `var record = ...`.
+    following = tokens[position + 1 : position + 3]
+    if (
+        len(following) == 2
+        and following[0].kind == "identifier"
+        and following[1].kind == "punctuation"
+        and following[1].value in {"(", "<"}
+    ):
+        return "record"
+    return None
+
+
+def _modifiers_before(tokens: list[Token], start: int) -> tuple[str, ...]:
+    found: list[str] = []
+    cursor = start - 1
+    while cursor >= 0:
+        token = tokens[cursor]
+        if token.kind == "identifier" and token.value in MODIFIERS:
+            found.append(token.value)
+            cursor -= 1
+            continue
+        break
+    return tuple(reversed(found))
+
+
+def _supertypes_after(tokens: list[Token], start: int) -> tuple[str, ...]:
+    """Names named by `extends` and `implements` before the body opens."""
+
+    found: list[str] = []
+    collecting = False
+    generic_depth = 0
+    for token in tokens[start:]:
+        if token.kind == "punctuation":
+            if token.value == "{" and generic_depth == 0:
+                break
+            if token.value == "<":
+                generic_depth += 1
+            elif token.value == ">":
+                generic_depth = max(0, generic_depth - 1)
+            continue
+        if token.kind != "identifier":
+            continue
+        if token.value in {"extends", "implements"}:
+            collecting = True
+            continue
+        if token.value == "permits":
+            collecting = False
+            continue
+        # Only the outermost names are supertypes; a generic argument such as
+        # the `String` of `implements List<String>` is not one.
+        if collecting and generic_depth == 0:
+            found.append(token.value)
+    return tuple(dict.fromkeys(found))
+
+
+ANALYZER_NAME = "java-lexical"
+ANALYZER_VERSION = "java-lexical/v1"
+ELIGIBLE_LANGUAGES = frozenset({"Java"})
+
+# Annotation names that declare an HTTP route, mapped to the method they
+# imply. `RequestMapping` and JAX-RS `Path` name no method on their own, so
+# they are reported without one rather than guessed at.
+ROUTE_ANNOTATIONS = {
+    "GetMapping": "GET",
+    "PostMapping": "POST",
+    "PutMapping": "PUT",
+    "DeleteMapping": "DELETE",
+    "PatchMapping": "PATCH",
+    "RequestMapping": "",
+    "Path": "",
+}
+TEST_ANNOTATIONS = frozenset({"Test", "ParameterizedTest", "RepeatedTest", "TestFactory"})
+PUBLIC_KINDS = frozenset({"class", "interface", "enum", "record", "annotation_type"})
+
+
+def _is_public(member: JavaMember, owner_kind: str) -> bool:
+    """Whether a member is part of its owner's public surface.
+
+    Modifiers are not the whole answer. Members of an interface and of an
+    annotation type are implicitly public -- `String greet(String n);` carries
+    no modifier and is still callable by anyone -- so counting explicit
+    `public` reported every interface in a codebase as exposing nothing, which
+    is the opposite of what an interface is for.
+
+    Java 9 allows explicitly private interface methods, so the exception is
+    written as "public unless declared otherwise" rather than "always public".
+    """
+
+    if owner_kind in {"interface", "annotation_type"}:
+        return not {"private", "protected"} & set(member.modifiers)
+    return "public" in member.modifiers
+
+
+class JavaLexicalAnalyzer:
+    """Read Java declarations into claims, each pinned to a line."""
+
+    name = ANALYZER_NAME
+    version = ANALYZER_VERSION
+
+    def analyze(self, snapshot: Snapshot) -> AnalysisResult:
+        started = time.perf_counter()
+        created_at = utc_now()
+        symbols: list[SymbolRecord] = []
+        edges: list[EdgeRecord] = []
+        evidence: list[EvidenceRecord] = []
+        claims: list[ClaimRecord] = []
+        failures: list[str] = []
+        eligible = [item for item in snapshot.files if item.language in ELIGIBLE_LANGUAGES]
+        analyzed_files = 0
+        test_receipts: list[str] = []
+
+        def receipt(path: str, line: int, kind: str, symbol: str | None, excerpt: str) -> str:
+            record = EvidenceRecord(
+                evidence_id=stable_id(
+                    "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                path=path,
+                start_line=line,
+                end_line=line,
+                symbol=symbol,
+                evidence_kind=kind,
+                excerpt_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
+                analyzer=ANALYZER_VERSION,
+                created_at=created_at,
+            )
+            evidence.append(record)
+            return record.evidence_id
+
+        for file_record in eligible:
+            source_path = snapshot.root / Path(file_record.path)
+            try:
+                payload = source_path.read_bytes()
+                if hashlib.sha256(payload).hexdigest() != file_record.sha256:
+                    raise ValueError("content changed after snapshot")
+                source = payload.decode("utf-8", errors="strict")
+                tokens = tokenize(source)
+                types = declared_types(tokens)
+                members = declared_members(tokens)
+                package = package_name(tokens)
+                imports = imported_types(tokens)
+            except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
+                failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+                continue
+
+            path = file_record.path
+            lines = source.splitlines()
+
+            def line_text(number: int, source_lines: list[str] = lines) -> str:
+                return source_lines[number - 1] if 0 < number <= len(source_lines) else ""
+
+            def qualify(name: str, owner: str = package) -> str:
+                return f"{owner}.{name}" if owner else name
+
+            for item in types:
+                qualified = qualify(item.name)
+                symbols.append(
+                    SymbolRecord(
+                        symbol_id=stable_id(
+                            "symbol", (snapshot.snapshot_id, path, qualified, ANALYZER_VERSION)
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        path=path,
+                        qualified_name=qualified,
+                        kind=item.kind,
+                        start_line=item.line,
+                        end_line=item.line,
+                        language="Java",
+                        analyzer=ANALYZER_VERSION,
+                        metadata={"local": item.local, "modifiers": list(item.modifiers)},
+                    )
+                )
+                # A local class cannot be named from outside the method that
+                # declares it, so it joins no surface and satisfies no
+                # contract any caller can rely on.
+                if item.local:
+                    continue
+                for supertype in item.supertypes:
+                    supporting = receipt(
+                        path, item.line, "java_supertype", qualified, line_text(item.line)
+                    )
+                    edges.append(
+                        EdgeRecord(
+                            edge_id=stable_id(
+                                "edge",
+                                (snapshot.snapshot_id, path, qualified, "implements", supertype),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            source_symbol_id=None,
+                            source_path=path,
+                            relationship="implements",
+                            target_ref=supertype,
+                            target_symbol_id=None,
+                            evidence_id=supporting,
+                            analyzer=ANALYZER_VERSION,
+                        )
+                    )
+                    claims.append(
+                        self._claim(
+                            snapshot,
+                            created_at,
+                            text=(
+                                f"{qualified} declares {supertype} as a supertype, so it "
+                                "satisfies that contract wherever the supertype is expected."
+                            ),
+                            category="trait_implementation",
+                            supporting=(supporting,),
+                            path=path,
+                        )
+                    )
+                if "public" in item.modifiers and item.kind in PUBLIC_KINDS:
+                    simple = item.name.rsplit(".", 1)[-1]
+                    exposed = [
+                        member
+                        for member in members
+                        if member.owner == simple and _is_public(member, item.kind)
+                    ]
+                    supporting = receipt(
+                        path, item.line, "java_public_type", qualified, line_text(item.line)
+                    )
+                    claims.append(
+                        self._claim(
+                            snapshot,
+                            created_at,
+                            text=(
+                                f"{qualified} is a public {item.kind} exposing "
+                                f"{len(exposed)} public member(s). Renaming or removing one "
+                                "is a breaking change for every caller."
+                            ),
+                            category="public_api",
+                            supporting=(supporting,),
+                            importance="high",
+                            path=path,
+                        )
+                    )
+
+            for member in members:
+                owner = qualify(member.owner)
+                if (
+                    member.kind == "method"
+                    and member.name == "main"
+                    and {"public", "static"} <= set(member.modifiers)
+                ):
+                    supporting = receipt(
+                        path, member.line, "java_entry", owner, line_text(member.line)
+                    )
+                    claims.append(
+                        self._claim(
+                            snapshot,
+                            created_at,
+                            text=f"{owner}.main is a program entry point.",
+                            category="application_entry",
+                            supporting=(supporting,),
+                            importance="high",
+                            path=path,
+                        )
+                    )
+                if TEST_ANNOTATIONS & set(member.annotations):
+                    test_receipts.append(
+                        receipt(path, member.line, "java_test", owner, line_text(member.line))
+                    )
+                if (
+                    member.kind == "field"
+                    and "static" in member.modifiers
+                    and "final" not in member.modifiers
+                ):
+                    supporting = receipt(
+                        path, member.line, "java_static_state", owner, line_text(member.line)
+                    )
+                    claims.append(
+                        self._claim(
+                            snapshot,
+                            created_at,
+                            text=(
+                                f"{owner}.{member.name} is a non-final static field, so its "
+                                "value changes while the process runs and every caller in "
+                                "that process shares it; a second instance of this program "
+                                "observes none of those changes."
+                            ),
+                            category="process_local_state",
+                            supporting=(supporting,),
+                            path=path,
+                        )
+                    )
+                for annotation, argument in member.annotation_arguments:
+                    if annotation not in ROUTE_ANNOTATIONS or not argument.startswith("/"):
+                        continue
+                    verb = ROUTE_ANNOTATIONS[annotation]
+                    supporting = receipt(
+                        path, member.line, "java_route", owner, line_text(member.line)
+                    )
+                    # An annotation that names no verb is reported without
+                    # one. Guessing GET would be a statement about this
+                    # reader rather than about the code.
+                    prefix = f"{verb} " if verb else ""
+                    qualifier = (
+                        ""
+                        if verb
+                        else (
+                            " The annotation names no HTTP method, so which methods reach "
+                            "this handler is decided by the framework rather than declared "
+                            "here."
+                        )
+                    )
+                    claims.append(
+                        self._claim(
+                            snapshot,
+                            created_at,
+                            text=(
+                                f"{prefix}{argument} is handled by "
+                                f"{owner}.{member.name}.{qualifier}"
+                            ),
+                            category="http_route",
+                            supporting=(supporting,),
+                            importance="high",
+                            path=path,
+                        )
+                    )
+
+            for target, line in imports:
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge", (snapshot.snapshot_id, path, "imports", target, line)
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=None,
+                        source_path=path,
+                        relationship="imports",
+                        target_ref=target,
+                        target_symbol_id=None,
+                        evidence_id=None,
+                        analyzer=ANALYZER_VERSION,
+                    )
+                )
+            analyzed_files += 1
+
+        if test_receipts:
+            claims.append(
+                self._claim(
+                    snapshot,
+                    created_at,
+                    text=f"Java source declares {len(test_receipts)} annotated test method(s).",
+                    category="testing",
+                    supporting=tuple(test_receipts[:24]),
+                )
+            )
+
+        coverage = CoverageRecord(
+            analyzer=ANALYZER_VERSION,
+            language="Java",
+            eligible_files=len(eligible),
+            analyzed_files=analyzed_files,
+            failed_files=len(failures),
+            unsupported_files=0,
+            failures=tuple(sorted(failures)),
+        )
+        return AnalysisResult(
+            snapshot_id=snapshot.snapshot_id,
+            analyzer_version=ANALYZER_VERSION,
+            created_at=created_at,
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            symbols=tuple(symbols),
+            edges=tuple(edges),
+            evidence=tuple(evidence),
+            claims=tuple(claims),
+            coverage=(coverage,),
+        )
+
+    def _claim(
+        self,
+        snapshot: Snapshot,
+        created_at: str,
+        *,
+        text: str,
+        category: str,
+        supporting: tuple[str, ...],
+        importance: str = "medium",
+        path: str | None = None,
+    ) -> ClaimRecord:
+        return ClaimRecord(
+            claim_id=stable_id("claim", (snapshot.snapshot_id, category, text, ANALYZER_VERSION)),
+            snapshot_id=snapshot.snapshot_id,
+            claim=text,
+            category=category,
+            status="verified",
+            confidence=1.0,
+            importance=importance,
+            produced_by=ANALYZER_VERSION,
+            created_at=created_at,
+            verified_at=created_at,
+            supporting_evidence=supporting,
+            invalidation_keys=(f"file:{path}",) if path else ("language:java",),
+            alternative_hypotheses=(
+                (
+                    "Declarations are read lexically rather than compiled, so a recorded "
+                    "annotation is the one written at the site rather than the one a "
+                    "framework resolves through inheritance and meta-annotation."
+                ),
+            ),
+        )
