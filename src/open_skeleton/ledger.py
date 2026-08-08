@@ -901,6 +901,25 @@ class EvidenceLedger:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def count_rows(self, snapshot_id: str, table: str) -> int:
+        """How many rows a snapshot actually holds in one table.
+
+        A projection that reads a capped page cannot tell whether it saw
+        everything, and the specification builder spent a long time reporting
+        its own page size as the ledger's contents. Counting is the only way to
+        check a projection against the thing it projects, so this exists to be
+        compared against rather than to be read.
+        """
+
+        if table not in {"claims", "symbols", "evidence", "edges", "files"}:
+            raise ValueError(f"Unsupported table for counting: {table}")
+        with self._session() as connection:
+            row = connection.execute(
+                f"SELECT COUNT(*) AS total FROM {table} WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+        return int(row["total"]) if row else 0
+
     def list_exclusions(self, snapshot_id: str) -> list[dict[str, Any]]:
         """Return every entry the scan policy excluded, with its reason."""
 

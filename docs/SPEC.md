@@ -328,6 +328,17 @@ invocation, not only under `--verify`:
 | `absence-tally-disagrees` | A summary absence count unmatched by the sections carrying one |
 | `capability-tally-disagrees` | A capability tally unmatched by the catalog |
 | `claim-rendered-twice` | One claim reaching more than one section |
+| `claims-not-conserved` | A claim total the ledger does not support |
+| `symbols-not-conserved` | An index projection carrying fewer symbols than the ledger holds |
+
+The last two answer a different question from the rest, and the difference
+matters. Everything above them compares the document against itself, which
+cannot see a number that was already wrong when it arrived: the builder once
+asked the ledger for a single page of claims and reported the page size as
+the total, so the document announced 5,000 claims for a snapshot holding
+8,707 while every internal check passed. The conservation checks reconcile
+against counts measured at the ledger, which is the only way that class of
+defect is visible at all.
 
 The command exits non-zero when any of these fire. Each is a defect that
 shipped and was found by reading; the reason they are checks now is that

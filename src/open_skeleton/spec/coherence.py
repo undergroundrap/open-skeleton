@@ -217,6 +217,45 @@ def _capability_tally(document: SpecDocument, markdown: str) -> list[Incoherence
     return found
 
 
+def check_conservation(
+    document: SpecDocument, ledger_counts: dict[str, int]
+) -> tuple[Incoherence, ...]:
+    """Whether the document accounts for everything the ledger holds.
+
+    Every other check here compares the document against itself, and that is
+    a real limit rather than a quibble: a projection can be perfectly
+    self-consistent about a number that was already wrong when it arrived.
+    That is exactly what happened. The builder asked the ledger for one page
+    of claims, reported the page size as the total, and every internal check
+    passed while the document announced 5,000 claims for a snapshot holding
+    8,707.
+
+    Reconciling against the ledger is the only way to see that, so this takes
+    counts measured at the source rather than anything the document computed.
+    """
+
+    found: list[Incoherence] = []
+    claims_held = ledger_counts.get("claims")
+    if claims_held is not None and claims_held != document.total_claims:
+        found.append(
+            Incoherence(
+                "claims-not-conserved",
+                f"the document reports {document.total_claims:,} claim(s) and the "
+                f"ledger holds {claims_held:,} for this snapshot.",
+            )
+        )
+    symbols_held = ledger_counts.get("symbols")
+    if symbols_held is not None and document.symbols and symbols_held != len(document.symbols):
+        found.append(
+            Incoherence(
+                "symbols-not-conserved",
+                f"the index projection carries {len(document.symbols):,} symbol(s) and "
+                f"the ledger holds {symbols_held:,} for this snapshot.",
+            )
+        )
+    return tuple(found)
+
+
 def check_coherence(document: SpecDocument, markdown: str) -> tuple[Incoherence, ...]:
     """Every way this document is found to disagree with itself.
 

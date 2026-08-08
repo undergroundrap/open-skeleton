@@ -42,7 +42,7 @@ from open_skeleton.spec import (
     render_spec_markdown,
     verify_spec,
 )
-from open_skeleton.spec.coherence import check_coherence
+from open_skeleton.spec.coherence import check_coherence, check_conservation
 from open_skeleton.state import resolve_state_dir
 
 
@@ -575,7 +575,13 @@ def _spec(args: argparse.Namespace) -> int:
     # Citation integrity says every receipt resolves. It cannot say the
     # document agrees with itself, and a specification that cites perfectly
     # can still announce a concern absent directly above its own findings.
-    incoherences = check_coherence(document, markdown)
+    incoherences = check_coherence(document, markdown) + check_conservation(
+        document,
+        {
+            "claims": ledger.count_rows(document.snapshot_id, "claims"),
+            "symbols": ledger.count_rows(document.snapshot_id, "symbols"),
+        },
+    )
     summary["incoherences"] = [
         {"check": item.check, "detail": item.detail} for item in incoherences
     ]

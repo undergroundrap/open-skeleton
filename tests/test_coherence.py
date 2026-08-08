@@ -23,7 +23,7 @@ from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown
 from open_skeleton.spec.capabilities import Capability
-from open_skeleton.spec.coherence import check_coherence
+from open_skeleton.spec.coherence import check_coherence, check_conservation
 from tests.helpers import create_sample_repository
 
 
@@ -151,3 +151,49 @@ class CoherenceTests(TestCase):
             1,
         )
         self.assertEqual(self._checks(document, markdown), set())
+
+
+class ConservationTests(TestCase):
+    """The document has to account for everything the ledger holds.
+
+    Every other check in this module compares the document against itself,
+    and that is a real limit rather than a quibble. The specification builder
+    asked the ledger for one page of claims and reported the page size as the
+    total: the document announced 5,000 claims for a snapshot holding 8,707,
+    and every internal check passed, because the document was perfectly
+    consistent about a number that was already wrong when it arrived.
+
+    Reconciling against counts measured at the source is the only way to see
+    that class of defect at all.
+    """
+
+    def _document(self) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            return _document(root, workspace / "state")
+
+    def test_a_document_holding_everything_reports_nothing(self) -> None:
+        document = self._document()
+        counts = {"claims": document.total_claims, "symbols": len(document.symbols)}
+        self.assertEqual(check_conservation(document, counts), ())
+
+    def test_a_truncated_claim_total_is_caught(self) -> None:
+        document = self._document()
+        counts = {"claims": document.total_claims + 3_707, "symbols": len(document.symbols)}
+        found = {item.check for item in check_conservation(document, counts)}
+        self.assertIn("claims-not-conserved", found)
+
+    def test_a_truncated_symbol_index_is_caught(self) -> None:
+        document = self._document()
+        self.assertTrue(document.symbols, "the fixture should carry symbols")
+        counts = {"claims": document.total_claims, "symbols": len(document.symbols) + 638}
+        found = {item.check for item in check_conservation(document, counts)}
+        self.assertIn("symbols-not-conserved", found)
+
+    def test_counts_the_ledger_cannot_supply_are_not_invented(self) -> None:
+        # A caller that measured nothing gets no verdict, rather than a
+        # comparison against zero that would fail every document.
+        self.assertEqual(check_conservation(self._document(), {}), ())
