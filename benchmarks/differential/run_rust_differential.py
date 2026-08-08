@@ -180,17 +180,53 @@ def main() -> int:
 
     report = compare(arguments.root.expanduser().resolve(strict=True), helper)
     print(f"files compared: {report.compared:,}  (syn could not parse {report.unparsed:,})")
-    print(f"  implementations we miss:   {len(report.missing):,} file(s)")
-    print(f"  implementations we invent: {len(report.invented):,} file(s)")
+    # These sets union implementations, declarations and calls. Labelling them
+    # "implementations" was wrong in a way that mattered: a reader checking a
+    # reported miss found an enum variant, concluded the report was noise, and
+    # stopped. It buried 19 real missing calls under 174 constructor names.
+    print(f"  names we miss:   {len(report.missing):,} file(s)")
+    print(f"  names we invent: {len(report.invented):,} file(s)")
 
     if report.invented:
         print("\nINVENTED — reported here and absent from the parse:")
         for item in report.invented[:20]:
             print(f"  {item.path}: {', '.join(item.invented)}")
     if report.missing:
-        print("\nMISSING — parsed by syn and never reported:")
-        for item in report.missing[:20]:
-            print(f"  {item.path}: {', '.join(item.missing)}")
+        # Two differences here are definitions rather than defects, and both
+        # are stable, so re-investigating them costs an afternoon each:
+        #
+        #   - `syn` counts tuple-variant construction as a call. This reader
+        #     deliberately does not, because a specification listing `Err(x)`
+        #     as a call site describes the language, not the program.
+        #   - This reader counts a foreign function declared inside an
+        #     `extern` block; the reference helper counts only module items.
+        #     The crate does declare that symbol, so both readings are fair.
+        #
+        # Rust capitalises variants and types and lowercases functions, and
+        # this reader deliberately does not record `Mode::Search(x)` as a call
+        # while `syn` does. That difference is a definition, not a defect, and
+        # mixing the two families in one list makes the real signal
+        # unreadable. Function-shaped names are printed first for that reason.
+        functions = [
+            (item.path, sorted(name for name in item.missing if name[:1].islower()))
+            for item in report.missing
+        ]
+        functions = [(path, names) for path, names in functions if names]
+        constructors = sum(
+            1 for item in report.missing for name in item.missing if name[:1].isupper()
+        )
+        total_functions = sum(len(names) for _, names in functions)
+        print(f"\nMISSING, function-shaped — {total_functions:,} name(s):")
+        for path, names in functions[:20]:
+            print(f"  {path}: {', '.join(names)}")
+        if not functions:
+            print("  none")
+        print(
+            f"\nMISSING, constructor-shaped — {constructors:,} name(s) across "
+            f"{len(report.missing):,} file(s). `syn` counts tuple-variant "
+            "construction as a call and this reader deliberately does not, so "
+            "these are expected."
+        )
 
     return 1 if arguments.strict and report.invented else 0
 

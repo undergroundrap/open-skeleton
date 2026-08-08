@@ -547,3 +547,52 @@ impl FileReadAdapter for HostFileReadAdapter {
         result = self._result()
         identifiers = [item.claim_id for item in result.claims]
         self.assertEqual(len(identifiers), len(set(identifiers)))
+
+
+class NegatedCallTests(TestCase):
+    """A negated condition is not a macro body.
+
+    `macro_rules! name {` is the one Rust form that puts an identifier
+    between the bang and the body, and the macro-span detector accepted any
+    identifier there. `if !ready(x)` has the same four-token shape --
+    identifier, bang, identifier, delimiter -- so the whole condition was
+    read as a macro body and every call inside it was discarded.
+
+    `syn` counted 19 calls across 13 files of one crate that this never
+    reported. Capability tracing runs on call edges, so the cost was not a
+    missing row: a capability exercised only from inside such a condition
+    reported no verifying reference.
+    """
+
+    def test_a_negated_call_is_recorded(self) -> None:
+        found = {name for name, _ in _call_sites(tokenize("fn a() { if !is_value(name) {} }"))}
+        self.assertEqual(found, {"is_value"})
+
+    def test_calls_nested_in_a_negated_condition_survive(self) -> None:
+        source = "fn a() { while !ready(check(x)) { step(y); } }"
+        found = {name for name, _ in _call_sites(tokenize(source))}
+        self.assertEqual(found, {"ready", "check", "step"})
+
+    def test_a_parenthesised_negation_is_not_a_macro_invocation(self) -> None:
+        # `if !(a || b)` has the same three-token shape as `vec![...]`:
+        # identifier, bang, delimiter. A keyword is never a macro name.
+        source = "fn a() { if !(case.is_changed() || other.is_changed()) {} }"
+        found = {name for name, _ in _call_sites(tokenize(source))}
+        self.assertEqual(found, {"is_changed"})
+
+    def test_a_real_macro_invocation_is_still_a_macro(self) -> None:
+        source = "fn a() { let v = vec![1, 2]; step(x); }"
+        found = {name for name, _ in _call_sites(tokenize(source))}
+        self.assertEqual(found, {"step"})
+
+    def test_a_macro_definition_body_is_still_excluded(self) -> None:
+        # The exclusion this narrows exists for a reason: a macro body holds
+        # a template, and reading it as code reported implementations on
+        # substitution placeholders.
+        source = "macro_rules! shout { ($n:ident) => { impl Loud for Thing {} }; }"
+        self.assertEqual(_trait_implementations(tokenize(source)), [])
+        self.assertEqual(_call_sites(tokenize(source)), [])
+
+    def test_a_macro_invocation_body_is_still_excluded(self) -> None:
+        source = "fn a() { quote! { impl Loud for Thing {} } }"
+        self.assertEqual(_trait_implementations(tokenize(source)), [])

@@ -572,9 +572,25 @@ def _macro_body_spans(tokens: list[Token]) -> list[tuple[int, int]]:
             and tokens[index + 1].value == "!"
         ):
             if tokens[index + 2].value in {"{", "(", "["}:
+                # A keyword is never a macro name, and `if !(ready || set)`
+                # has the same three-token shape as `vec![...]`. Accepting it
+                # read the whole condition as a macro body and dropped the
+                # calls inside, which is the negated-condition defect again
+                # in its parenthesised form.
+                if tokens[index].value in NON_CALL_KEYWORDS:
+                    index += 1
+                    continue
                 opener = index + 2
             elif (
-                index + 3 < total
+                # Only `macro_rules!` puts a name between the bang and the
+                # body. Accepting any identifier there made `if !ready(x)`
+                # match the same shape -- identifier, bang, identifier,
+                # delimiter -- so the condition was read as a macro body and
+                # every call inside it was discarded. `syn` counted 19 calls
+                # across 13 files of one crate that this never reported, and
+                # capability tracing runs on exactly those edges.
+                tokens[index].value == "macro_rules"
+                and index + 3 < total
                 and tokens[index + 2].kind == "identifier"
                 and tokens[index + 3].value in {"{", "(", "["}
             ):
