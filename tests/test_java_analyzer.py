@@ -23,8 +23,10 @@ from open_skeleton.analyzers.java_lexical import (
     JavaMember,
     declared_members,
     declared_types,
+    enum_constants,
     imported_types,
     package_name,
+    record_components,
     tokenize,
 )
 from open_skeleton.models import AnalysisResult
@@ -266,3 +268,73 @@ class ReduceOps {
         result = _analyze({"ReduceOps.java": self.SOURCE})
         identities = [item.symbol_id for item in result.symbols]
         self.assertEqual(len(identities), len(set(identities)))
+
+
+class EnumAndRecordSurfaceTests(TestCase):
+    """The parts of an enum and a record that callers actually name.
+
+    Both declare their public surface outside the member body: an enum's
+    constants come before the first `;`, a record's components sit in its
+    header. Reading only the body reported `public enum Color` as exposing
+    one member and `public record Point(int x, int y)` as exposing one, when
+    the constants and the components are the entire point of each.
+
+    Worse, a constant carrying arguments -- `RED("r")` -- has the shape of a
+    method declaration, so it was reported as a method named `RED` and
+    consumed the rest of the list, losing `GREEN` and `BLUE` outright.
+    `javac -Xprint` confirms all of these: it prints `public int x();` for a
+    component and lists every constant.
+    """
+
+    ENUM = """\
+package p;
+public enum Color {
+    RED("r"), GREEN, BLUE;
+    public String label() { return ""; }
+}
+"""
+    RECORD = """\
+package p;
+public record Point(int x, int y) {
+    public double distance() { return 0; }
+}
+"""
+
+    def test_every_constant_is_found_including_one_with_arguments(self) -> None:
+        found = enum_constants(tokenize(self.ENUM))
+        self.assertEqual([name for _, name, _ in found], ["RED", "GREEN", "BLUE"])
+
+    def test_a_constant_body_does_not_swallow_the_rest_of_the_list(self) -> None:
+        source = "enum E { A { void go() {} }, B, C; }"
+        self.assertEqual([name for _, name, _ in enum_constants(tokenize(source))], ["A", "B", "C"])
+
+    def test_members_after_the_semicolon_are_not_constants(self) -> None:
+        found = enum_constants(tokenize(self.ENUM))
+        self.assertNotIn("label", [name for _, name, _ in found])
+
+    def test_record_components_are_read_from_the_header(self) -> None:
+        found = record_components(tokenize(self.RECORD))
+        self.assertEqual([name for _, name, _ in found], ["x", "y"])
+
+    def test_a_generic_record_still_yields_its_components(self) -> None:
+        source = "package p;\npublic record Pair<A, B>(A left, java.util.List<B> right) {}\n"
+        found = record_components(tokenize(source))
+        self.assertEqual([name for _, name, _ in found], ["left", "right"])
+
+    def test_a_class_is_not_mistaken_for_a_record(self) -> None:
+        self.assertEqual(record_components(tokenize("class A { void go(int x) {} }")), [])
+
+    def test_the_enum_surface_counts_its_constants(self) -> None:
+        result = _analyze({"Color.java": self.ENUM})
+        claim = next(item for item in result.claims if item.category == "public_api")
+        self.assertIn("exposing 4 public member(s)", claim.claim)
+
+    def test_the_record_surface_counts_its_components(self) -> None:
+        result = _analyze({"Point.java": self.RECORD})
+        claim = next(item for item in result.claims if item.category == "public_api")
+        self.assertIn("exposing 3 public member(s)", claim.claim)
+
+    def test_a_constant_with_arguments_is_not_reported_as_a_method(self) -> None:
+        result = _analyze({"Color.java": self.ENUM})
+        methods = [item for item in result.symbols if item.qualified_name.endswith(".RED")]
+        self.assertEqual(methods, [])

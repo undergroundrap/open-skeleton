@@ -586,6 +586,158 @@ def _supertypes_after(tokens: list[Token], start: int) -> tuple[str, ...]:
     return tuple(dict.fromkeys(found))
 
 
+def enum_constants(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Every enum constant, as (owning type, constant, line).
+
+    Enum constants are the whole point of an enum and were invisible here.
+    Worse, one carrying arguments -- `RED("r")` -- has the shape of a method
+    declaration, so the member reader called it a method named `RED` and then
+    consumed the rest of the list, losing `GREEN` and `BLUE` entirely. A
+    public surface that omits an enum's constants omits the only part of it
+    callers name.
+
+    Constants sit at the start of the body and end at the first `;`, so this
+    reads that region and stops.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    stack: list[tuple[str, str, int]] = []
+    depth = 0
+    collecting_at: int | None = None
+    expect_constant = False
+    position = 0
+    total = len(tokens)
+    while position < total:
+        token = tokens[position]
+        if token.kind == "punctuation" and token.value == "{":
+            depth += 1
+            if stack and stack[-1][1] == "enum" and stack[-1][2] == depth and collecting_at is None:
+                collecting_at = depth
+                expect_constant = True
+            position += 1
+            continue
+        if token.kind == "punctuation" and token.value == "}":
+            depth -= 1
+            if collecting_at is not None and depth < collecting_at:
+                collecting_at = None
+                expect_constant = False
+            while stack and stack[-1][2] > depth:
+                stack.pop()
+            position += 1
+            continue
+        if collecting_at is not None and depth == collecting_at:
+            if token.kind == "punctuation" and token.value == ";":
+                # The constant list is over; everything after is ordinary
+                # members and must not be read as constants.
+                collecting_at = None
+                expect_constant = False
+                position += 1
+                continue
+            if token.kind == "punctuation" and token.value == ",":
+                expect_constant = True
+                position += 1
+                continue
+            if token.kind == "annotation":
+                position += 1
+                continue
+            if expect_constant and token.kind == "identifier":
+                found.append((stack[-1][0], token.value, token.line))
+                expect_constant = False
+                position += 1
+                continue
+            if token.kind == "punctuation" and token.value == "(":
+                # Skip a constant's constructor arguments whole.
+                inner = 0
+                while position < total:
+                    current = tokens[position]
+                    if current.kind == "punctuation" and current.value == "(":
+                        inner += 1
+                    elif current.kind == "punctuation" and current.value == ")":
+                        inner -= 1
+                        if inner == 0:
+                            position += 1
+                            break
+                    position += 1
+                continue
+            position += 1
+            continue
+        if token.kind == "identifier":
+            kind = _type_kind(tokens, position)
+            if (
+                kind is not None
+                and position + 1 < total
+                and tokens[position + 1].kind == "identifier"
+            ):
+                stack.append((tokens[position + 1].value, kind, depth + 1))
+                position += 2
+                continue
+        position += 1
+    return found
+
+
+def record_components(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Every record component, as (owning record, component, line).
+
+    A record's components are its public accessors: `record Point(int x, int
+    y)` publishes `x()` and `y()`, and renaming one breaks every caller. They
+    are declared in the header rather than the body, so a reader that only
+    walks the body reports a record as exposing whatever else it happens to
+    declare and nothing of what it is for.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    position = 0
+    total = len(tokens)
+    while position < total:
+        token = tokens[position]
+        if token.kind != "identifier" or _type_kind(tokens, position) != "record":
+            position += 1
+            continue
+        cursor = position + 2
+        # A generic record puts its type parameters before the component list.
+        if cursor < total and tokens[cursor].kind == "punctuation" and tokens[cursor].value == "<":
+            angle = 0
+            while cursor < total:
+                current = tokens[cursor]
+                if current.kind == "punctuation" and current.value == "<":
+                    angle += 1
+                elif current.kind == "punctuation" and current.value == ">":
+                    angle -= 1
+                    if angle == 0:
+                        cursor += 1
+                        break
+                cursor += 1
+        if not (cursor < total and tokens[cursor].value == "("):
+            position += 1
+            continue
+        owner = tokens[position + 1].value
+        depth = 0
+        group: list[Token] = []
+        while cursor < total:
+            current = tokens[cursor]
+            if current.kind == "punctuation" and current.value in {"(", "<"}:
+                depth += 1
+            elif current.kind == "punctuation" and current.value in {")", ">"}:
+                depth -= 1
+                if depth == 0:
+                    # The component's name is the last identifier of its
+                    # declaration, after the type and any generic arguments.
+                    if group and group[-1].kind == "identifier":
+                        found.append((owner, group[-1].value, group[-1].line))
+                    break
+            elif current.kind == "punctuation" and current.value == "," and depth == 1:
+                if group and group[-1].kind == "identifier":
+                    found.append((owner, group[-1].value, group[-1].line))
+                group = []
+                cursor += 1
+                continue
+            elif depth >= 1 and current.kind == "identifier":
+                group.append(current)
+            cursor += 1
+        position = cursor + 1
+    return found
+
+
 ANALYZER_NAME = "java-lexical"
 ANALYZER_VERSION = "java-lexical/v1"
 ELIGIBLE_LANGUAGES = frozenset({"Java"})
@@ -670,6 +822,19 @@ class JavaLexicalAnalyzer:
                 tokens = tokenize(source)
                 types = declared_types(tokens)
                 members = declared_members(tokens)
+                constants = enum_constants(tokens)
+                components = record_components(tokens)
+                # A constant carrying constructor arguments has the shape
+                # of a method declaration -- `RED("r")` -- and the member
+                # reader classifies it as one. It is a constant, counted
+                # as such above, so drop the impostor rather than report
+                # an enum with a method named after each of its values.
+                named_constants = {(owner, name) for owner, name, _ in constants}
+                members = [
+                    member
+                    for member in members
+                    if (member.owner, member.name) not in named_constants
+                ]
                 package = package_name(tokens)
                 imports = imported_types(tokens)
             except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
@@ -751,6 +916,14 @@ class JavaLexicalAnalyzer:
                     )
                 if "public" in item.modifiers and item.kind in PUBLIC_KINDS:
                     simple = item.name.rsplit(".", 1)[-1]
+                    # An enum's constants and a record's components are its
+                    # public surface, and both are declared outside the member
+                    # body: constants before the first `;`, components in the
+                    # header. Counting only body members reported every enum
+                    # and record as exposing whatever else it happened to
+                    # declare, which for most of them is nothing at all.
+                    implicit = sum(1 for owner, _, _ in constants if owner == simple)
+                    implicit += sum(1 for owner, _, _ in components if owner == simple)
                     exposed = [
                         member
                         for member in members
@@ -765,8 +938,8 @@ class JavaLexicalAnalyzer:
                             created_at,
                             text=(
                                 f"{qualified} is a public {item.kind} exposing "
-                                f"{len(exposed)} public member(s). Renaming or removing one "
-                                "is a breaking change for every caller."
+                                f"{len(exposed) + implicit} public member(s). Renaming or "
+                                "removing one is a breaking change for every caller."
                             ),
                             category="public_api",
                             supporting=(supporting,),
