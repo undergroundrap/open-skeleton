@@ -339,9 +339,10 @@ def _citations(
 
 
 CLAIM_PAGE = 5_000
+EDGE_PAGE = 20_000
 
 
-def _every_claim(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any]]:
+def every_claim(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any]]:
     """All claims for a snapshot, not the first page of them.
 
     The ledger caps a single query at 5,000 because the interactive commands
@@ -363,8 +364,27 @@ def _every_claim(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any
             return found
 
 
+def _every_edge(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any]]:
+    """All relationship edges, for the same reason as `every_claim`.
+
+    The default page here is 20,000 and `java.base` holds 21,865, so the
+    graph the document reasoned over was quietly missing 1,865 relationships.
+    Capability traceability is computed from these edges, which means the
+    truncation did not merely omit rows: it could report a capability as
+    reached by no test because the call edge proving otherwise fell off the
+    end of a page.
+    """
+
+    found: list[dict[str, Any]] = []
+    while True:
+        page = ledger.list_edges(snapshot_id, limit=EDGE_PAGE, offset=len(found))
+        found.extend(page)
+        if len(page) < EDGE_PAGE:
+            return found
+
+
 def _every_symbol(ledger: EvidenceLedger, snapshot_id: str) -> list[dict[str, Any]]:
-    """All symbols for a snapshot, for the same reason as `_every_claim`.
+    """All symbols for a snapshot, for the same reason as `every_claim`.
 
     The index projection exists to carry the complete inventory that the
     document deliberately leaves out, so truncating it at one page defeats
@@ -396,9 +416,9 @@ def build_spec(
 
     files = tuple(ledger.list_files(resolved_id))
     exclusions = tuple(ledger.list_exclusions(resolved_id))
-    claims = tuple(_every_claim(ledger, resolved_id))
+    claims = tuple(every_claim(ledger, resolved_id))
     symbols = tuple(_every_symbol(ledger, resolved_id))
-    edges = tuple(ledger.list_edges(resolved_id))
+    edges = tuple(_every_edge(ledger, resolved_id))
     evidence_by_id = {str(item["evidence_id"]): item for item in ledger.list_evidence(resolved_id)}
     corpus = LedgerCorpus(
         snapshot_id=resolved_id,

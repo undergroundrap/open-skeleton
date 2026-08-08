@@ -20,6 +20,7 @@ from open_skeleton.spec.profile import (
 from open_skeleton.spec.render import (
     SpecDocument,
     build_spec,
+    every_claim,
     render_spec_index_json,
     render_spec_json,
     render_spec_markdown,
@@ -34,6 +35,7 @@ __all__ = [
     "SpecSection",
     "build_spec",
     "default_profile_path",
+    "every_claim",
     "load_profile",
     "render_spec_index_json",
     "render_spec_json",

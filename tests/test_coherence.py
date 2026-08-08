@@ -21,9 +21,10 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
-from open_skeleton.spec import build_spec, load_profile, render_spec_markdown
+from open_skeleton.spec import build_spec, every_claim, load_profile, render_spec_markdown
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.coherence import check_coherence, check_conservation
+from open_skeleton.spec.render import CLAIM_PAGE
 from tests.helpers import create_sample_repository
 
 
@@ -197,3 +198,53 @@ class ConservationTests(TestCase):
         # A caller that measured nothing gets no verdict, rather than a
         # comparison against zero that would fail every document.
         self.assertEqual(check_conservation(self._document(), {}), ())
+
+
+class PagingTests(TestCase):
+    """Reading past the first page, and reading each row exactly once.
+
+    Three projections asked the ledger for a bounded page and treated the
+    result as everything it held: claims capped at 5,000 against a snapshot
+    with 8,707, symbols at 5,000 against 5,638, and edges at 20,000 against
+    21,865. The edge case was the worst of the three because capability
+    traceability is computed from edges, so a call edge falling off the end
+    of a page reports a capability as reached by no test.
+    """
+
+    class _Ledger:
+        """A ledger stub that honours limit and offset, and counts calls."""
+
+        def __init__(self, total: int) -> None:
+            self.rows = [{"claim_id": f"c{index:05d}"} for index in range(total)]
+            self.calls = 0
+
+        def list_claims(self, snapshot_id: str, *, limit: int, offset: int = 0) -> list[Any]:
+            self.calls += 1
+            return self.rows[offset : offset + limit]
+
+    def _read(self, total: int) -> tuple[list[Any], int]:
+        ledger = self._Ledger(total)
+        found = every_claim(ledger, "snapshot")  # type: ignore[arg-type]
+        return found, ledger.calls
+
+    def test_a_snapshot_larger_than_one_page_is_read_whole(self) -> None:
+        found, _ = self._read(CLAIM_PAGE * 2 + 137)
+        self.assertEqual(len(found), CLAIM_PAGE * 2 + 137)
+
+    def test_no_row_is_read_twice_or_skipped(self) -> None:
+        found, _ = self._read(CLAIM_PAGE + 1)
+        identifiers = [item["claim_id"] for item in found]
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+        self.assertEqual(identifiers, sorted(identifiers))
+
+    def test_an_exact_page_multiple_still_terminates(self) -> None:
+        # A full final page is indistinguishable from a truncated one without
+        # asking once more, so the loop must not stop on a full page.
+        found, calls = self._read(CLAIM_PAGE)
+        self.assertEqual(len(found), CLAIM_PAGE)
+        self.assertEqual(calls, 2)
+
+    def test_an_empty_snapshot_costs_one_query(self) -> None:
+        found, calls = self._read(0)
+        self.assertEqual(found, [])
+        self.assertEqual(calls, 1)

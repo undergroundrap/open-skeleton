@@ -36,6 +36,7 @@ from open_skeleton.providers import (
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import (
     build_spec,
+    every_claim,
     load_profile,
     render_spec_index_json,
     render_spec_json,
@@ -395,8 +396,10 @@ def _claims(args: argparse.Namespace) -> int:
 
 def _audit(args: argparse.Namespace) -> int:
     ledger, snapshot_id = _ledger_and_snapshot(args)
+    # Auditing a page and reporting the result as an audit is worse than
+    # not auditing: the finding list looks complete either way.
     findings = audit_claims(
-        tuple(ledger.list_claims(snapshot_id, limit=5_000)),
+        tuple(every_claim(ledger, snapshot_id)),
         tuple(ledger.list_evidence(snapshot_id)),
         tuple(ledger.list_files(snapshot_id)),
     )

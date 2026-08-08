@@ -936,11 +936,14 @@ class EvidenceLedger:
         *,
         relationships: Sequence[str] | None = None,
         limit: int = 20_000,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Return relationship edges, optionally filtered to specific relationships."""
 
         if limit < 1 or limit > 200_000:
             raise ValueError("Edge limit must be between 1 and 200000")
+        if offset < 0:
+            raise ValueError("Edge offset must not be negative")
         clauses = ["snapshot_id = ?"]
         parameters: list[object] = [snapshot_id]
         if relationships:
@@ -948,6 +951,7 @@ class EvidenceLedger:
             clauses.append(f"relationship IN ({placeholders})")
             parameters.extend(relationships)
         parameters.append(limit)
+        parameters.append(offset)
         with self._session() as connection:
             rows = connection.execute(
                 f"""
@@ -955,8 +959,8 @@ class EvidenceLedger:
                        target_symbol_id, evidence_id, analyzer
                 FROM edges
                 WHERE {" AND ".join(clauses)}
-                ORDER BY relationship, source_path, target_ref
-                LIMIT ?
+                ORDER BY relationship, source_path, target_ref, edge_id
+                LIMIT ? OFFSET ?
                 """,
                 tuple(parameters),
             ).fetchall()
