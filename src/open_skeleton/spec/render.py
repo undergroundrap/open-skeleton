@@ -744,6 +744,16 @@ def _executive_summary(document: SpecDocument) -> list[str]:
         and item.get("yield_ratio") is not None
         and float(item["yield_ratio"]) < THIN_YIELD_RATIO
     ]
+    # An analyzer that read none of the files it was eligible for is the most
+    # severe case of thin, and the condition above excludes it: a yield ratio
+    # needs a denominator. A language project of 229 Hum files and 70 Rust ones
+    # reported only that its Markdown was thin, while the analyzer for its main
+    # language read nothing at all and said nothing about having done so.
+    unread = [
+        item
+        for item in document.coverage
+        if int(item["eligible_files"]) > 0 and int(item["analyzed_files"]) == 0
+    ]
 
     lines = ["## Executive summary\n\n"]
     decisions = len(conflicts) + len(untraced)
@@ -827,6 +837,20 @@ def _executive_summary(document: SpecDocument) -> list[str]:
                 "produces a true statement nobody reads, so this is a gap in the outline "
                 "rather than in the code it describes.\n\n"
             )
+
+    if unread:
+        lines.append("### Languages this analysis could not read\n\n")
+        lines.append("| Language | Files eligible | Files read |\n|---|---:|---:|\n")
+        for item in unread:
+            lines.append(
+                f"| {_escape(str(item['language']))} | {int(item['eligible_files']):,} | 0 |\n"
+            )
+        lines.append(
+            "\nNothing below describes these files. An analyzer was eligible for them and "
+            "produced no record, so every determination in this document was reached "
+            "without reading them, and a concern implemented only there will read as "
+            "absent.\n\n"
+        )
 
     if thin:
         lines.append("### Where this analysis is thin\n\n")

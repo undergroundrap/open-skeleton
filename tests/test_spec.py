@@ -1594,3 +1594,76 @@ class VacuousCoverageTests(TestCase):
         untraced = [item for item in document.capabilities if not item.exercised_by]
         if document.capabilities and not untraced:
             self.assertIn(f"all {len(document.capabilities):,} implemented", markdown)
+
+
+class UnreadLanguageTests(TestCase):
+    """An analyzer that read nothing is the most severe case of thin.
+
+    "Where this analysis is thin" requires a yield ratio, and a yield ratio
+    needs a denominator, so an analyzer eligible for 229 files that read none
+    of them was excluded by the condition meant to find thinness. A language
+    project reported only that its Markdown was shallow while the analyzer for
+    its main language said nothing about having read nothing.
+    """
+
+    def test_an_eligible_but_unread_language_is_named(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+        starved = replace(
+            document,
+            coverage=(
+                {
+                    "analyzer": "invented/v1",
+                    "language": "Hum",
+                    "eligible_files": 229,
+                    "analyzed_files": 0,
+                    "failed_files": 0,
+                    "coverage_ratio": 0.0,
+                    "yield_ratio": None,
+                },
+            ),
+        )
+        markdown = render_spec_markdown(starved)
+        self.assertIn("Languages this analysis could not read", markdown)
+        self.assertIn("| Hum | 229 | 0 |", markdown)
+        self.assertIn("every determination in this document was reached without reading", markdown)
+
+    def test_a_fully_read_language_is_not_named(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            markdown = render_spec_markdown(build_spec(ledger, load_profile()))
+        self.assertNotIn("Languages this analysis could not read", markdown)
+
+    def test_an_analyzer_with_nothing_eligible_is_not_named(self) -> None:
+        # Zero eligible is not a gap: the repository has no such files.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+        idle = replace(
+            document,
+            coverage=(
+                {
+                    "analyzer": "rust-lexical/v1",
+                    "language": "Rust",
+                    "eligible_files": 0,
+                    "analyzed_files": 0,
+                    "failed_files": 0,
+                    "coverage_ratio": 0.0,
+                    "yield_ratio": None,
+                },
+            ),
+        )
+        self.assertNotIn("could not read", render_spec_markdown(idle))
