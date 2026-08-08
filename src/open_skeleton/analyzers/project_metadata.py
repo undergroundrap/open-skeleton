@@ -1053,7 +1053,11 @@ class ProjectMetadataAnalyzer:
                     category="checked_out_revision",
                     status="verified",
                     confidence=1.0,
-                    importance="high",
+                    # Provenance rather than a finding. It belongs in the
+                    # composition section a reader checks before trusting the
+                    # rest, not at the top of a list headed "highest-importance
+                    # verified findings", where it crowded out the findings.
+                    importance="medium",
                     produced_by=ANALYZER_VERSION,
                     created_at=created_at,
                     verified_at=created_at,

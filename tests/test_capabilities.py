@@ -143,7 +143,11 @@ class CapabilityClusteringTests(TestCase):
                 },
             )
         )
-        scripts = [item for item in capabilities if item.label == "scripts"]
+        # Labelled `smoke` rather than `scripts`: a folder that says where code
+        # was put does not name a capability, and this asserted `scripts` until
+        # a browser game's entire source tree was reported as one capability
+        # called `src`.
+        scripts = [item for item in capabilities if item.label == "smoke"]
         self.assertTrue(scripts)
         self.assertEqual(scripts[0].verification, "no-verifying-reference")
 
@@ -239,3 +243,39 @@ class ReferenceStrengthTests(TestCase):
         references = [ref for item in capabilities for ref in item.exercised_by]
         self.assertTrue(references, "the call should have been recorded")
         self.assertFalse(any("contains tests and" in ref for ref in references))
+
+
+class BuildContainerLabelTests(TestCase):
+    """A folder that says where code was put does not name a capability.
+
+    Reading a browser game's specification showed its capability catalogue as
+    "2 of 2: `server`, `src`". Every one of sixteen modules -- movement,
+    combat, renderer, terrain -- was clustered into one capability named after
+    the directory they happened to sit in, and `src` tells a reader nothing
+    about what the program does.
+    """
+
+    def _labels(self, *paths: str) -> set[str]:
+        symbols = tuple(
+            {"qualified_name": f"m{index}.run", "kind": "function", "path": path}
+            for index, path in enumerate(paths)
+        )
+        files = tuple({"path": path, "role": "source"} for path in paths)
+        return {
+            item.label
+            for item in build_capabilities(
+                files=files, claims=(), symbols=symbols, edges=(), evidence_by_id={}
+            )
+        }
+
+    def test_a_build_container_yields_module_names(self) -> None:
+        found = self._labels("src/movement.js", "src/combat.js", "src/renderer.js")
+        self.assertEqual(found, {"movement", "combat", "renderer"})
+
+    def test_a_meaningful_directory_still_names_the_cluster(self) -> None:
+        # `backend/` describes a part of the system; `src/` describes a layout.
+        found = self._labels("backend/api.py", "backend/models.py")
+        self.assertEqual(found, {"backend"})
+
+    def test_a_file_at_the_root_names_itself(self) -> None:
+        self.assertEqual(self._labels("server.py"), {"server"})

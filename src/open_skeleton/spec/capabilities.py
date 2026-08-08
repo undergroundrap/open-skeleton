@@ -22,6 +22,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+# Directories that hold code without describing it. Clustering by the
+# containing folder named a whole browser game "src", which is the build
+# layout rather than anything the program does; the modules inside it are
+# called movement, combat and renderer, and those are its capabilities.
+BUILD_CONTAINERS = frozenset({"src", "lib", "app", "source", "js", "ts", "scripts", "code"})
 MIN_CLUSTER_MEMBERS = 1
 MAX_CAPABILITIES = 60
 
@@ -152,8 +157,10 @@ def _module_clusters(
     """Cluster remaining source modules by their containing package directory.
 
     The containing directory is used rather than the top-level one because a
-    ``src/`` layout would otherwise collapse an entire project into a single
-    cluster named after its build container.
+    nested layout would otherwise collapse an entire project into one cluster.
+    When that directory is itself a build container the module names the
+    cluster instead, since ``src`` describes where code was put rather than
+    what it does.
     """
 
     source_paths = {str(item["path"]) for item in files if str(item["role"]) == "source"}
@@ -170,7 +177,11 @@ def _module_clusters(
         if qualified in claimed_symbols:
             continue
         parts = path.split("/")
-        label = parts[-2] if len(parts) > 1 else path.rsplit(".", 1)[0]
+        folder = parts[-2] if len(parts) > 1 else ""
+        stem = parts[-1].rsplit(".", 1)[0]
+        # A build container is not a capability boundary. When the nearest
+        # folder is one, the module names itself.
+        label = stem if (not folder or folder.casefold() in BUILD_CONTAINERS) else folder
         clusters[label]["symbols"].add(qualified)
     return clusters
 
