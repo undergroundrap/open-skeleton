@@ -41,6 +41,14 @@ CENSUS_CATEGORIES = frozenset(
         "auth_control_census",
         "dependency_inventory",
         "language_census",
+        # The checked-out commit is a property of the repository, not of any
+        # file in it, so its receipt is a census receipt by construction and
+        # this check fired on every git repository ever analyzed -- five of
+        # five here. A gate that always fails is not a gate: an agent wired
+        # to `audit --strict` would reject every work order for a reason no
+        # change could ever clear, and the first fix anyone reaches for is
+        # turning the gate off.
+        "checked_out_revision",
     }
 )
 # Categories that describe what a system does in production. A finding in one

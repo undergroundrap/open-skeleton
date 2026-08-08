@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.audit import audit_claims
+from open_skeleton.audit import CENSUS_CATEGORIES, audit_claims
 
 
 def _claim(claim_id: str, category: str, *evidence: str) -> dict[str, Any]:
@@ -90,3 +90,43 @@ class AuditTests(TestCase):
             [{"path": "a.py", "role": "source"}],
         )
         self.assertNotIn("single-file-category", checks)
+
+
+class GateUsabilityTests(TestCase):
+    """A gate that always fails is not a gate.
+
+    `checked_out_revision` records the commit a snapshot was taken at. That is
+    a property of the repository rather than of any file in it, so its receipt
+    is a census receipt by construction and `no-file-evidence` fired on every
+    git repository ever analyzed -- five of five here.
+
+    This matters more than a stray finding. The intended use of
+    `audit --strict` is a gate an agent consults before accepting work, and a
+    gate that rejects every change for a reason no change can clear does not
+    make review stricter. It teaches whoever wired it to turn the gate off,
+    which is strictly worse than never having had one.
+    """
+
+    def _findings(self, category: str) -> set[str]:
+        return {
+            item.check
+            for item in audit_claims(
+                (_claim("c1", category, "e1"),),
+                ({"evidence_id": "e1", "path": "."},),
+                ({"path": "app/main.py", "role": "source"},),
+            )
+        }
+
+    def test_the_checked_out_commit_is_not_reported_as_a_gap(self) -> None:
+        self.assertEqual(self._findings("checked_out_revision"), set())
+
+    def test_a_category_that_should_name_a_file_is_still_reported(self) -> None:
+        # The exemption must stay narrow: a route claim naming no file is
+        # exactly the shape this check exists to catch.
+        self.assertIn("no-file-evidence", self._findings("http_route"))
+
+    def test_every_exempt_category_is_actually_census_shaped(self) -> None:
+        # A category earns its exemption by being unable to name a file, not
+        # by being noisy. Each of these is a statement about the repository.
+        for category in CENSUS_CATEGORIES:
+            self.assertEqual(self._findings(category), set(), category)
