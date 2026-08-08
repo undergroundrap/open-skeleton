@@ -874,6 +874,14 @@ def _executive_summary(document: SpecDocument) -> list[str]:
             "without reading them, and a concern implemented only there will read as "
             "absent.\n\n"
         )
+        # The analyzer usually knows why it read nothing, and that reason is
+        # often something the reader can act on -- the Hum analyzer asks for a
+        # pre-generated index and names the flag that supplies it. Printing
+        # the counts without the explanation turns an actionable gap into an
+        # unexplained one, when the answer was already in the coverage record.
+        for item in unread:
+            for reason in tuple(item.get("failures", ()))[:2]:
+                lines.append(f"_{_escape(str(item['language']))}: {_escape(str(reason))}_\n\n")
 
     if thin:
         lines.append("### Where this analysis is thin\n\n")

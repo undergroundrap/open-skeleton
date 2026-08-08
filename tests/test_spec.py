@@ -1807,3 +1807,48 @@ class ProbeMissedButEvidencedTests(TestCase):
             if len(cells := [cell.strip() for cell in row.split("|")]) == 4 and cells[2].isdigit()
         )
         self.assertEqual(counted, len(document.sections))
+
+
+class UnreadLanguageReasonTests(TestCase):
+    """When an analyzer knows why it read nothing, the document says so.
+
+    The workspace report showed "Hum | 229 | 0" and a paragraph explaining
+    that nothing below described those files. True, and not actionable: the
+    analyzer had already recorded that it needs a pre-generated index and
+    named the flag that supplies one. The answer was in the coverage record
+    and the reader could not see it.
+    """
+
+    def _document(self, failures: tuple[str, ...]) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+        return replace(
+            document,
+            coverage=(
+                {
+                    "analyzer": "invented/v1",
+                    "language": "Hum",
+                    "eligible_files": 229,
+                    "analyzed_files": 0,
+                    "failed_files": 0,
+                    "coverage_ratio": 0.0,
+                    "yield_ratio": None,
+                    "failures": list(failures),
+                },
+            ),
+        )
+
+    def test_the_recorded_reason_is_printed(self) -> None:
+        markdown = render_spec_markdown(
+            self._document(("229 Hum files require an index; supply it with --hum-index.",))
+        )
+        self.assertIn("supply it with --hum-index", markdown)
+
+    def test_a_language_with_no_recorded_reason_still_renders(self) -> None:
+        markdown = render_spec_markdown(self._document(()))
+        self.assertIn("| Hum | 229 | 0 |", markdown)
