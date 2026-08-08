@@ -2274,7 +2274,7 @@ class PythonAstAnalyzer:
             listed = ", ".join(sorted(endpoint_literals))
             endpoint_text = (
                 f"Python source hardcodes {len(endpoint_literals)} distinct network "
-                f"endpoint(s) across {len(endpoint_evidence)} sites: {listed}. No "
+                f"endpoint(s) across {len(endpoint_evidence)} site(s): {listed}. No "
                 "environment lookup supplies them at those sites."
             )
             claims.append(
