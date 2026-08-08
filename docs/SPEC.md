@@ -301,6 +301,39 @@ Integrity is `(current + virtual) / total`. The command exits non-zero when any
 citation fails, which makes it usable as a CI gate: a specification that cites
 lines nobody can find is worse than no specification.
 
+## Self-consistency
+
+Citation integrity answers whether each receipt resolves. It cannot answer
+whether the document agrees with itself, and those are different questions: a
+specification can cite perfectly and still contradict itself in prose.
+
+It did. Runtime Topology read "Determination: absent. Every probe declared for
+this concern returned zero matches" directly above a table of seven verified
+findings, and the executive summary counted it among the concerns the
+repository does not implement. Citation integrity was 100% throughout, because
+every one of those findings carried a receipt that resolved. Four of five
+single repositories had the same defect; in this one the entire error-contract
+analysis printed twenty-four findings under a heading announcing their absence.
+
+So `spec` now reads its own output the way a reader would and compares what the
+prose asserts against the data it was projected from. This runs on every
+invocation, not only under `--verify`:
+
+| Check | What it catches |
+|---|---|
+| `verdict-contradicts-findings` | A section announcing absence above its own evidence |
+| `enumeration-truncated-silently` | A stated count whose list is shorter, with no remainder disclosed |
+| `enumeration-remainder-wrong` | A disclosed remainder that does not reconcile the count |
+| `determination-summary-incomplete` | Verdict rows that do not sum to the section count |
+| `absence-tally-disagrees` | A summary absence count unmatched by the sections carrying one |
+| `capability-tally-disagrees` | A capability tally unmatched by the catalog |
+| `claim-rendered-twice` | One claim reaching more than one section |
+
+The command exits non-zero when any of these fire. Each is a defect that
+shipped and was found by reading; the reason they are checks now is that
+reading is not a method that scales, and every repository shape hides the
+defects that only another shape triggers.
+
 ## Diagrams
 
 Diagrams are generated only from structured records — edges, symbols, and counted

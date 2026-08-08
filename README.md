@@ -43,6 +43,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - A security control matrix, an endpoint catalog with per-handler guards and refusals, and module-level data flow
 - Per-section provenance: which files each section's conclusions were read out of
 - Citation integrity verification that re-resolves every receipt against current source bytes
+- Self-consistency checks that read the generated document and fail it when the prose disagrees with the data it was projected from
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract
 - Machine-readable, pinned comparative benchmarks with source-receipt validation

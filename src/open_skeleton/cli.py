@@ -42,6 +42,7 @@ from open_skeleton.spec import (
     render_spec_markdown,
     verify_spec,
 )
+from open_skeleton.spec.coherence import check_coherence
 from open_skeleton.state import resolve_state_dir
 
 
@@ -545,7 +546,8 @@ def _spec(args: argparse.Namespace) -> int:
     # rather than with what is interesting in it, and they were 37% of a
     # six-megabyte file a consumer had to parse in full to read one section.
     index_path = output_dir / "spec.index.json"
-    markdown_path.write_text(render_spec_markdown(document), encoding="utf-8", newline="\n")
+    markdown = render_spec_markdown(document)
+    markdown_path.write_text(markdown, encoding="utf-8", newline="\n")
     json_path.write_text(render_spec_json(document), encoding="utf-8", newline="\n")
     index_path.write_text(render_spec_index_json(document), encoding="utf-8", newline="\n")
 
@@ -570,6 +572,13 @@ def _spec(args: argparse.Namespace) -> int:
     }
 
     report = None
+    # Citation integrity says every receipt resolves. It cannot say the
+    # document agrees with itself, and a specification that cites perfectly
+    # can still announce a concern absent directly above its own findings.
+    incoherences = check_coherence(document, markdown)
+    summary["incoherences"] = [
+        {"check": item.check, "detail": item.detail} for item in incoherences
+    ]
     if args.verify:
         report = verify_spec(document, ledger, root=root)
         summary["citation_integrity"] = report.integrity
@@ -594,7 +603,13 @@ def _spec(args: argparse.Namespace) -> int:
                 f"Citation integrity: {report.integrity:.1%} "
                 f"({report.total:,} citations, {len(report.failures):,} failing)"
             )
+        if incoherences:
+            print(f"Self-consistency: {len(incoherences):,} statement(s) disagree with the data")
+            for item in incoherences:
+                print(f"  {item}")
         print(f"Spec: {markdown_path}")
+    if incoherences:
+        return 1
     if report is not None and report.failures:
         return 1
     return 0
