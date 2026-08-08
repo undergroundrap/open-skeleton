@@ -19,7 +19,7 @@ from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
 from open_skeleton.spec.panels import Panel, PanelContext, build_panel, short_form
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section, run_probe
-from open_skeleton.spec.profile import SpecProfile, SpecSection, SpecSelector
+from open_skeleton.spec.profile import VERDICTS, SpecProfile, SpecSection, SpecSelector
 from open_skeleton.spec.roles import MultiRole, derive_roles
 from open_skeleton.spec.substitutes import Substitute, derive_substitutes
 
@@ -66,6 +66,12 @@ _VERDICT_SENTENCE = {
     ),
     "structural": (
         "This section organizes the subsections below and makes no presence claim of its own."
+    ),
+    "evidenced": (
+        "**Determination: present, but not by probe.** Every probe declared for this "
+        "concern returned zero matches, and {findings:,} claim(s) about it were still "
+        "selected into this section. The probes are listed below: a query that misses "
+        "what the findings show is a gap in this profile, not in the repository."
     ),
     "not_applicable": (
         "**Determination: not applicable.** This concern presupposes {requires}, which "
@@ -399,6 +405,25 @@ def build_spec(
 
     def render_node(section: SpecSection, depth: int) -> None:
         verdict, probe_results = evaluate_section(section, corpus)
+        selector = section.findings
+        # A catch-all sees only what no filtered section claimed; a filtered
+        # section competes normally with its peers in document order.
+        taken_before = (
+            used | filtered_claims if selector is not None and not selector.categories else used
+        )
+        selected, omitted, routed = _select(selector, claims, taken_before)
+        used.update(routed)
+        constraint_claims, _, _ = _select(section.constraints, claims, set())
+
+        # Selection has to happen before the verdict is final. A probe that
+        # matches nothing while claims about the concern land in this very
+        # section has not shown the concern is absent -- it has shown the
+        # probe is the wrong query. Runtime Topology read "absent: every probe
+        # returned zero matches" directly above seven verified findings, and
+        # the executive summary counted it among concerns the repository does
+        # not implement while the document itself showed otherwise.
+        if verdict == "absent" and selected:
+            verdict = "evidenced"
         # Adjacent queries are run only when the concern was not found. If
         # the probes matched, what is nearby is not the interesting fact.
         candidate_results = (
@@ -413,21 +438,12 @@ def build_spec(
         unmet = [
             name
             for name in section.requires
-            if decided.get(name) not in {"applicable", "degenerate"}
+            if decided.get(name) not in {"applicable", "degenerate", "evidenced"}
         ]
         if unmet and verdict == "absent":
             verdict = "not_applicable"
         decided[section.section_id] = verdict
         unmet_requirements = tuple(unmet) if verdict == "not_applicable" else ()
-        selector = section.findings
-        # A catch-all sees only what no filtered section claimed; a filtered
-        # section competes normally with its peers in document order.
-        taken_before = (
-            used | filtered_claims if selector is not None and not selector.categories else used
-        )
-        selected, omitted, routed = _select(selector, claims, taken_before)
-        used.update(routed)
-        constraint_claims, _, _ = _select(section.constraints, claims, set())
 
         findings = tuple(
             RenderedClaim(
@@ -927,7 +943,10 @@ def render_spec_markdown(document: SpecDocument) -> str:
     for section in document.sections:
         verdict_counts[section.verdict] = verdict_counts.get(section.verdict, 0) + 1
     lines.append("## Determination summary\n\n| Verdict | Sections |\n|---|---:|\n")
-    for verdict in ("applicable", "degenerate", "absent", "structural"):
+    # Every verdict the profile defines, so the rows always sum to the section
+    # count. Listing four of them dropped `not_applicable` sections from the
+    # table entirely, which only stayed invisible while no run produced one.
+    for verdict in VERDICTS:
         if verdict in verdict_counts:
             lines.append(f"| {verdict} | {verdict_counts[verdict]:,} |\n")
     lines.append("\n")
@@ -950,6 +969,7 @@ def render_spec_markdown(document: SpecDocument) -> str:
         # the answer is already known here.
         sentence = _VERDICT_SENTENCE[section.verdict].format(
             total=total,
+            findings=len(section.findings),
             corpus=corpus_files,
             claims=document.total_claims,
             snapshot=document.snapshot_id,

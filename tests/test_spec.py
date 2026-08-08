@@ -1718,3 +1718,92 @@ class UntracedCapabilityDisclosureTests(TestCase):
         self.assertIn("4 of 4", markdown)
         # The list is whole, so it ends at the last name and says nothing else.
         self.assertIn("`feature4`. Static resolution", markdown)
+
+
+class ProbeMissedButEvidencedTests(TestCase):
+    """A probe that finds nothing cannot outvote the findings beneath it.
+
+    Runtime Topology read "Determination: absent. Every probe declared for
+    this concern returned zero matches" directly above a table of seven
+    verified findings -- a hardcoded endpoint and six client route requests --
+    and the executive summary counted it among the concerns the repository
+    does not implement.
+
+    Both halves came from the truth. The verdict is decided by the section's
+    probes and the findings arrive through a separate category selector, and
+    nothing reconciled them, so the document contradicted itself while every
+    automated check passed: each claim had a receipt and citation integrity
+    was 100%. Only reading it found this.
+    """
+
+    def _profile(self, categories: list[str]) -> Any:
+        return parse_profile(
+            {
+                "schema": "open-skeleton.spec_profile.v1",
+                "profile_id": "p",
+                "profile_version": "v1",
+                "title": "t",
+                "sections": [
+                    {
+                        "id": "a.surface",
+                        "number": "1",
+                        "title": "Surface",
+                        # A query that matches nothing, standing in for a
+                        # probe whose vocabulary does not fit the repository.
+                        "probes": [
+                            {"name": "q", "kind": "path_glob", "terms": ["never-matches-*"]}
+                        ],
+                        "findings": {"categories": categories},
+                    }
+                ],
+            }
+        )
+
+    def _section(self, categories: list[str]) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, self._profile(categories))
+        return document, document.sections[0]
+
+    def test_findings_under_a_missed_probe_are_not_reported_as_absent(self) -> None:
+        _, section = self._section(["public_api"])
+        self.assertTrue(section.findings, "the fixture should route claims here")
+        self.assertEqual(section.verdict, "evidenced")
+
+    def test_a_section_with_no_findings_is_still_absent(self) -> None:
+        # A real category the fixture happens not to produce. An empty list
+        # is a catch-all selector, which takes every unclaimed claim.
+        _, section = self._section(["http_route"])
+        self.assertEqual(section.findings, ())
+        self.assertEqual(section.verdict, "absent")
+
+    def test_the_document_does_not_claim_the_concern_is_missing(self) -> None:
+        document, _ = self._section(["public_api"])
+        markdown = render_spec_markdown(document)
+        self.assertIn("present, but not by probe", markdown)
+        self.assertNotIn("Determination: absent", markdown)
+
+    def test_the_probe_that_missed_is_still_shown(self) -> None:
+        # The reader has to be able to see which query was wrong, or the
+        # verdict is just an assertion.
+        document, _ = self._section(["public_api"])
+        markdown = render_spec_markdown(document)
+        self.assertIn("never-matches-*", markdown)
+
+    def test_every_verdict_reaches_the_determination_summary(self) -> None:
+        # The table listed four of the profile's verdicts, so any section
+        # holding one of the others vanished from it and the rows stopped
+        # summing to the section count.
+        document, _ = self._section(["public_api"])
+        markdown = render_spec_markdown(document)
+        table = markdown.split("## Determination summary", 1)[1].split("## Contents", 1)[0]
+        counted = sum(
+            int(cells[2])
+            for row in table.splitlines()
+            if len(cells := [cell.strip() for cell in row.split("|")]) == 4 and cells[2].isdigit()
+        )
+        self.assertEqual(counted, len(document.sections))

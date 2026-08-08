@@ -60,7 +60,14 @@ PANEL_KINDS = frozenset(
     }
 )
 
-VERDICTS = ("applicable", "degenerate", "absent", "structural", "not_applicable")
+VERDICTS = (
+    "applicable",
+    "degenerate",
+    "absent",
+    "structural",
+    "not_applicable",
+    "evidenced",
+)
 
 _IMPORTANCE_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 

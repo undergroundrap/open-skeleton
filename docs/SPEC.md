@@ -57,15 +57,27 @@ in the document the tool produced.
 ## Determination: absence is a verdict, not a silence
 
 Each outline node declares **probes** — named, re-runnable queries over the pinned
-snapshot. The verdict follows from counted matches alone:
+snapshot. The verdict follows from counted matches and from what the node's
+findings selector routed into it:
 
 | Verdict | Meaning |
 |---|---|
 | `applicable` | At least one probe matched. |
 | `degenerate` | Probes matched, but below the node's `degenerate_below` threshold. |
-| `absent` | Every declared probe returned zero matches. |
+| `absent` | Every declared probe returned zero matches, and no claim was selected into the node. |
 | `structural` | The node declares no probes; it only organizes its children. |
 | `not_applicable` | Probes matched nothing **and** a concern this node declares it presupposes is itself missing. |
+| `evidenced` | Probes matched nothing, but claims about the concern were selected into the node anyway. |
+
+`evidenced` exists because the two halves of a section are decided
+separately: probes fix the verdict, and a category selector routes the
+findings. Nothing reconciled them, so Runtime Topology once read
+"Determination: absent — every probe returned zero matches" directly above
+seven verified findings, and the executive summary counted it among concerns
+the repository does not implement. Every automated check passed while it did:
+each claim had a receipt and citation integrity was 100%. A probe that misses
+what the findings show is a gap in the profile's vocabulary rather than in the
+repository, so the verdict says that and still prints the query that missed.
 
 A node may declare `requires`, naming concerns it only arises from. Pagination
 presupposes an HTTP surface; schema migration presupposes durable storage.
