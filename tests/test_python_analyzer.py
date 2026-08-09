@@ -27,6 +27,7 @@ from open_skeleton.analyzers.python_ast import (
     _string_constants,
 )
 from open_skeleton.ledger import EvidenceLedger
+from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
 
 PYTHON_FIXTURE = """\
@@ -976,3 +977,55 @@ class DeeplyNestedSourceTests(TestCase):
             result = analyze_snapshot(scan_repository(root))
 
         self.assertEqual([item for item in result.symbols if item.path == "deep.py"], [])
+
+
+class TestScopedErrorContractTests(TestCase):
+    """What a suite absorbs is not the program's error contract.
+
+    The per-claim choke point re-files a test file's claims by category, and
+    could not reach the error contract: that claim is aggregated across files
+    and emitted once at the end, so a handler inside a suite entered the
+    program's contract without passing the check written to stop exactly
+    that. This repository reported "1 handler(s) catch `OSError, ValueError`"
+    from a test's own `except` around a file it was deliberately failing to
+    write.
+
+    A choke point only covers the claims that pass through it, which is the
+    part worth remembering.
+    """
+
+    def _analyze(self, sources: dict[str, str]) -> AnalysisResult:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in sources.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+            return analyze_snapshot(scan_repository(root))
+
+    HANDLER = "def go():\n    try:\n        work()\n    except OSError:\n        return None\n"
+
+    def test_a_handler_in_application_code_is_the_contract(self) -> None:
+        result = self._analyze({"app.py": self.HANDLER})
+        self.assertTrue(
+            any(item.category == "caught_exception" for item in result.claims),
+            "application code should still declare an error contract",
+        )
+
+    def test_a_handler_inside_a_suite_is_not(self) -> None:
+        result = self._analyze({"tests/test_app.py": self.HANDLER})
+        self.assertFalse(any(item.category == "caught_exception" for item in result.claims))
+
+    def test_a_suite_does_not_dilute_a_real_contract(self) -> None:
+        # Both files catch, and only the application one is the program's.
+        result = self._analyze(
+            {
+                "app.py": self.HANDLER,
+                "tests/test_app.py": (
+                    "def test_go():\n    try:\n        go()\n    except ValueError:\n        pass\n"
+                ),
+            }
+        )
+        families = [item.claim for item in result.claims if item.category == "caught_exception"]
+        self.assertTrue(families)
+        self.assertFalse(any("ValueError" in text for text in families))

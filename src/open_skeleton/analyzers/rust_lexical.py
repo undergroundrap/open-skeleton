@@ -1306,7 +1306,14 @@ class RustLexicalAnalyzer:
                 index += 1
 
             fallible = file_errors["fallible_functions"]
-            if fallible:
+            # An integration test under `tests/` declares its own fallible
+            # helpers, and reporting them as the crate's error surface
+            # describes the suite. Python re-files a test file's claims by
+            # category at one choke point for exactly this reason; the rule
+            # never crossed to this reader, so `crates/warmboot-core/tests/
+            # compat.rs` was the whole of what warmboot appeared to say about
+            # how it handles failure.
+            if fallible and file_record.role != "test":
                 first_line = fallible[0][1]
                 error_receipt = receipt(
                     file_record.path, first_line, "error_surface", module, excerpt

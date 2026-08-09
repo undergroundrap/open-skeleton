@@ -91,6 +91,14 @@ TEST_SCOPED_CATEGORIES = {
     "schema_migration": "test_schema_migration",
     "http_route": "test_route",
     "external_call": "test_external_call",
+    # What a suite absorbs is not the program's error contract. This
+    # repository reported "1 handler(s) catch `OSError, ValueError`"
+    # from a test's own `except` around a file it was deliberately
+    # failing to write, and the audit flagged it as production error
+    # handling evidenced only by tests. The audit was right; the claim
+    # should never have carried that category in the first place.
+    "caught_exception": "test_caught_exception",
+    "exception_type": "test_exception_type",
 }
 INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
@@ -2239,8 +2247,16 @@ class PythonAstAnalyzer:
             route_evidence.extend(analyzer.route_evidence)
             endpoint_evidence.extend(analyzer.endpoint_evidence)
             endpoint_literals.update(analyzer.endpoint_literals)
-            for family, receipts in analyzer.caught_family_evidence.items():
-                caught_families[family].extend(receipts)
+            # The per-claim choke point re-files a test file's claims by
+            # category, and cannot reach this one: the error contract is
+            # aggregated across files and emitted once at the end, so a
+            # handler inside a suite entered the program's contract without
+            # passing the check that exists to stop exactly that. Skipping
+            # test-role files here is the same rule applied where the claim
+            # is actually built.
+            if str(file_record.role) != "test":
+                for family, receipts in analyzer.caught_family_evidence.items():
+                    caught_families[family].extend(receipts)
             route_auth_control_evidence.extend(analyzer.route_auth_control_evidence)
             typed_route_evidence.extend(analyzer.typed_route_evidence)
             analyzed_files += 1

@@ -635,3 +635,31 @@ class CrateRootCollisionTests(TestCase):
         paths = ["a/src/lib.rs", "a/src/main.rs", "b/src/lib.rs", "b/src/main.rs"]
         found = _module_names(paths)
         self.assertEqual(len(set(found.values())), len(paths))
+
+
+class TestRoleErrorSurfaceTests(TestCase):
+    """A crate's error surface is not what its integration tests declare.
+
+    `crates/warmboot-core/tests/compat.rs` declares its own fallible helper,
+    and reporting it made that file the whole of what warmboot appeared to
+    say about how it handles failure. Python re-files a test file's claims by
+    category at one choke point for exactly this reason; the rule had never
+    crossed to this reader.
+    """
+
+    SOURCE = "pub fn load() -> Result<u8, Error> { Ok(1) }\n"
+
+    def _categories(self, name: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self.SOURCE, encoding="utf-8")
+            result = RustLexicalAnalyzer().analyze(scan_repository(root))
+        return {item.category for item in result.claims}
+
+    def test_application_code_declares_an_error_surface(self) -> None:
+        self.assertIn("error_surface", self._categories("src/lib.rs"))
+
+    def test_an_integration_test_does_not(self) -> None:
+        self.assertNotIn("error_surface", self._categories("tests/compat.rs"))
