@@ -76,6 +76,7 @@ def run(
     required: list[str],
     fast: bool,
     minimum_coverage: float,
+    minimum_yield: float,
 ) -> int:
     snapshot = scan_repository(repository)
     result = analyze_snapshot(snapshot, hum_index=hum_index or None)
@@ -101,6 +102,21 @@ def run(
         for item in result.coverage
         if item.eligible_files and item.coverage_ratio < minimum_coverage
     ]
+    # Coverage and yield answer different questions, and only the second one
+    # is about substance. Wiring a real Hum index took that language from
+    # 0/229 files read to 229/229 -- and its yield stayed at 0%, because the
+    # index contributes structure rather than claims. A gate watching only
+    # coverage would have called that success.
+    silent = [
+        (
+            item.language,
+            f"{item.language}: {item.analyzed_files:,} file(s) read, "
+            f"{(item.yield_ratio or 0.0):.0%} produced a finding",
+        )
+        for item in result.coverage
+        if item.analyzed_files and (item.yield_ratio or 0.0) < minimum_yield
+    ]
+    blocking += [line for language, line in silent if language in required]
     blocking = [line for language, line in unread if language in required]
     if blocking:
         _emit("COVERAGE BELOW THRESHOLD — required by --require-language:", blocking)
@@ -186,6 +202,17 @@ def main() -> int:
         help="Fail when this language reads below --min-coverage. Repeatable.",
     )
     parser.add_argument(
+        "--min-yield",
+        type=float,
+        default=0.0,
+        help=(
+            "Share of a required language's read files that must produce at "
+            "least one claim. Defaults to 0: reading a file and having nothing "
+            "to say about it is a real answer for some languages, and a gate "
+            "should not invent a finding to satisfy a threshold."
+        ),
+    )
+    parser.add_argument(
         "--min-coverage",
         type=float,
         default=0.95,
@@ -224,6 +251,7 @@ def main() -> int:
             arguments.require_language,
             arguments.fast,
             arguments.min_coverage,
+            arguments.min_yield,
         )
     except (OSError, sqlite3.Error) as exc:
         # A gate that cannot run has not judged the work. Saying so with a
