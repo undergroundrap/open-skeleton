@@ -570,6 +570,14 @@ def _supertypes_after(tokens: list[Token], start: int) -> tuple[str, ...]:
     found: list[str] = []
     collecting = False
     generic_depth = 0
+    # A qualified supertype is one name written with dots in it. Treating each
+    # segment as its own supertype turned `implements
+    # java.security.PrivilegedAction` into three, two of which -- `java` and
+    # `security` -- are packages that no type can implement. Fabricated
+    # supertypes are worse than missing ones: they carry receipts, they reach
+    # the specification as verified claims, and they add `implements java`
+    # edges that capability clustering then reasons over.
+    continuing = False
     for token in tokens[start:]:
         if token.kind == "punctuation":
             if token.value == "{" and generic_depth == 0:
@@ -578,11 +586,17 @@ def _supertypes_after(tokens: list[Token], start: int) -> tuple[str, ...]:
                 generic_depth += 1
             elif token.value == ">":
                 generic_depth = max(0, generic_depth - 1)
+            elif token.value == "." and generic_depth == 0:
+                continuing = True
+                continue
+            elif token.value == "," and generic_depth == 0:
+                continuing = False
             continue
         if token.kind != "identifier":
             continue
         if token.value in {"extends", "implements"}:
             collecting = True
+            continuing = False
             continue
         if token.value == "permits":
             collecting = False
@@ -590,7 +604,11 @@ def _supertypes_after(tokens: list[Token], start: int) -> tuple[str, ...]:
         # Only the outermost names are supertypes; a generic argument such as
         # the `String` of `implements List<String>` is not one.
         if collecting and generic_depth == 0:
-            found.append(token.value)
+            if continuing and found:
+                found[-1] = f"{found[-1]}.{token.value}"
+            else:
+                found.append(token.value)
+            continuing = False
     return tuple(dict.fromkeys(found))
 
 

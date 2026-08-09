@@ -126,6 +126,31 @@ class DeclaredTypeTests(TestCase):
         found = declared_types(tokenize(source))[0]
         self.assertEqual(found.supertypes, ("Base", "List", "Runnable"))
 
+    def test_a_qualified_supertype_is_one_name(self) -> None:
+        # `implements java.security.PrivilegedAction` names one supertype.
+        # Reading each dotted segment as its own produced three, two of them
+        # packages that nothing can implement -- fabricated supertypes that
+        # reached the specification as verified claims with receipts, and
+        # added `implements java` edges for capability clustering to reason
+        # over. The declaration differential cannot see this: it compares
+        # type declarations, never their supertypes.
+        source = "public class A implements java.security.PrivilegedAction<Boolean> {}"
+        self.assertEqual(
+            declared_types(tokenize(source))[0].supertypes,
+            ("java.security.PrivilegedAction",),
+        )
+
+    def test_qualified_and_bare_supertypes_mix(self) -> None:
+        source = "class B extends java.util.AbstractList<String> implements java.io.Serializable, Runnable {}"
+        self.assertEqual(
+            declared_types(tokenize(source))[0].supertypes,
+            ("java.util.AbstractList", "java.io.Serializable", "Runnable"),
+        )
+
+    def test_a_nested_supertype_keeps_its_owner(self) -> None:
+        source = "class E implements Map.Entry<K, V> {}"
+        self.assertEqual(declared_types(tokenize(source))[0].supertypes, ("Map.Entry",))
+
     def test_a_permits_clause_does_not_name_a_supertype(self) -> None:
         source = "public sealed interface Shape permits Circle, Square {}"
         self.assertEqual(declared_types(tokenize(source))[0].supertypes, ())
