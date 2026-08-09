@@ -84,6 +84,12 @@ def _graph_facts(
 
     evidence: list[EvidenceRecord] = []
     claims: list[ClaimRecord] = []
+    # Two diagnostics of one code can point at the same line, which yields the
+    # same receipt identifier twice. The ledger keys a claim's evidence by
+    # (claim, evidence, relationship), so emitting the duplicate aborted the
+    # whole run on a UNIQUE constraint -- and analysis in memory never showed
+    # it, because only persistence enforces that key.
+    seen: set[str] = set()
 
     def receipt(path: str, line: int, kind: str, symbol: str) -> str | None:
         record = files_by_path.get(path)
@@ -99,20 +105,22 @@ def _graph_facts(
         identifier = stable_id(
             "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
         )
-        evidence.append(
-            EvidenceRecord(
-                evidence_id=identifier,
-                snapshot_id=snapshot.snapshot_id,
-                path=path,
-                start_line=line,
-                end_line=line,
-                symbol=symbol,
-                evidence_kind=kind,
-                excerpt_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
-                analyzer=ANALYZER_VERSION,
-                created_at=created_at,
+        if identifier not in seen:
+            seen.add(identifier)
+            evidence.append(
+                EvidenceRecord(
+                    evidence_id=identifier,
+                    snapshot_id=snapshot.snapshot_id,
+                    path=path,
+                    start_line=line,
+                    end_line=line,
+                    symbol=symbol,
+                    evidence_kind=kind,
+                    excerpt_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
+                    analyzer=ANALYZER_VERSION,
+                    created_at=created_at,
+                )
             )
-        )
         return identifier
 
     def claim(text: str, category: str, supporting: tuple[str, ...], importance: str) -> None:
@@ -172,7 +180,7 @@ def _graph_facts(
         claim(
             text,
             "hum_diagnostic",
-            tuple(receipts[:24]),
+            tuple(dict.fromkeys(receipts))[:24],
             "high" if severity == "error" else "medium",
         )
 
@@ -200,7 +208,7 @@ def _graph_facts(
             f"Task `{task}` in {path} states {len(receipts)} `{section}` clause(s). "
             "This is a contract the code declares about itself, not a check that it holds."
         )
-        claim(text, "hum_contract", tuple(receipts[:12]), "high")
+        claim(text, "hum_contract", tuple(dict.fromkeys(receipts))[:12], "high")
 
     return evidence, claims
 
