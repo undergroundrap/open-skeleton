@@ -7,6 +7,8 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -295,6 +297,36 @@ def _tokens(source: str) -> list[Token]:
 
 def _module_name(path: str) -> str:
     return path.rsplit(".", 1)[0].replace("/", ".")
+
+
+def _module_names(paths: Iterable[str]) -> dict[str, str]:
+    """Module name per file, disambiguated where two files share one.
+
+    The name drops the extension, so `src/util.ts` and `src/util.js` both
+    reduce to `src.util` -- a compiled artifact sitting beside its source, an
+    `index.ts` beside an `index.tsx`, a `.mjs` beside a `.ts`. All are
+    ordinary, and all produced two unrelated files under one subject: the
+    document then carries two `src.util exports ...` rows with different
+    names in them and reads as a contradiction.
+
+    Rust hit this an hour earlier with a package holding both crate roots,
+    and Python before that with two distributions in one workspace. Only the
+    colliding names take their extension back, because for every other file
+    the extension carries no information a reader needs.
+    """
+
+    claimed: dict[str, list[str]] = defaultdict(list)
+    for path in paths:
+        claimed[_module_name(path)].append(path)
+    resolved: dict[str, str] = {}
+    for name, owners in claimed.items():
+        if len(owners) == 1:
+            resolved[owners[0]] = name
+            continue
+        for path in owners:
+            suffix = path.rsplit(".", 1)[-1] if "." in path.rsplit("/", 1)[-1] else ""
+            resolved[path] = f"{name}.{suffix}" if suffix else name
+    return resolved
 
 
 @dataclass(frozen=True, slots=True)
@@ -1339,6 +1371,7 @@ class TypeScriptLexicalAnalyzer:
         failures: list[str] = []
         source_lines_by_path: dict[str, list[str]] = {}
         eligible = [item for item in snapshot.files if item.language in ELIGIBLE_LANGUAGES]
+        module_names = _module_names(item.path for item in eligible)
         analyzed_files = 0
 
         def add_evidence(
@@ -1456,7 +1489,7 @@ class TypeScriptLexicalAnalyzer:
                     | _parameter_names(file_tokens)
                 ),
             )
-            module = _module_name(file_record.path)
+            module = module_names[file_record.path]
             module_id = stable_id(
                 "symbol",
                 (

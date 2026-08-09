@@ -14,6 +14,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _exported_names,
     _external_origins,
     _imported_names,
+    _module_names,
     _module_state,
     _object_keys,
     _parameter_names,
@@ -569,3 +570,37 @@ class NestedExportScopeTests(TestCase):
     def test_an_export_after_a_nested_block_is_still_found(self) -> None:
         source = "function outer() { { const deep = 1; } }\nexport const tail = 3;\n"
         self.assertEqual(_exported_names(_tokens(source)), ["tail"])
+
+
+class ModuleNameCollisionTests(TestCase):
+    """Two files do not share one module name.
+
+    The name drops the extension, so a compiled `src/util.js` sitting beside
+    its `src/util.ts` source reduced both to `src.util`, and the document
+    carried two `src.util exports ...` rows listing different names. That
+    reads as a contradiction and is two files.
+
+    Rust hit the same thing an hour earlier through a package holding both
+    crate roots, and Python before that through two distributions in one
+    workspace. None of the four repositories here collides, which is why this
+    is constructed: sampling would have certified it correct.
+    """
+
+    def test_a_compiled_sibling_does_not_share_the_source_name(self) -> None:
+        found = _module_names(["src/util.ts", "src/util.js"])
+        self.assertEqual(found["src/util.ts"], "src.util.ts")
+        self.assertEqual(found["src/util.js"], "src.util.js")
+
+    def test_an_index_pair_is_told_apart(self) -> None:
+        found = _module_names(["src/api/index.ts", "src/api/index.tsx"])
+        self.assertEqual(len(set(found.values())), 2)
+
+    def test_a_name_that_does_not_collide_keeps_its_extension_off(self) -> None:
+        # The extension carries nothing a reader needs when it is unambiguous.
+        found = _module_names(["a/only.ts", "b/other.js"])
+        self.assertEqual(found, {"a/only.ts": "a.only", "b/other.js": "b.other"})
+
+    def test_every_file_resolves_to_a_distinct_name(self) -> None:
+        paths = ["p/a.ts", "p/a.js", "p/a.mjs", "p/b.ts"]
+        found = _module_names(paths)
+        self.assertEqual(len(set(found.values())), len(paths))
