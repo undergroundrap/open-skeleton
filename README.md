@@ -25,6 +25,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Python AST symbols, imports, calls, FastAPI routes, typed parameters, state mutation, SQLite/JSON persistence, CORS, tests, process exits, and selected failure behavior
 - Comment-safe Rust lexical facts for `unsafe` surface, panicking call sites, `#[test]` census, items, imports, call edges, served routes in builder and attribute-macro form, outbound client requests, `const`/`static` tunables, struct fields, impl methods, shared statics, the Result/`?` error surface, and trait implementations
 - Comment-safe TypeScript/JavaScript lexical facts for value bindings, class and interface members, object literal keys, imports, served routes, the endpoint each call targets, named literal tunables including inside an IIFE wrapper, endpoint literals, React hooks resolved through aliased imports, browser storage, module-scope state, `process.env` reads, thrown types, and tests
+- Comment-safe Java lexical facts for declared types and their kinds, the supertypes each one names, public surface including an enum's constants and a record's components, annotation-declared HTTP routes, program entry points, non-final static state, and annotated tests. A type declared inside a method body is marked local rather than published, because nothing can name it
 - Declared commitments: the obligations a repository wrote down for itself in a requirements document, threat model, contributing guide, or architecture decision record. Recording that a promise was made is a different fact from whether the code keeps it, and the claim says which one it is
 - The error contract a package publishes: the exception types it declares, and the family every `except` clause absorbs — where the author decided a fault was survivable
 - Source excerpts printed beneath the claims they back, and withheld when the file's hash no longer matches the receipt, when the span is a whole file rather than a place, or when the path resolves outside the analyzed root
@@ -44,7 +45,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Per-section provenance: which files each section's conclusions were read out of
 - Citation integrity verification that re-resolves every receipt against current source bytes
 - Self-consistency checks that read the generated document and fail it when the prose disagrees with the data it was projected from
-- Java declaration reading verified against `javac -Xprint` across all 3,064 files of `java.base`, with zero disagreements
+- Java declarations and supertypes verified against `javac -Xprint` across eleven JDK modules — roughly 18,000 files including `java.base`, `java.desktop` and `jdk.compiler` — with zero disagreements in either
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract
 - Machine-readable, pinned comparative benchmarks with source-receipt validation
