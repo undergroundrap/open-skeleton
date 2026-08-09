@@ -447,6 +447,74 @@ def _append_client_route_reconciliation(
         )
 
 
+# Module specifiers that name no package. A relative or absolute path is a
+# file in this repository, and `node:` is how a JavaScript runtime spells its
+# own standard library. Neither can appear in a manifest, so comparing them
+# against one manufactures a conflict at the highest severity this engine
+# assigns -- skill-cue reported "Operator scripts import /", from
+# `import { skillCards } from "../../src/lib/skillCards"`.
+NODE_BUILTIN_NAMES = frozenset(
+    {
+        "assert",
+        "buffer",
+        "child_process",
+        "cluster",
+        "console",
+        "crypto",
+        "dgram",
+        "dns",
+        "events",
+        "fs",
+        "http",
+        "http2",
+        "https",
+        "module",
+        "net",
+        "os",
+        "path",
+        "perf_hooks",
+        "process",
+        "querystring",
+        "readline",
+        "stream",
+        "string_decoder",
+        "timers",
+        "tls",
+        "tty",
+        "url",
+        "util",
+        "v8",
+        "vm",
+        "worker_threads",
+        "zlib",
+    }
+)
+
+
+def _dependency_name(target: str) -> str | None:
+    """The package a module specifier names, or None when it names none.
+
+    Written per ecosystem rather than per language because the rule differs:
+    Python separates with dots and JavaScript with slashes, so splitting a
+    specifier on `.` turned `../../src/lib/skillCards` into `/`.
+    """
+
+    specifier = target.strip()
+    if not specifier or specifier.startswith((".", "/", "#")):
+        return None
+    if specifier.startswith("node:"):
+        return None
+    if specifier.startswith("@"):
+        # A scoped npm package is two segments; one alone names nothing.
+        parts = specifier.split("/")
+        return "/".join(parts[:2]) if len(parts) >= 2 else None
+    if "/" in specifier:
+        return specifier.split("/", 1)[0]
+    if specifier in NODE_BUILTIN_NAMES:
+        return None
+    return specifier.split(".", 1)[0]
+
+
 def _append_dependency_conflicts(
     snapshot: Snapshot,
     *,
@@ -476,7 +544,9 @@ def _append_dependency_conflicts(
     for edge in edges:
         if edge.relationship != "imports" or not edge.source_path.startswith("scripts/"):
             continue
-        top_level = edge.target_ref.lstrip(".").split(".", 1)[0]
+        top_level = _dependency_name(edge.target_ref)
+        if top_level is None:
+            continue
         normalized = top_level.casefold().replace("_", "-")
         if (
             not normalized
