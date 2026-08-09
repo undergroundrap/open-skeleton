@@ -1550,8 +1550,9 @@ class RustLexicalAnalyzer:
                     text=(
                         f"{len(panic_receipts)} panicking call sites appear in Rust source "
                         "(`unwrap`, `expect`, `panic!`, `unreachable!`, `todo!`, "
-                        "`unimplemented!`, `assert!`); each aborts the thread rather than "
-                        "returning an error."
+                        "`unimplemented!`, `assert!`); on the failing path each aborts the "
+                        "thread rather than returning an error. Whether any of them can fail "
+                        "is not decided here."
                     ),
                     category="panic_site",
                     supporting=tuple(sorted(set(panic_receipts))[:200]),
