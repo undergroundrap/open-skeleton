@@ -110,16 +110,25 @@ BINARY_SUFFIXES = frozenset(
 )
 
 LANGUAGES_BY_SUFFIX = {
+    # An installer or a deployment step is often the only place a project
+    # writes down how it is actually run, and PowerShell was Unknown --
+    # on a Windows-first project whose own README is PowerShell, and whose
+    # sibling repository ships `install.ps1` as its entry point. Batch and
+    # the shell variants were missing for the same reason: nobody had a
+    # file of that kind in front of them at the time.
     # `.mjs` and `.cjs` are how Node spells an ES module and a CommonJS one,
     # and `.mts`/`.cts` are their TypeScript counterparts. Omitting them made
     # every such file Unknown, so no analyzer read it: billune's entire test
     # suite is one `.mjs` file, and the specification reported all seven of
     # its capabilities as reached by no test while the suite sat in `tests/`
     # with the `test` role already assigned to it.
+    ".bash": "Shell",
+    ".bat": "Batch",
     ".c": "C",
     ".cc": "C++",
     ".cjs": "JavaScript",
     ".cpp": "C++",
+    ".cmd": "Batch",
     ".cs": "C#",
     ".cts": "TypeScript",
     ".css": "CSS",
@@ -138,6 +147,9 @@ LANGUAGES_BY_SUFFIX = {
     ".mjs": "JavaScript",
     ".mts": "TypeScript",
     ".php": "PHP",
+    ".ps1": "PowerShell",
+    ".psd1": "PowerShell",
+    ".psm1": "PowerShell",
     ".proto": "Protocol Buffers",
     ".py": "Python",
     ".rb": "Ruby",
@@ -151,6 +163,7 @@ LANGUAGES_BY_SUFFIX = {
     ".tsx": "TypeScript JSX",
     ".txt": "Text",
     ".xml": "XML",
+    ".zsh": "Shell",
     ".yaml": "YAML",
     ".yml": "YAML",
 }

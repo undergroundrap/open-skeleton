@@ -64,3 +64,35 @@ class TestRoleConventionTests(TestCase):
     def test_a_name_merely_containing_the_word_is_not_a_suite(self) -> None:
         for path in ("src/latest.ts", "src/contest.js", "app/protest.py"):
             self.assertEqual(classify_role(Path(path)), "source", path)
+
+
+class ScriptLanguageTests(TestCase):
+    """An installer is often the only place a project says how it is run.
+
+    PowerShell was Unknown, on a Windows-first engine whose own README is
+    PowerShell and whose sibling repository ships `install.ps1` as its entry
+    point. hum-lang carried thirteen `.ps1` files under `tools/` -- its
+    release and readiness checks -- and none of them was typed, so no role
+    was assigned and nothing could be said about them.
+
+    Batch and the shell variants were missing for the same reason: nobody
+    had a file of that kind in front of them at the time.
+    """
+
+    def test_powershell_is_a_language(self) -> None:
+        for suffix in (".ps1", ".psm1", ".psd1"):
+            self.assertEqual(classify_language(Path("install" + suffix)), "PowerShell", suffix)
+
+    def test_batch_and_shell_variants_are_languages(self) -> None:
+        self.assertEqual(classify_language(Path("run.bat")), "Batch")
+        self.assertEqual(classify_language(Path("run.cmd")), "Batch")
+        self.assertEqual(classify_language(Path("run.bash")), "Shell")
+        self.assertEqual(classify_language(Path("run.zsh")), "Shell")
+
+    def test_a_typed_script_gets_the_source_role(self) -> None:
+        # Untyped meant roleless, and a roleless file is one nothing can say
+        # anything about.
+        self.assertEqual(classify_role(Path("tools/check_all.ps1")), "source")
+
+    def test_an_unrecognized_suffix_is_still_unknown(self) -> None:
+        self.assertEqual(classify_language(Path("thing.qqq")), "Unknown")
