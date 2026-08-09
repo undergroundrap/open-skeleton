@@ -604,12 +604,19 @@ def _supertypes_after(tokens: list[Token], start: int) -> tuple[str, ...]:
         # Only the outermost names are supertypes; a generic argument such as
         # the `String` of `implements List<String>` is not one.
         if collecting and generic_depth == 0:
+            # Every class extends `Object`, so writing it says nothing that is
+            # not already true of every type in the language. Six classes in
+            # the JDK spell it out and `javac -Xprint` normalizes it away;
+            # keeping it would put a vacuously true row in the one section a
+            # reader consults to learn what a type can stand in for.
+            if not continuing and token.value == "Object":
+                continue
             if continuing and found:
                 found[-1] = f"{found[-1]}.{token.value}"
             else:
                 found.append(token.value)
             continuing = False
-    return tuple(dict.fromkeys(found))
+    return tuple(name for name in dict.fromkeys(found) if name != "java.lang.Object")
 
 
 def enum_constants(tokens: list[Token]) -> list[tuple[str, str, int]]:

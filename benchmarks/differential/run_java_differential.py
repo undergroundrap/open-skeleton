@@ -60,6 +60,7 @@ from open_skeleton.analyzers.java_lexical import (
 DECLARATION = re.compile(
     r"^(?P<indent>\s*)(?P<modifiers>(?:[a-z]+(?:-[a-z]+)?\s+)*)"
     r"(?P<kind>@interface|interface|class|enum|record)\s+(?P<name>[A-Za-z_$][\w$]*)"
+    r"(?P<rest>.*)$"
 )
 
 
@@ -106,6 +107,91 @@ def reference_types(printed: str) -> set[str]:
         depth += line.count("{") - line.count("}")
         while stack and stack[-1][1] > depth:
             stack.pop()
+    return found
+
+
+def _simple(name: str) -> str:
+    return name.rsplit(".", 1)[-1]
+
+
+def supertype_names(rest: str) -> set[str]:
+    """Supertype simple names from a printed `extends`/`implements` clause.
+
+    Compared by simple name because `javac` prints them fully qualified and
+    this engine records them as the author wrote them. The question is which
+    supertypes a type declares, not how it spelled them.
+    """
+
+    text = rest.split("{", 1)[0]
+    while True:
+        depth = 0
+        stripped: list[str] = []
+        for character in text:
+            if character == "<":
+                depth += 1
+            elif character == ">":
+                depth = max(0, depth - 1)
+            elif depth == 0:
+                stripped.append(character)
+        reduced = "".join(stripped)
+        if reduced == text:
+            break
+        text = reduced
+    found: set[str] = set()
+    for keyword in ("extends", "implements"):
+        match = re.search(rf"\b{keyword}\b(?P<names>[^{{]*)", text)
+        if match is None:
+            continue
+        segment = match.group("names")
+        for terminator in ("implements", "permits"):
+            segment = segment.split(terminator)[0]
+        for piece in segment.split(","):
+            cleaned = piece.strip().rstrip("{").strip()
+            if cleaned:
+                found.add(_simple(cleaned))
+    # `extends Object` is implicit for every class and `javac` normalizes it
+    # away, so neither side should carry it.
+    return found - {"Object"}
+
+
+def reference_supertypes(printed: str) -> dict[str, set[str]]:
+    """What each printed type declares as a supertype."""
+
+    found: dict[str, set[str]] = {}
+    package = ""
+    stack: list[tuple[str, int]] = []
+    depth = 0
+    for raw in strip_block_comments(printed).splitlines():
+        line = raw.split("//")[0]
+        if line.startswith("package "):
+            package = line[len("package ") :].rstrip(";").strip()
+            stack, depth = [], 0
+            continue
+        match = DECLARATION.match(line)
+        if match:
+            owner = ".".join(name for name, _ in stack)
+            qualified = f"{owner}.{match.group('name')}" if owner else match.group("name")
+            key = f"{package}.{qualified}" if package else qualified
+            found[key] = supertype_names(match.group("rest"))
+            depth += line.count("{") - line.count("}")
+            stack.append((match.group("name"), depth))
+            continue
+        depth += line.count("{") - line.count("}")
+        while stack and stack[-1][1] > depth:
+            stack.pop()
+    return found
+
+
+def our_supertypes(root: Path) -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for path in sorted(root.rglob("*.java")):
+        tokens = tokenize(path.read_text(encoding="utf-8", errors="replace"))
+        package = package_name(tokens)
+        for item in declared_types(tokens):
+            if item.local:
+                continue
+            key = f"{package}.{item.name}" if package else item.name
+            found[key] = {_simple(name) for name in item.supertypes}
     return found
 
 
@@ -204,13 +290,33 @@ def main() -> int:
     missing = sorted(reference - ours)
     invented = sorted(ours - reference)
 
+    # Supertypes are compared as well as declarations. Eleven JDK modules
+    # agreed exactly on which types each file declares while
+    # `implements java.security.PrivilegedAction` was being read as three
+    # supertypes, two of them packages -- a differential is only as wide as
+    # what it compares, and this half cost nothing to add.
+    expected_super = reference_supertypes(printed)
+    actual_super = our_supertypes(root)
+    super_missing: list[str] = []
+    super_invented: list[str] = []
+    for key in sorted(set(expected_super) & set(actual_super)):
+        for name in sorted(expected_super[key] - actual_super[key]):
+            super_missing.append(f"{key}: {name}")
+        for name in sorted(actual_super[key] - expected_super[key]):
+            super_invented.append(f"{key}: {name}")
+
     print(f"reference types: {len(reference):,}   ours: {len(ours):,}")
     print(f"we missed: {len(missing):,}   we invented: {len(invented):,}")
+    print(f"supertypes we miss: {len(super_missing):,}   we invent: {len(super_invented):,}")
+    for line in super_missing[: arguments.show]:
+        print("  SUPERTYPE MISSED  ", line)
+    for line in super_invented[: arguments.show]:
+        print("  SUPERTYPE INVENTED", line)
     for name in missing[: arguments.show]:
         print("  MISSED  ", name)
     for name in invented[: arguments.show]:
         print("  INVENTED", name)
-    if missing or invented:
+    if missing or invented or super_missing or super_invented:
         print(
             "\nA disagreement is not a verdict. Check the source before changing "
             "the reader: on the first run of this harness every reported "
@@ -218,7 +324,7 @@ def main() -> int:
         )
     if scratch is not None:
         scratch.cleanup()
-    return 1 if (missing or invented) else 0
+    return 1 if (missing or invented or super_missing or super_invented) else 0
 
 
 if __name__ == "__main__":
