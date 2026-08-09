@@ -1852,3 +1852,69 @@ class UnreadLanguageReasonTests(TestCase):
     def test_a_language_with_no_recorded_reason_still_renders(self) -> None:
         markdown = render_spec_markdown(self._document(()))
         self.assertIn("| Hum | 229 | 0 |", markdown)
+
+
+class ProfileLanguageNeutralityTests(TestCase):
+    """The packaged profile explains no particular language to every reader.
+
+    A section's prose renders for every repository the profile is pointed at,
+    whether or not the claims underneath it exist. Framing added for Hum's
+    inline `needs` and `ensures` clauses therefore put a paragraph about Hum
+    tasks into the specification of a TypeScript project containing none.
+
+    The standing constraint on this engine is that it has to work on
+    anything, so this is a rule rather than a preference, and it is checked
+    rather than remembered.
+
+    Probe terms are deliberately exempt. A rendered query is how an absence
+    stays re-checkable, and a query naming a category is the design; prose
+    that assumes a language is the problem.
+    """
+
+    LANGUAGES = (
+        "Hum",
+        "Python",
+        "Rust",
+        "TypeScript",
+        "JavaScript",
+        "Java",
+        "Kotlin",
+        "Swift",
+        "Cargo",
+        "npm",
+    )
+
+    def _prose(self) -> list[tuple[str, str, str]]:
+        found: list[tuple[str, str, str]] = []
+
+        def walk(nodes: list[dict[str, Any]]) -> None:
+            for node in nodes:
+                for field in ("title", "concern", "framing"):
+                    text = node.get(field)
+                    if isinstance(text, str) and text:
+                        found.append((str(node.get("number")), field, text))
+                walk(node.get("children") or [])
+
+        payload = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "src/open_skeleton/spec/profiles/standard.json"
+            ).read_text(encoding="utf-8")
+        )
+        walk(payload["sections"])
+        return found
+
+    def test_no_section_prose_names_a_language(self) -> None:
+        offenders = [
+            f"§{number} {field} names {language}"
+            for number, field, text in self._prose()
+            for language in self.LANGUAGES
+            if language in text
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_the_check_reads_something(self) -> None:
+        # A rule that silently inspects nothing is worse than no rule.
+        prose = self._prose()
+        self.assertGreater(len(prose), 100)
+        self.assertTrue(any(field == "framing" for _, field, _ in prose))
