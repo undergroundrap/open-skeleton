@@ -213,7 +213,25 @@ def classify_role(path: Path) -> str:
         return "workflow"
     if name in MANIFEST_NAMES or name.endswith(".lock"):
         return "manifest"
-    if "test" in parts or "tests" in parts or name.startswith("test_") or ".test." in name:
+    # Every ecosystem spells this differently and getting it wrong is
+    # expensive in both directions: a suite read as production code reports
+    # its fixtures as the served surface, and a suite invisible as a suite
+    # reports every capability as reached by nothing.
+    #
+    # `_test.` is mandatory in Go and common in Python; `.spec.` is the Jest
+    # and Angular convention; `_spec.` is RSpec's. All three were missing, so
+    # `handler_test.go`, `app.spec.ts` and `models_spec.rb` were `source`.
+    # `selftest` is a harness a project runs against itself.
+    if (
+        "test" in parts
+        or "tests" in parts
+        or name.startswith("test_")
+        or ".test." in name
+        or "_test." in name
+        or ".spec." in name
+        or "_spec." in name
+        or "selftest" in name
+    ):
         return "test"
     if suffix in {".md", ".rst"} or "docs" in parts or "documentation" in parts:
         return "documentation"

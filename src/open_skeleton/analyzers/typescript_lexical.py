@@ -329,6 +329,81 @@ def _module_names(paths: Iterable[str]) -> dict[str, str]:
     return resolved
 
 
+# Words that take a parenthesis without calling anything, plus the two that
+# introduce a name rather than invoke one.
+NON_CALL_WORDS = frozenset(
+    {
+        "if",
+        "while",
+        "for",
+        "switch",
+        "catch",
+        "return",
+        "throw",
+        "typeof",
+        "instanceof",
+        "await",
+        "yield",
+        "delete",
+        "void",
+        "in",
+        "of",
+        "do",
+        "else",
+        "case",
+    }
+)
+
+
+def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
+    """Names invoked as calls, as `(callee, line)`.
+
+    Until this existed the TypeScript reader emitted `calls` edges only for
+    `fetch`, so every consumer walking the call graph returned almost nothing
+    for JavaScript and TypeScript. Capability tracing is the one that matters:
+    billune produced zero call edges and coast-most fourteen, and both
+    reported every capability as reached by no test while their suites sat in
+    the repository.
+
+    The Rust reader hit exactly this and was fixed on its own; the fix never
+    crossed. That is the third time in one day a naming-or-graph defect turned
+    out to live in more than the reader it was found in.
+
+    Resolution is lexical, so this records a name rather than a target:
+    `store.load(x)` records `load` without deciding which `load` it is, the
+    same guarantee the rest of this module makes. Four things that look like
+    calls are excluded because none of them is one -- control flow that takes
+    a parenthesis, a `function` or `class` declaration's own name, a `new`
+    expression's constructor, and an import or require, which name a module
+    rather than call a definition.
+    """
+
+    found: list[tuple[str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or index + 1 >= total:
+            continue
+        following = tokens[index + 1]
+        if following.kind != "punctuation" or following.value != "(":
+            continue
+        name = token.value
+        if name in NON_CALL_WORDS or name in JS_KEYWORDS:
+            continue
+        if name in {"import", "require", "function", "class"}:
+            continue
+        previous = tokens[index - 1] if index else None
+        # `function handler(` and `new Widget(` name something rather than
+        # call it.
+        if (
+            previous is not None
+            and previous.kind == "identifier"
+            and previous.value in {"function", "class", "new"}
+        ):
+            continue
+        found.append((name, token.line))
+    return found
+
+
 @dataclass(frozen=True, slots=True)
 class Declaration:
     """One name a module introduces, with the kind the tokens actually support."""
@@ -1932,6 +2007,35 @@ class TypeScriptLexicalAnalyzer:
                     "medium",
                     test_evidence,
                     file_record.path,
+                )
+
+            # Call edges. Without these the graph has nodes and no traversal,
+            # and capability tracing -- which follows calls out of test and
+            # harness files -- returns nothing for every JavaScript and
+            # TypeScript repository regardless of how well tested it is.
+            for callee, line_number in _call_sites(file_tokens):
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge",
+                            (
+                                snapshot.snapshot_id,
+                                module_id,
+                                "calls",
+                                callee,
+                                line_number,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=module_id,
+                        source_path=file_record.path,
+                        relationship="calls",
+                        target_ref=callee,
+                        target_symbol_id=None,
+                        evidence_id=None,
+                        analyzer=ANALYZER_VERSION,
+                    )
                 )
             analyzed_files += 1
 

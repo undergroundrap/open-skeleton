@@ -96,8 +96,10 @@ def run(
     unread = [
         (
             item.language,
-            f"{item.language}: {item.analyzed_files:,} of {item.eligible_files:,} "
-            f"file(s) read ({item.coverage_ratio:.0%})",
+            (
+                f"{item.language}: {item.analyzed_files:,} of {item.eligible_files:,} "
+                f"file(s) read ({item.coverage_ratio:.0%})"
+            ),
         )
         for item in result.coverage
         if item.eligible_files and item.coverage_ratio < minimum_coverage
@@ -110,19 +112,24 @@ def run(
     silent = [
         (
             item.language,
-            f"{item.language}: {item.analyzed_files:,} file(s) read, "
-            f"{(item.yield_ratio or 0.0):.0%} produced a finding",
+            (
+                f"{item.language}: {item.analyzed_files:,} file(s) read, "
+                f"{(item.yield_ratio or 0.0):.0%} produced a finding"
+            ),
         )
         for item in result.coverage
         if item.analyzed_files and (item.yield_ratio or 0.0) < minimum_yield
     ]
-    blocking += [line for language, line in silent if language in required]
     blocking = [line for language, line in unread if language in required]
+    blocking += [line for language, line in silent if language in required]
     if blocking:
-        _emit("COVERAGE BELOW THRESHOLD — required by --require-language:", blocking)
+        _emit("REQUIRED LANGUAGE BELOW THRESHOLD:", blocking)
         problems += 1
-    elif unread:
-        _emit("thin coverage (not required, reported once):", [line for _, line in unread])
+    elif unread or silent:
+        _emit(
+            "thin coverage (not required, reported once):",
+            [line for _, line in unread] + [line for _, line in silent],
+        )
 
     findings = audit_claims(
         tuple(item.to_dict() for item in result.claims),

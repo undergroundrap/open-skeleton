@@ -9,6 +9,7 @@ from unittest import TestCase
 
 from open_skeleton.analyzers.typescript_lexical import (
     TypeScriptLexicalAnalyzer,
+    _call_sites,
     _declarations,
     _environment_reads,
     _exported_names,
@@ -604,3 +605,54 @@ class ModuleNameCollisionTests(TestCase):
         paths = ["p/a.ts", "p/a.js", "p/a.mjs", "p/b.ts"]
         found = _module_names(paths)
         self.assertEqual(len(set(found.values())), len(paths))
+
+
+class CallSiteTests(TestCase):
+    """A call graph with no edges is a graph nothing can traverse.
+
+    This reader emitted `calls` edges for `fetch` and nothing else, so
+    capability tracing -- which follows calls out of test and harness files --
+    returned nothing for every JavaScript and TypeScript repository regardless
+    of how well tested it was. billune produced zero call edges across its
+    whole tree and coast-most fourteen.
+
+    The Rust reader had the identical gap and was fixed on its own; the fix
+    never crossed. Its docstring even records the symptom, which is what makes
+    this worth writing down rather than quietly repairing.
+    """
+
+    def _names(self, source: str) -> set[str]:
+        return {name for name, _ in _call_sites(_tokens(source))}
+
+    def test_a_plain_call_is_recorded(self) -> None:
+        self.assertEqual(self._names("const v = load(id);"), {"load"})
+
+    def test_a_method_call_records_the_method_name(self) -> None:
+        # Resolution is lexical: this records `save` without deciding which
+        # `save` it is, the same guarantee the rest of the module makes.
+        self.assertEqual(self._names("store.save(y);"), {"save"})
+
+    def test_control_flow_taking_a_parenthesis_is_not_a_call(self) -> None:
+        source = "if (ready) { while (going) { for (const a of b) { switch (k) {} } } }"
+        self.assertEqual(self._names(source), set())
+
+    def test_a_declaration_does_not_call_its_own_name(self) -> None:
+        self.assertEqual(self._names("function handler(req) { return 1; }"), set())
+
+    def test_construction_is_not_recorded_as_a_call(self) -> None:
+        self.assertEqual(self._names("const w = new Widget(1);"), set())
+
+    def test_a_module_specifier_is_not_a_callee(self) -> None:
+        # `import('./m')` and `require('./m')` name a module, not a definition.
+        self.assertEqual(self._names("import('./m'); require('./n');"), set())
+
+    def test_a_tagged_template_is_not_a_call(self) -> None:
+        self.assertEqual(self._names("const t = tag`x ${y}`;"), set())
+
+    def test_calls_inside_a_declaration_body_are_still_found(self) -> None:
+        source = "export default function page() { return render(build()); }"
+        self.assertEqual(self._names(source), {"render", "build"})
+
+    def test_each_call_carries_the_line_it_sits_on(self) -> None:
+        found = dict(_call_sites(_tokens("a();\n\nb();\n")))
+        self.assertEqual(found, {"a": 1, "b": 3})
