@@ -143,6 +143,48 @@ no file-level evidence at all, a category concentrated in a file that carries
 little else. A finding is a place to read before publishing a number, not a
 defect — `--strict` exits non-zero if you want it as a gate.
 
+## Gating an agent loop
+
+An agent that rewrites a repository can consult the evidence between turns.
+The temptation is to put the specification in the prompt; it is roughly
+49,000 tokens, and a document read every turn stops being read at all.
+
+```powershell
+python scripts\turn_gate.py --repo C:\path\to\repository --fast
+```
+
+The gate analyzes, audits, and — without `--fast` — renders the document and
+checks it against itself and against the ledger. It prints nothing when
+everything passes. The exit code is the interface:
+
+| Code | Meaning | What a loop should do |
+|---|---|---|
+| `0` | Every gate passed | Proceed |
+| `1` | A gate found something, reason on stdout | Surface it |
+| `2` | The gate could not run | Retry — **not** a verdict on the work |
+
+That third code exists because the distinction is easy to lose and expensive
+to lose. An agent wired to treat any non-zero status as rejection will reject
+good work whenever the ledger is busy, for a reason no author can act on. A
+gate is only as useful as its false-positive rate: the first version of this
+one fired on every git repository ever analyzed, which would have rejected
+every change forever until somebody turned the gate off.
+
+Two guards protect against a green result that means nothing:
+
+```powershell
+python scripts\turn_gate.py --repo . --require-language Hum --min-coverage 0.95 --min-yield 0.1
+```
+
+`--require-language` fails when a language the scanner found is read below
+`--min-coverage`. `--min-yield` fails when files are read and almost none
+produces a claim. They answer different questions — coverage is whether the
+analyzer reached the code, yield is whether it understood any of it — and
+conflating them lets a repository be certified by a tool that read every byte
+and concluded nothing. `--min-yield` defaults to `0` deliberately: reading a
+file and having nothing to say about it is a legitimate answer, and a gate
+that demands findings teaches an analyzer to invent them.
+
 ## Precision under hostile input
 
 Every fixture used to build these analyzers was written by someone trying to
