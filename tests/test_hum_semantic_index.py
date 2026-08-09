@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from open_skeleton.analyzers.hum_semantic_index import HumSemanticIndexAnalyzer
+from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
 
 
@@ -205,7 +206,7 @@ class HumGraphFactTests(TestCase):
 
     SOURCE = "task divide\n  needs: b != 0\n  ensures: result * b == a\n  body\n"
 
-    def _analyze(self, document: dict[str, object]) -> object:
+    def _analyze(self, document: dict[str, object]) -> AnalysisResult:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             root = workspace / "repo"
