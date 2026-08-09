@@ -73,6 +73,25 @@ PRODUCTION_CATEGORIES = frozenset(
         # module was written for, and the category was simply not listed.
         "http_client_inventory",
         "browser_storage",
+        # The rest of what a running program does. These were unlisted for
+        # no reason anyone recorded, and the list is load-bearing
+        # configuration wearing the costume of a constant: the check that
+        # missed a test suite's `fetch` was correct and simply never asked
+        # about that category. Each of these was measured across six
+        # repositories before being added and flags nothing today, so they
+        # cost no noise and cover the case when it arrives.
+        "application_entry",
+        "caught_exception",
+        "configuration_read",
+        "error_surface",
+        "exception_type",
+        "failure_surface",
+        "panic_site",
+        "process_termination",
+        "public_api",
+        "storage",
+        "trait_implementation",
+        "ui_state",
     }
 )
 # Below this many claims a category cannot be judged: one claim from one file
