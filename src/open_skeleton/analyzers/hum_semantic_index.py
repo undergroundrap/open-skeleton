@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,151 @@ def _normalize_graph_path(root: Path, value: str) -> str | None:
             return None
     normalized = candidate.as_posix().removeprefix("./")
     return normalized or None
+
+
+def _graph_facts(
+    document: dict[str, Any],
+    *,
+    snapshot: Snapshot,
+    created_at: str,
+    files_by_path: dict[str, Any],
+    root: Path,
+    index_hash: str,
+) -> tuple[list[EvidenceRecord], list[ClaimRecord]]:
+    """Claims for what the compiler itself recorded about the sources.
+
+    The index carries more than structure. `hum graph` emits its own
+    diagnostics with codes and spans, and the predicate places that make up a
+    task's declared contract. Ingesting only the shape of the program read
+    229 files and produced one claim -- full coverage and no yield, a metric
+    green because the analyzer reached the code and silent about whether it
+    understood any of it.
+
+    Nothing here is invented. The compiler decided which facts were worth
+    emitting and where they point; this states them and cites the line.
+    """
+
+    evidence: list[EvidenceRecord] = []
+    claims: list[ClaimRecord] = []
+
+    def receipt(path: str, line: int, kind: str, symbol: str) -> str | None:
+        record = files_by_path.get(path)
+        if record is None:
+            return None
+        source = root / Path(path)
+        try:
+            text = source.read_text(encoding="utf-8", errors="strict").splitlines()
+        except (OSError, UnicodeDecodeError):
+            return None
+        line = min(max(1, line), max(1, len(text)))
+        excerpt = text[line - 1] if text else ""
+        identifier = stable_id(
+            "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
+        )
+        evidence.append(
+            EvidenceRecord(
+                evidence_id=identifier,
+                snapshot_id=snapshot.snapshot_id,
+                path=path,
+                start_line=line,
+                end_line=line,
+                symbol=symbol,
+                evidence_kind=kind,
+                excerpt_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
+                analyzer=ANALYZER_VERSION,
+                created_at=created_at,
+            )
+        )
+        return identifier
+
+    def claim(text: str, category: str, supporting: tuple[str, ...], importance: str) -> None:
+        claims.append(
+            ClaimRecord(
+                claim_id=stable_id(
+                    "claim", (snapshot.snapshot_id, category, text, index_hash, ANALYZER_VERSION)
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                claim=text,
+                category=category,
+                status="verified",
+                confidence=1.0,
+                importance=importance,
+                produced_by=ANALYZER_VERSION,
+                created_at=created_at,
+                verified_at=created_at,
+                supporting_evidence=supporting,
+                invalidation_keys=(f"hum:index:{index_hash}",),
+                alternative_hypotheses=(
+                    (
+                        "These are the compiler's own findings at the revision the index was "
+                        "generated from; the index carries no source hashes, so a source edited "
+                        "afterwards is described by a stale fact."
+                    ),
+                ),
+            )
+        )
+
+    # Diagnostics, grouped by code. One claim per code rather than per
+    # occurrence: a reader wants to know that a rule fires and where to look,
+    # and four hundred rows of the same rule is the shape that teaches a
+    # reader to skip the section.
+    grouped: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    for entry in document.get("diagnostics") or []:
+        if not isinstance(entry, dict):
+            continue
+        code = str(entry.get("code") or "")
+        title = str(entry.get("title") or "")
+        severity = str(entry.get("severity") or "")
+        span = entry.get("span")
+        if not code or not isinstance(span, dict):
+            continue
+        path = _normalize_graph_path(root, str(span.get("file") or ""))
+        if path is None:
+            continue
+        supporting = receipt(path, _span_line(span), "hum_diagnostic", code)
+        if supporting is not None:
+            grouped[(code, title, severity)].append(supporting)
+
+    for (code, title, severity), receipts in sorted(grouped.items()):
+        noun = "error" if severity == "error" else severity or "diagnostic"
+        text = (
+            f"The Hum compiler reports {len(receipts)} {noun}(s) of {code} "
+            f"({title}) in the analyzed sources."
+        )
+        claim(
+            text,
+            "hum_diagnostic",
+            tuple(receipts[:24]),
+            "high" if severity == "error" else "medium",
+        )
+
+    # Declared contracts. A predicate place is a clause a task states about
+    # itself, which is the closest thing in the language to a specification
+    # the code carries.
+    contracts: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    for entry in document.get("predicate_place_facts") or []:
+        if not isinstance(entry, dict):
+            continue
+        task = str(entry.get("task") or "")
+        section = str(entry.get("section") or "")
+        span = entry.get("span")
+        if not task or not section or not isinstance(span, dict):
+            continue
+        path = _normalize_graph_path(root, str(span.get("file") or ""))
+        if path is None:
+            continue
+        supporting = receipt(path, _span_line(span), "hum_contract", f"{task}.{section}")
+        if supporting is not None:
+            contracts[(path, task, section)].append(supporting)
+
+    for (path, task, section), receipts in sorted(contracts.items()):
+        text = (
+            f"Task `{task}` in {path} states {len(receipts)} `{section}` clause(s). "
+            "This is a contract the code declares about itself, not a check that it holds."
+        )
+        claim(text, "hum_contract", tuple(receipts[:12]), "high")
+
+    return evidence, claims
 
 
 class HumSemanticIndexAnalyzer:
@@ -319,6 +465,20 @@ class HumSemanticIndexAnalyzer:
                         analyzer=ANALYZER_VERSION,
                     )
                 )
+
+        for _, graph_document in (
+            (digest, doc) for digest, doc in ((d[1], d[2]) for d in documents)
+        ):
+            extra_evidence, extra_claims = _graph_facts(
+                graph_document,
+                snapshot=snapshot,
+                created_at=created_at,
+                files_by_path=files_by_path,
+                root=snapshot.root,
+                index_hash=index_hash,
+            )
+            evidence.extend(extra_evidence)
+            claims.extend(extra_claims)
 
         raw_summary = document.get("summary")
         summary: dict[str, Any] = raw_summary if isinstance(raw_summary, dict) else {}

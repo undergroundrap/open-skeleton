@@ -187,3 +187,133 @@ class ShardedIndexTests(TestCase):
             guidance = result.coverage[0].failures[0]
             self.assertIn("accepts multiple paths", guidance)
             self.assertIn("Repeat --hum-index", guidance)
+
+
+class HumGraphFactTests(TestCase):
+    """The compiler's own findings, stated with the line they point at.
+
+    Ingesting only the shape of a program read 229 files of hum-lang and
+    produced one claim: full coverage and no yield, a number green because
+    the analyzer reached the code and silent about whether it understood any
+    of it.
+
+    The index already carried more. `hum graph` emits its own diagnostics
+    with codes and spans, and the predicate places that make up a task's
+    declared contract, so none of this is invented -- the compiler decided
+    which facts were worth emitting and where they point.
+    """
+
+    SOURCE = "task divide\n  needs: b != 0\n  ensures: result * b == a\n  body\n"
+
+    def _analyze(self, document: dict[str, object]) -> object:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            (root / "divide.hum").write_text(self.SOURCE, encoding="utf-8")
+            index = workspace / "graph.json"
+            index.write_text(json.dumps(document), encoding="utf-8")
+            return HumSemanticIndexAnalyzer([index]).analyze(scan_repository(root))
+
+    def _document(self, **extra: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "schema": "hum.semantic_graph.v0",
+            "summary": {"files": 1, "items": 1, "tasks": 1, "tests": 0, "errors": 0},
+            "files": [{"path": "divide.hum", "module": "divide", "symbols": []}],
+        }
+        base.update(extra)
+        return base
+
+    def test_a_declared_contract_becomes_a_claim_with_a_receipt(self) -> None:
+        result = self._analyze(
+            self._document(
+                predicate_place_facts=[
+                    {
+                        "task": "divide",
+                        "section": "needs",
+                        "span": {"file": "divide.hum", "line": 2, "column": 3},
+                    }
+                ]
+            )
+        )
+        contracts = [c for c in result.claims if c.category == "hum_contract"]
+        self.assertEqual(len(contracts), 1)
+        self.assertIn("`divide`", contracts[0].claim)
+        self.assertIn("`needs` clause", contracts[0].claim)
+        self.assertTrue(contracts[0].supporting_evidence)
+
+    def test_a_contract_claim_does_not_assert_the_contract_holds(self) -> None:
+        # A declared clause is a statement the code makes about itself. That
+        # it is checked anywhere is a different fact this does not have.
+        result = self._analyze(
+            self._document(
+                predicate_place_facts=[
+                    {
+                        "task": "divide",
+                        "section": "ensures",
+                        "span": {"file": "divide.hum", "line": 3},
+                    }
+                ]
+            )
+        )
+        claim = next(c for c in result.claims if c.category == "hum_contract")
+        self.assertIn("not a check that it holds", claim.claim)
+
+    def test_diagnostics_are_grouped_by_code_rather_than_listed(self) -> None:
+        # Four hundred rows of one rule is the shape that teaches a reader to
+        # skip the section.
+        result = self._analyze(
+            self._document(
+                diagnostics=[
+                    {
+                        "code": "H0107",
+                        "title": "task missing needs section",
+                        "severity": "warning",
+                        "span": {"file": "divide.hum", "line": line},
+                    }
+                    for line in (1, 2, 3)
+                ]
+            )
+        )
+        found = [c for c in result.claims if c.category == "hum_diagnostic"]
+        self.assertEqual(len(found), 1)
+        self.assertIn("3 warning(s) of H0107", found[0].claim)
+        self.assertEqual(len(found[0].supporting_evidence), 3)
+
+    def test_an_error_outranks_a_warning(self) -> None:
+        result = self._analyze(
+            self._document(
+                diagnostics=[
+                    {
+                        "code": "H0612",
+                        "title": "app start duplicated",
+                        "severity": "error",
+                        "span": {"file": "divide.hum", "line": 1},
+                    }
+                ]
+            )
+        )
+        claim = next(c for c in result.claims if c.category == "hum_diagnostic")
+        self.assertEqual(claim.importance, "high")
+        self.assertIn("1 error(s)", claim.claim)
+
+    def test_a_span_outside_the_snapshot_is_not_cited(self) -> None:
+        # An index may describe files the snapshot excluded. Citing one would
+        # produce a receipt pointing at nothing.
+        result = self._analyze(
+            self._document(
+                diagnostics=[
+                    {
+                        "code": "H0107",
+                        "title": "t",
+                        "severity": "warning",
+                        "span": {"file": "elsewhere/other.hum", "line": 1},
+                    }
+                ]
+            )
+        )
+        self.assertEqual([c for c in result.claims if c.category == "hum_diagnostic"], [])
+
+    def test_an_index_without_either_section_still_analyzes(self) -> None:
+        result = self._analyze(self._document())
+        self.assertEqual(result.coverage[0].analyzed_files, 1)
