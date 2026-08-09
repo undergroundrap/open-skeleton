@@ -296,7 +296,7 @@ def declared_types(tokens: list[Token]) -> list[JavaType]:
     """
 
     found: list[JavaType] = []
-    stack: list[tuple[str, int]] = []
+    stack: list[tuple[str, int, bool]] = []
     depth = 0
     position = 0
     total = len(tokens)
@@ -325,9 +325,17 @@ def declared_types(tokens: list[Token]) -> list[JavaType]:
             continue
         # A member sits directly in its owner's body. Anything deeper is
         # inside a method, constructor or initializer.
+        #
+        # Locality is inherited. `JSlider` declares a local class inside a
+        # method, and that class declares a member of its own: the member sits
+        # correctly in its owner's body and is still reachable by no qualified
+        # name, because its owner is not. Judging each type only against its
+        # immediate owner published `JSlider.SmartHashtable.LabelUIResource`,
+        # the one disagreement in 12,000 files of the JDK.
         owner_body_depth = stack[-1][1] if stack else 0
-        is_local = depth > owner_body_depth
-        owner = ".".join(name for name, _ in stack)
+        owner_is_local = stack[-1][2] if stack else False
+        is_local = depth > owner_body_depth or owner_is_local
+        owner = ".".join(name for name, _, _ in stack)
         qualified = f"{owner}.{name_token.value}" if owner else name_token.value
         found.append(
             JavaType(
@@ -341,7 +349,7 @@ def declared_types(tokens: list[Token]) -> list[JavaType]:
                 local=is_local,
             )
         )
-        stack.append((name_token.value, depth + 1))
+        stack.append((name_token.value, depth + 1, is_local))
         position += 2
     return found
 

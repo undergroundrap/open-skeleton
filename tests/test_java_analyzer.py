@@ -92,6 +92,23 @@ class DeclaredTypeTests(TestCase):
         self.assertTrue(found["Outer.Local"])
         self.assertFalse(found["Outer.Member"])
 
+    def test_locality_is_inherited_by_a_local_class_member(self) -> None:
+        # `JSlider` declares a local class inside a method, and that class
+        # declares a member of its own. The member sits correctly in its
+        # owner's body and is reachable by no qualified name, because its
+        # owner is not. Judging each type only against its immediate owner
+        # published `JSlider.SmartHashtable.LabelUIResource` -- the single
+        # disagreement across twelve thousand files of the JDK.
+        source = (
+            "class Outer { void go() { class Local { class Inner {} } } "
+            "static class Member { class Deep {} } }"
+        )
+        found = {item.name: item.local for item in declared_types(tokenize(source))}
+        self.assertTrue(found["Outer.Local"])
+        self.assertTrue(found["Outer.Local.Inner"])
+        self.assertFalse(found["Outer.Member"])
+        self.assertFalse(found["Outer.Member.Deep"])
+
     def test_an_anonymous_class_declares_no_type(self) -> None:
         source = "class A { void go() { Runnable r = new Runnable() { public void run() {} }; } }"
         self.assertEqual([item.name for item in declared_types(tokenize(source))], ["A"])
