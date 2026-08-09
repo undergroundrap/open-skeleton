@@ -1918,3 +1918,62 @@ class ProfileLanguageNeutralityTests(TestCase):
         prose = self._prose()
         self.assertGreater(len(prose), 100)
         self.assertTrue(any(field == "framing" for _, field, _ in prose))
+
+
+class TracingBlindSpotTests(TestCase):
+    """Tests that reach code without leaving a call edge.
+
+    billune's suite renders the whole application and asserts on its status,
+    its content type and its security headers. It imports the built bundle
+    and names no source symbol, so call-edge tracing finds nothing and the
+    summary reported all seven of its capabilities as reached by no test --
+    true, and read by anyone as an untested repository.
+
+    The distinction is worth a sentence: a capability nothing exercises and a
+    capability exercised in a way this tracing cannot follow are different
+    findings, and only one of them is a gap.
+    """
+
+    def _document(self, exercised: bool, tests: bool) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            document = build_spec(ledger, load_profile())
+
+        capability = Capability(
+            capability_id="C-001",
+            label="vault",
+            kind="module",
+            routes=(),
+            symbols=("pkg.vault.open",),
+            paths=("pkg/vault.ts",),
+            claim_ids=(),
+            evidence_ids=(),
+            exercised_by=("tests/x.ts calls open",) if exercised else (),
+        )
+        sections = document.sections
+        if not tests:
+            sections = tuple(
+                replace(
+                    item,
+                    findings=tuple(claim for claim in item.findings if claim.category != "testing"),
+                )
+                for item in sections
+            )
+        return replace(document, capabilities=(capability,), sections=sections)
+
+    def test_a_repository_with_tests_and_no_traced_capability_says_so(self) -> None:
+        markdown = render_spec_markdown(self._document(exercised=False, tests=True))
+        self.assertIn("does declare tests and none of them calls a capability by name", markdown)
+
+    def test_a_repository_with_no_tests_at_all_is_not_excused(self) -> None:
+        # Nothing to be blind to. The plain reading is the correct one.
+        markdown = render_spec_markdown(self._document(exercised=False, tests=False))
+        self.assertNotIn("does declare tests and none of them", markdown)
+
+    def test_a_traced_capability_suppresses_the_sentence(self) -> None:
+        markdown = render_spec_markdown(self._document(exercised=True, tests=True))
+        self.assertNotIn("does declare tests and none of them", markdown)

@@ -110,10 +110,18 @@ BINARY_SUFFIXES = frozenset(
 )
 
 LANGUAGES_BY_SUFFIX = {
+    # `.mjs` and `.cjs` are how Node spells an ES module and a CommonJS one,
+    # and `.mts`/`.cts` are their TypeScript counterparts. Omitting them made
+    # every such file Unknown, so no analyzer read it: billune's entire test
+    # suite is one `.mjs` file, and the specification reported all seven of
+    # its capabilities as reached by no test while the suite sat in `tests/`
+    # with the `test` role already assigned to it.
     ".c": "C",
     ".cc": "C++",
+    ".cjs": "JavaScript",
     ".cpp": "C++",
     ".cs": "C#",
+    ".cts": "TypeScript",
     ".css": "CSS",
     ".go": "Go",
     ".h": "C/C++ Header",
@@ -127,6 +135,8 @@ LANGUAGES_BY_SUFFIX = {
     ".kt": "Kotlin",
     ".lua": "Lua",
     ".md": "Markdown",
+    ".mjs": "JavaScript",
+    ".mts": "TypeScript",
     ".php": "PHP",
     ".proto": "Protocol Buffers",
     ".py": "Python",

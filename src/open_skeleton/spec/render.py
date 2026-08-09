@@ -891,11 +891,34 @@ def _executive_summary(document: SpecDocument) -> list[str]:
         # truncation only became visible against a workspace of nine.
         if len(untraced) > len(shown):
             names += f", and {len(untraced) - len(shown):,} more"
+        # A suite that drives a built artifact leaves no call edge into source,
+        # so tracing sees nothing and the tally reads as an untested
+        # repository. billune has an end-to-end test that renders the app and
+        # asserts on its security headers; it imports `dist/server/index.js`,
+        # names no source symbol, and every one of its capabilities was
+        # reported as reached by nothing. Saying which of the two situations
+        # this is costs a sentence, and is the difference between a fact and
+        # an accusation.
+        tested = any(
+            claim.category == "testing"
+            for section in document.sections
+            for claim in section.findings
+        )
+        blind = (
+            (
+                " This repository does declare tests and none of them calls a capability by "
+                "name: a suite that drives a built artifact or an HTTP surface reaches the "
+                "code without leaving a call edge to follow, which is invisible to this "
+                "tracing rather than absent from the repository."
+            )
+            if tested and len(untraced) == len(document.capabilities)
+            else ""
+        )
         lines.append(
             f"### Capabilities with no verifying reference\n\n"
             f"{len(untraced):,} of {len(document.capabilities):,}: {names}. "
             "Static resolution cannot see dynamic dispatch, so treat each as a "
-            "candidate for review rather than proof of absent testing.\n\n"
+            f"candidate for review rather than proof of absent testing.{blind}\n\n"
         )
 
     if urgent:
