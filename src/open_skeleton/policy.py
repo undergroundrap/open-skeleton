@@ -222,16 +222,24 @@ def classify_role(path: Path) -> str:
     # and Angular convention; `_spec.` is RSpec's. All three were missing, so
     # `handler_test.go`, `app.spec.ts` and `models_spec.rb` were `source`.
     # `selftest` is a harness a project runs against itself.
-    if (
-        "test" in parts
-        or "tests" in parts
-        or name.startswith("test_")
+    # A directory that says a person runs this outranks a filename that
+    # merely looks like a suite. `scripts/smoke_test.py` is named like a test
+    # and contains none: 417 lines of argparse and a hand-rolled `check`
+    # helper, from which a runner would collect nothing. Classifying it by
+    # name alone withdrew the true claim that the repository has no
+    # conventional test files, which the benchmark caught as lost recall.
+    operator_directory = bool({"scripts", "tools", "bin"} & parts)
+    named_like_a_test = (
+        name.startswith("test_")
         or ".test." in name
         or "_test." in name
         or ".spec." in name
         or "_spec." in name
         or "selftest" in name
-    ):
+    )
+    if "test" in parts or "tests" in parts:
+        return "test"
+    if named_like_a_test and not operator_directory:
         return "test"
     if suffix in {".md", ".rst"} or "docs" in parts or "documentation" in parts:
         return "documentation"
