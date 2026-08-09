@@ -26,6 +26,8 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -613,6 +615,37 @@ def _macro_body_spans(tokens: list[Token]) -> list[tuple[int, int]]:
     return spans
 
 
+def _module_names(paths: Iterable[str]) -> dict[str, str]:
+    """Rust path per file, disambiguated where two crate roots share a name.
+
+    A package holding both `src/lib.rs` and `src/main.rs` has two crate roots
+    and Cargo names them both after the package, so both files reduced to the
+    same Rust path. The document then carried two claims with one subject and
+    different numbers -- `cranelift_feasibility declares 1 fallible
+    function(s)` directly above `cranelift_feasibility declares 16` -- which
+    reads as a contradiction and is really two crates.
+
+    The library keeps the bare name because that is the path other crates
+    really use to reach its items. The colliding roots take their file stem
+    as a segment: a binary crate's items cannot be named from outside it at
+    all, so there is no true external path for the added segment to
+    contradict, and it says which file the facts came from.
+    """
+
+    claimed: dict[str, list[str]] = defaultdict(list)
+    for path in paths:
+        claimed[_module_name(path)].append(path)
+    resolved: dict[str, str] = {}
+    for name, owners in claimed.items():
+        if len(owners) == 1:
+            resolved[owners[0]] = name
+            continue
+        for path in owners:
+            stem = path.rsplit("/", 1)[-1].removesuffix(".rs")
+            resolved[path] = name if stem == "lib" else f"{name}::{stem}"
+    return resolved
+
+
 def _declared_items(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """`(kind, name, line)` for the items a file actually declares.
 
@@ -1014,6 +1047,7 @@ class RustLexicalAnalyzer:
         failures: list[str] = []
 
         eligible = [item for item in snapshot.files if item.language in ELIGIBLE_LANGUAGES]
+        module_names = _module_names(item.path for item in eligible)
         analyzed_files = 0
         unsafe_receipts: list[str] = []
         unsafe_files: set[str] = set()
@@ -1077,7 +1111,7 @@ class RustLexicalAnalyzer:
                 continue
 
             lines = source.splitlines()
-            module = _module_name(file_record.path)
+            module = module_names[file_record.path]
             tokens = tokenize(source)
             file_names = _name_index(tokens)
             file_statics = _mutable_statics(tokens)

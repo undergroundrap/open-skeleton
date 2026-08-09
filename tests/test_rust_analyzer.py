@@ -15,6 +15,7 @@ from open_skeleton.analyzers.rust_lexical import (
     _error_surface,
     _impl_methods,
     _module_name,
+    _module_names,
     _mutable_statics,
     _name_index,
     _struct_fields,
@@ -596,3 +597,41 @@ class NegatedCallTests(TestCase):
     def test_a_macro_invocation_body_is_still_excluded(self) -> None:
         source = "fn a() { quote! { impl Loud for Thing {} } }"
         self.assertEqual(_trait_implementations(tokenize(source)), [])
+
+
+class CrateRootCollisionTests(TestCase):
+    """Two crate roots in one package do not share one name.
+
+    A package holding both `src/lib.rs` and `src/main.rs` has a library crate
+    and a binary crate, and Cargo names both after the package, so both files
+    reduced to the same Rust path. The document then carried two claims with
+    the same subject and different numbers -- `cranelift_feasibility declares
+    1 fallible function(s)` above `cranelift_feasibility declares 16` -- which
+    reads as a contradiction and is really two crates.
+
+    Nothing automated caught it. Both claims are faithful to their own file,
+    so the ledger is consistent and the coherence checks pass; only a reader
+    sees the collision.
+    """
+
+    def test_a_library_and_binary_root_are_told_apart(self) -> None:
+        found = _module_names(["pkg/src/lib.rs", "pkg/src/main.rs"])
+        self.assertEqual(found["pkg/src/lib.rs"], "pkg")
+        self.assertEqual(found["pkg/src/main.rs"], "pkg::main")
+
+    def test_the_library_keeps_the_bare_crate_name(self) -> None:
+        # That is the path other crates really use to reach its items, so it
+        # is the one name that must not move.
+        found = _module_names(["crates/core/src/lib.rs", "crates/core/src/main.rs"])
+        self.assertEqual(found["crates/core/src/lib.rs"], "core")
+
+    def test_names_that_do_not_collide_are_unchanged(self) -> None:
+        paths = ["crates/core/src/lib.rs", "crates/core/src/parser.rs", "src/main.rs"]
+        found = _module_names(paths)
+        self.assertEqual(found["crates/core/src/parser.rs"], "core::parser")
+        self.assertEqual(found["src/main.rs"], "crate")
+
+    def test_every_file_resolves_to_a_distinct_name(self) -> None:
+        paths = ["a/src/lib.rs", "a/src/main.rs", "b/src/lib.rs", "b/src/main.rs"]
+        found = _module_names(paths)
+        self.assertEqual(len(set(found.values())), len(paths))
