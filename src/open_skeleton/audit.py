@@ -65,6 +65,14 @@ PRODUCTION_CATEGORIES = frozenset(
         "schema_migration",
         "external_calls",
         "auth_control",
+        # Outbound HTTP and browser storage describe what the running
+        # program does. moonshot-mates reported "tests/rendered-html.test.mjs
+        # contains 1 fetch call sites" as its top HTTP-interface finding --
+        # a request the suite makes, presented as the surface the product
+        # talks to. That is the Flask-routes-in-the-test-suite mistake this
+        # module was written for, and the category was simply not listed.
+        "http_client_inventory",
+        "browser_storage",
     }
 )
 # Below this many claims a category cannot be judged: one claim from one file

@@ -130,3 +130,36 @@ class GateUsabilityTests(TestCase):
         # by being noisy. Each of these is a statement about the repository.
         for category in CENSUS_CATEGORIES:
             self.assertEqual(self._findings(category), set(), category)
+
+
+class OutboundHttpFramingTests(TestCase):
+    """A request the suite makes is not the surface the product talks to.
+
+    moonshot-mates led its HTTP-interface section with "tests/
+    rendered-html.test.mjs contains 1 fetch call sites" -- true of the file
+    and wrong about the system, which is the Flask-routes-in-the-test-suite
+    mistake this module exists to catch.
+
+    It was missed because `http_client_inventory` was not listed as a
+    category describing production behaviour, so the test-only check never
+    considered it. The check was working; its vocabulary was short.
+    """
+
+    def _checks(self, category: str, role: str) -> set[str]:
+        return {
+            item.check
+            for item in audit_claims(
+                (_claim("c1", category, "e1"),),
+                ({"evidence_id": "e1", "path": "tests/rendered.test.mjs"},),
+                ({"path": "tests/rendered.test.mjs", "role": role},),
+            )
+        }
+
+    def test_outbound_http_evidenced_only_by_a_suite_is_flagged(self) -> None:
+        self.assertIn("test-only-evidence", self._checks("http_client_inventory", "test"))
+
+    def test_browser_storage_evidenced_only_by_a_suite_is_flagged(self) -> None:
+        self.assertIn("test-only-evidence", self._checks("browser_storage", "test"))
+
+    def test_the_same_claim_from_application_code_is_not_flagged(self) -> None:
+        self.assertNotIn("test-only-evidence", self._checks("http_client_inventory", "source"))
