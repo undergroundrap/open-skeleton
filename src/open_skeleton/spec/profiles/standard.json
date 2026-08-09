@@ -95,7 +95,7 @@
           "number": "1.5",
           "title": "Declared Obligations and Non-Goals",
           "concern": "What this repository wrote down that it must, and must not, do.",
-          "framing": "Source code usually states what a system does rather than what the people who wrote it decided it should do, and that intent normally lives in prose: a requirements document, a threat model, a contributing guide, an architecture decision record. These claims record that a commitment was made. Whether the code keeps it is a separate question, and nothing here answers it.\n\nSome languages refuse that split. A Hum task states its `needs` and `ensures` clauses inline, so the obligation and the code carrying it are the same artifact. Those clauses appear here for the same reason a requirements document does -- they are a promise the repository made about itself -- and with the same limit: that a clause is written is not evidence that anything checks it.",
+          "framing": "Source code usually states what a system does rather than what the people who wrote it decided it should do, and that intent normally lives in prose: a requirements document, a threat model, a contributing guide, an architecture decision record. These claims record that a commitment was made. Whether the code keeps it is a separate question, and nothing here answers it.\n\nNot every language accepts that split. Where a language lets a routine state its preconditions and postconditions inline, the obligation and the code carrying it are one artifact, and those clauses belong here for the same reason a requirements document does. The limit is unchanged either way: a clause being written is not evidence that anything checks it.",
           "probes": [
             {
               "name": "Declared obligations",
@@ -106,7 +106,7 @@
               ]
             },
             {
-              "name": "Contracts declared in code",
+              "name": "Obligations declared in code",
               "kind": "sourced_claim_category",
               "terms": [
                 "hum_contract"
