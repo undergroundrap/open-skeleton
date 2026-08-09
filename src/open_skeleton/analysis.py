@@ -361,6 +361,92 @@ def _append_route_documentation_conflicts(
     )
 
 
+CLIENT_ROUTE_PATH = re.compile(r"^(?P<path>/\S*) (?:is requested|begins a request path)")
+SERVED_ROUTE_PATH = re.compile(
+    r"^(?:(?P<method>[A-Z]+) )?(?P<path>/\S*) is (?:registered|handled|served)"
+)
+
+
+def _append_client_route_reconciliation(
+    snapshot: Snapshot,
+    *,
+    created_at: str,
+    claims: list[ClaimRecord],
+) -> None:
+    """Join a path a client requests to a route this snapshot serves.
+
+    Both halves already existed and nothing connected them. A dashboard's
+    document carried "GET /api/adapter is registered as a route in server"
+    in one section and "/api/adapter is requested by web.app; the server
+    side of this call is whichever route matches it" two sections later --
+    the hedge is correct in general and needlessly weak when the answer is
+    in the same document.
+
+    The join is deliberately narrow. Only an exact path match counts, and
+    the claim says a route matching it is registered *in this snapshot*
+    rather than that the call reaches it: nothing here proves the client is
+    configured to talk to this server, and a monorepo can hold two services
+    that spell a path the same way.
+    """
+
+    served: dict[str, ClaimRecord] = {}
+    for claim in claims:
+        if claim.category != "http_route":
+            continue
+        match = SERVED_ROUTE_PATH.match(claim.claim)
+        if match:
+            served.setdefault(match.group("path"), claim)
+
+    requested = [
+        (match.group("path"), claim)
+        for claim in claims
+        if claim.category == "http_client_route"
+        and (match := CLIENT_ROUTE_PATH.match(claim.claim)) is not None
+    ]
+
+    for path, client_claim in requested:
+        route_claim = served.get(path)
+        if route_claim is None:
+            continue
+        text = (
+            f"{path} is requested by a client in this repository and a route matching it is "
+            "registered here too, so both sides of that call are in this snapshot. That the "
+            "client is configured to reach this server is not decided here."
+        )
+        claims.append(
+            ClaimRecord(
+                claim_id=stable_id(
+                    "claim",
+                    (snapshot.snapshot_id, "client_route_reconciliation", text, PIPELINE_VERSION),
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                claim=text,
+                category="client_route_reconciliation",
+                status="verified",
+                confidence=1.0,
+                importance="high",
+                produced_by=PIPELINE_VERSION,
+                created_at=created_at,
+                verified_at=created_at,
+                supporting_evidence=tuple(
+                    dict.fromkeys(
+                        (*client_claim.supporting_evidence, *route_claim.supporting_evidence)
+                    )
+                ),
+                invalidation_keys=tuple(
+                    sorted({*client_claim.invalidation_keys, *route_claim.invalidation_keys})
+                ),
+                alternative_hypotheses=(
+                    (
+                        "A path spelled the same way in two services is the same string and "
+                        "not necessarily the same endpoint; this joins them by exact path "
+                        "within one snapshot and resolves no configuration."
+                    ),
+                ),
+            )
+        )
+
+
 def _append_dependency_conflicts(
     snapshot: Snapshot,
     *,
@@ -565,6 +651,11 @@ def analyze_snapshot(
         claims=claims,
     )
     _append_route_documentation_conflicts(
+        snapshot,
+        created_at=created_at,
+        claims=claims,
+    )
+    _append_client_route_reconciliation(
         snapshot,
         created_at=created_at,
         claims=claims,

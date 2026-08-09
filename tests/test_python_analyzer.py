@@ -1029,3 +1029,51 @@ class TestScopedErrorContractTests(TestCase):
         families = [item.claim for item in result.claims if item.category == "caught_exception"]
         self.assertTrue(families)
         self.assertFalse(any("ValueError" in text for text in families))
+
+
+class ClientRouteReconciliationTests(TestCase):
+    """Both sides of a call, when both sides are in the snapshot.
+
+    A dashboard's document carried "GET /api/adapter is registered as a
+    route in server" in one section and "/api/adapter is requested by
+    web.app; the server side of this call is whichever route matches it"
+    two sections later. The hedge is right in general and needlessly weak
+    when the answer is in the same document, and nothing joined them.
+    """
+
+    def _claims(self, sources: dict[str, str]) -> list[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in sources.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return [
+            item.claim for item in result.claims if item.category == "client_route_reconciliation"
+        ]
+
+    SERVER = (
+        "from fastapi import FastAPI\n\napp = FastAPI()\n\n\n"
+        '@app.get("/api/notes")\ndef notes():\n    return []\n'
+    )
+    CLIENT = 'export async function load() {\n  return fetch("/api/notes");\n}\n'
+
+    def test_a_served_path_a_client_requests_is_joined(self) -> None:
+        found = self._claims({"api.py": self.SERVER, "web/app.ts": self.CLIENT})
+        self.assertEqual(len(found), 1)
+        self.assertIn("/api/notes", found[0])
+        self.assertIn("both sides of that call are in this snapshot", found[0])
+
+    def test_the_join_does_not_claim_the_client_reaches_it(self) -> None:
+        # A monorepo can hold two services spelling a path the same way, and
+        # nothing here resolves configuration.
+        found = self._claims({"api.py": self.SERVER, "web/app.ts": self.CLIENT})
+        self.assertIn("not decided here", found[0])
+
+    def test_a_request_with_no_matching_route_is_not_joined(self) -> None:
+        client = 'export async function load() {\n  return fetch("/api/absent");\n}\n'
+        self.assertEqual(self._claims({"api.py": self.SERVER, "web/app.ts": client}), [])
+
+    def test_a_route_nobody_requests_is_not_joined(self) -> None:
+        self.assertEqual(self._claims({"api.py": self.SERVER}), [])

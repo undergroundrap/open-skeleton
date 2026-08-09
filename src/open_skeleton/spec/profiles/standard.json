@@ -924,10 +924,18 @@
               "terms": [
                 "runtime_topology"
               ]
+            },
+            {
+              "name": "Calls with both sides in this snapshot",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "client_route_reconciliation"
+              ]
             }
           ],
           "findings": {
             "categories": [
+              "client_route_reconciliation",
               "external_call",
               "hardcoded_endpoint",
               "http_client_route",
