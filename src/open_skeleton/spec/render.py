@@ -644,6 +644,13 @@ def build_spec(
             "claims": len(claims),
             "symbols": len(symbols),
             "edges": len(edges),
+            # Recorded so the summary can tell "this repository has no tests"
+            # apart from "its tests reach the code in a way tracing cannot
+            # follow". A `testing` claim was the earlier proxy and it is the
+            # wrong one: coast-most carries an 1,101-line self-test that
+            # declares no recognized test block, so it produced no such claim
+            # while plainly being a suite.
+            "test_files": sum(1 for item in files if str(item["role"]) == "test"),
         },
         capabilities=capabilities,
         consequences=consequences,
@@ -899,11 +906,7 @@ def _executive_summary(document: SpecDocument) -> list[str]:
         # reported as reached by nothing. Saying which of the two situations
         # this is costs a sentence, and is the difference between a fact and
         # an accusation.
-        tested = any(
-            claim.category == "testing"
-            for section in document.sections
-            for claim in section.findings
-        )
+        tested = bool(document.source_counts.get("test_files"))
         blind = (
             (
                 " This repository does declare tests and none of them calls a capability by "

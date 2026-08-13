@@ -1954,16 +1954,14 @@ class TracingBlindSpotTests(TestCase):
             evidence_ids=(),
             exercised_by=("tests/x.ts calls open",) if exercised else (),
         )
-        sections = document.sections
-        if not tests:
-            sections = tuple(
-                replace(
-                    item,
-                    findings=tuple(claim for claim in item.findings if claim.category != "testing"),
-                )
-                for item in sections
-            )
-        return replace(document, capabilities=(capability,), sections=sections)
+        # "Has tests" is counted from files carrying the `test` role, not from
+        # a `testing` claim. coast-most ships an 1,101-line self-test that
+        # declares no recognized test block and therefore produces no such
+        # claim, so the claim was the wrong signal and this test was written
+        # against it.
+        counts = dict(document.source_counts)
+        counts["test_files"] = 1 if tests else 0
+        return replace(document, capabilities=(capability,), source_counts=counts)
 
     def test_a_repository_with_tests_and_no_traced_capability_says_so(self) -> None:
         markdown = render_spec_markdown(self._document(exercised=False, tests=True))
