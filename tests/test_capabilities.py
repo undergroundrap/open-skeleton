@@ -279,3 +279,73 @@ class BuildContainerLabelTests(TestCase):
 
     def test_a_file_at_the_root_names_itself(self) -> None:
         self.assertEqual(self._labels("server.py"), {"server"})
+
+
+class AmbiguousCalleeTests(TestCase):
+    """A name defined twice does not say which definition was called.
+
+    `main` is defined in sixteen files of this repository and `to_dict` in
+    fourteen. Matching a call edge by short name alone therefore credited
+    every capability holding that name: the `turn_gate` capability was
+    reported as exercised by `tests/test_cli.py calls main`, which is the
+    CLI's main, and three of its four references were that shape. Before a
+    real test for it existed, the capability still read as covered.
+
+    This is the rule the route reader already follows for an unresolved
+    receiver -- when the evidence does not distinguish, make no claim either
+    way. The cost is a false negative where a genuinely tested capability
+    happens to share a common name, which is the trade this project states:
+    a surface naming verification that does not exist is worse than one
+    omitting verification that does.
+    """
+
+    FILES = (
+        {"path": "alpha/service.py", "role": "source"},
+        {"path": "beta/service.py", "role": "source"},
+        {"path": "tests/test_alpha.py", "role": "test"},
+    )
+
+    def _capabilities(self, symbols: tuple[dict[str, Any], ...]) -> tuple[Capability, ...]:
+        return build_capabilities(
+            files=self.FILES,
+            claims=(),
+            symbols=symbols,
+            edges=(
+                {
+                    "relationship": "calls",
+                    "source_path": "tests/test_alpha.py",
+                    "target_ref": "run",
+                },
+            ),
+            evidence_by_id={},
+        )
+
+    def test_a_name_defined_once_still_counts_as_verification(self) -> None:
+        found = self._capabilities(
+            (
+                {
+                    "qualified_name": "alpha.service.run",
+                    "kind": "function",
+                    "path": "alpha/service.py",
+                },
+            )
+        )
+        exercised = [item for item in found if item.exercised_by]
+        self.assertEqual(len(exercised), 1)
+
+    def test_a_name_defined_twice_credits_neither(self) -> None:
+        found = self._capabilities(
+            (
+                {
+                    "qualified_name": "alpha.service.run",
+                    "kind": "function",
+                    "path": "alpha/service.py",
+                },
+                {
+                    "qualified_name": "beta.service.run",
+                    "kind": "function",
+                    "path": "beta/service.py",
+                },
+            )
+        )
+        self.assertEqual([item for item in found if item.exercised_by], [])

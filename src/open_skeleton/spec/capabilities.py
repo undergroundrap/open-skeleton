@@ -244,6 +244,21 @@ def build_capabilities(
             }
             if source in dedicated and defined_in and defined_in <= {source}:
                 continue
+            # A name defined in more than one file does not say which
+            # definition was called, and attributing it to every capability
+            # holding that name manufactures verification. `main` is defined
+            # in sixteen files here and `to_dict` in fourteen, so the
+            # `turn_gate` capability was reported as exercised by
+            # `tests/test_cli.py calls main` -- the CLI's main, not the
+            # gate's. Three of its four references were that shape, and
+            # before a real test existed the capability still read as
+            # covered.
+            #
+            # This is the rule the route reader already follows for an
+            # unresolved receiver: when the evidence does not distinguish,
+            # make no claim either way.
+            if len(defined_in) > 1:
+                continue
             calls_from_verifiers[callee].add(source)
         elif relationship == "references_route_path":
             references_from_verifiers[_static_prefix(target)].add(source)
