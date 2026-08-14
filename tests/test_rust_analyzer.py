@@ -93,11 +93,34 @@ class UnsafeCensusTests(TestCase):
 
 
 class PanicCensusTests(TestCase):
-    def test_unwrap_and_expect_are_counted(self) -> None:
+    """These abort the thread, and that is all they have in common.
+
+    Reported as one number this read "4,192 panicking call sites" on a
+    compiler of 72 files. 73% were assertions checking invariants and 2 were
+    `todo!`, so the figure a reader wanted -- 175 bare `unwrap`s -- sat behind
+    an aggregate 24 times larger. Technically true and useless.
+    """
+
+    def _panics(self, result: AnalysisResult) -> dict[str, tuple[str, str]]:
+        """Every panic claim, keyed by the family word that identifies it."""
+
+        found: dict[str, tuple[str, str]] = {}
+        for item in result.claims:
+            if item.category != "panic_site":
+                continue
+            for word in ("todo!", "unwrap`", "expect`", "panic!", "assertion"):
+                if word in item.claim:
+                    found[word] = (item.claim, item.importance)
+                    break
+        return found
+
+    def test_an_unwrap_and_an_expect_are_not_the_same_finding(self) -> None:
+        # `expect` records why the value must be there and `unwrap` records
+        # nothing, so an audit starts with the second and must be able to.
         result = _analyze('fn f() { a.unwrap(); b.expect("why"); }')
-        claim = _claim(result, "panic_site")
-        assert claim is not None
-        self.assertIn("2 panicking call sites", claim)
+        panics = self._panics(result)
+        self.assertIn("1 call(s) to `unwrap`", panics["unwrap`"][0])
+        self.assertIn("1 call(s) to `expect`", panics["expect`"][0])
 
     def test_unwrap_or_supplies_a_fallback_and_is_not_a_panic(self) -> None:
         result = _analyze("fn f() { a.unwrap_or(0); b.unwrap_or_else(|| 1); }")
@@ -105,13 +128,40 @@ class PanicCensusTests(TestCase):
 
     def test_panic_macros_are_counted_but_bare_identifiers_are_not(self) -> None:
         result = _analyze('fn f() { panic!("x"); let todo = 1; assert!(ok); }')
-        claim = _claim(result, "panic_site")
-        assert claim is not None
-        self.assertIn("2 panicking call sites", claim)
+        panics = self._panics(result)
+        self.assertIn("1 explicit `panic!`", panics["panic!"][0])
+        self.assertIn("1 assertion site(s)", panics["assertion"][0])
+        # `let todo = 1` is a binding, not `todo!`.
+        self.assertNotIn("todo!", panics)
 
     def test_unwrap_as_a_plain_function_name_is_not_a_panic(self) -> None:
         result = _analyze("fn unwrap() {}\nfn f() { unwrap(); }")
         self.assertIsNone(_claim(result, "panic_site"))
+
+    def test_assertions_are_ranked_below_the_findings_they_outnumber(self) -> None:
+        # At `high` they filled the summary. An invariant check is the least
+        # actionable thing in this category and the most numerous, which is
+        # exactly the combination that displaces everything else.
+        result = _analyze("fn f() { assert!(a); a.unwrap(); }")
+        panics = self._panics(result)
+        self.assertEqual(panics["assertion"][1], "low")
+        self.assertEqual(panics["unwrap`"][1], "high")
+
+    def test_the_whole_assertion_family_is_counted(self) -> None:
+        # `assert_ne!` and `debug_assert!` were absent from the macro set,
+        # undercounting this family by 50 on a real compiler.
+        result = _analyze(
+            "fn f() { assert!(a); assert_eq!(a, b); assert_ne!(a, c); debug_assert!(d); }"
+        )
+        self.assertIn("4 assertion site(s)", self._panics(result)["assertion"][0])
+
+    def test_unfinished_work_is_reported_apart_from_everything_else(self) -> None:
+        # Two `todo!`s in 72 files is a finding. Added to four thousand
+        # assertions it is invisible.
+        result = _analyze("fn f() { todo!(); unimplemented!(); assert!(x); }")
+        panics = self._panics(result)
+        self.assertIn("2 site(s) marked `todo!`", panics["todo!"][0])
+        self.assertEqual(panics["todo!"][1], "high")
 
 
 class ItemAndImportTests(TestCase):

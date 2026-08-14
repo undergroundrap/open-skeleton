@@ -61,8 +61,73 @@ ITEM_KEYWORDS = {
 }
 # Names that abort the process or discard an error, keyed by how they read at a
 # call site. `unwrap_or*` variants are excluded: they supply a fallback.
-PANIC_MACROS = frozenset({"panic", "unreachable", "todo", "unimplemented", "assert", "assert_eq"})
-PANIC_METHODS = frozenset({"unwrap", "expect", "unwrap_err", "expect_err"})
+# Everything below aborts the thread on its failing path, and reporting them as
+# one number is useless. On a compiler of 72 Rust files the single figure read
+# "4,192 panicking call sites" -- of which 73% were assertions checking
+# invariants, which is a rigour signal, and 2 were `todo!`. The one number a
+# reader wants (175 bare `unwrap`s) sat behind an aggregate 24 times larger.
+# Technically true and actively misleading is the failure this project exists
+# to avoid, so the families are counted and reported apart.
+PANIC_FAMILIES: dict[str, frozenset[str]] = {
+    # Work the author has not written. Rare and worth naming.
+    "unfinished": frozenset({"todo", "unimplemented"}),
+    # A stated impossibility. Deliberate by construction.
+    "explicit": frozenset({"panic", "unreachable"}),
+    # An invariant check. `assert_ne` and `debug_assert` were missing here,
+    # which undercounted this family by 50 on the compiler above.
+    "assertion": frozenset({"assert", "assert_eq", "assert_ne", "debug_assert"}),
+}
+PANIC_MACROS = frozenset().union(*PANIC_FAMILIES.values())
+
+# Extraction without a proof. `expect` carries the author's reason and `unwrap`
+# carries nothing, so a reader auditing them starts with the second.
+UNCHECKED_METHODS = frozenset({"unwrap", "unwrap_err"})
+DOCUMENTED_METHODS = frozenset({"expect", "expect_err"})
+PANIC_METHODS = UNCHECKED_METHODS | DOCUMENTED_METHODS
+
+# Wording and weight per family. Assertions sit at `low` deliberately: they are
+# the most numerous and the least actionable, and at `high` they displaced
+# every other finding from the summary.
+PANIC_REPORTING: dict[str, tuple[str, str]] = {
+    "unfinished": (
+        (
+            "{count} site(s) marked `todo!` or `unimplemented!` appear in Rust source; "
+            "each names work not written, and reaching one aborts the thread."
+        ),
+        "high",
+    ),
+    "unchecked": (
+        (
+            "{count} call(s) to `unwrap` or `unwrap_err` appear in Rust source, extracting "
+            "a value without recording why it must be there. Whether any can fail is not "
+            "decided here."
+        ),
+        "high",
+    ),
+    "documented": (
+        (
+            "{count} call(s) to `expect` or `expect_err` appear in Rust source. Each states "
+            "a reason the value must be present; the reason is the author's assertion, not "
+            "a proof, and is not checked here."
+        ),
+        "medium",
+    ),
+    "explicit": (
+        (
+            "{count} explicit `panic!` or `unreachable!` site(s) appear in Rust source, "
+            "each declaring a state the author treats as impossible."
+        ),
+        "medium",
+    ),
+    "assertion": (
+        (
+            "{count} assertion site(s) (`assert!`, `assert_eq!`, `assert_ne!`, "
+            "`debug_assert!`) appear in Rust source. These check invariants rather than "
+            "handle failure, and their number reflects how much the code checks itself."
+        ),
+        "low",
+    ),
+}
 HTTP_METHOD_NAMES = frozenset({"get", "post", "put", "delete", "patch", "head", "options"})
 # Calls whose first string argument is a served path. `nest` and `scope` mount a
 # sub-router under a prefix, which is a mount point rather than an endpoint.
@@ -1052,7 +1117,7 @@ class RustLexicalAnalyzer:
         analyzed_files = 0
         unsafe_receipts: list[str] = []
         unsafe_files: set[str] = set()
-        panic_receipts: list[str] = []
+        panic_receipts: dict[str, list[str]] = defaultdict(list)
         test_receipts: list[str] = []
 
         def census_receipt(kind: str) -> EvidenceRecord:
@@ -1285,7 +1350,8 @@ class RustLexicalAnalyzer:
                     following = tokens[index + 1] if index + 1 < len(tokens) else None
                     is_call = following is not None and following.value == "("
                     if previous.kind == "punctuation" and previous.value == "." and is_call:
-                        panic_receipts.append(
+                        family = "unchecked" if token.value in UNCHECKED_METHODS else "documented"
+                        panic_receipts[family].append(
                             receipt(
                                 file_record.path, token.line, "panic_site", module, excerpt
                             ).evidence_id
@@ -1296,7 +1362,12 @@ class RustLexicalAnalyzer:
                 if token.value in PANIC_MACROS and index + 1 < len(tokens):
                     following = tokens[index + 1]
                     if following.kind == "punctuation" and following.value == "!":
-                        panic_receipts.append(
+                        family = next(
+                            name
+                            for name, members in PANIC_FAMILIES.items()
+                            if token.value in members
+                        )
+                        panic_receipts[family].append(
                             receipt(
                                 file_record.path, token.line, "panic_site", module, excerpt
                             ).evidence_id
@@ -1550,21 +1621,20 @@ class RustLexicalAnalyzer:
                 )
             )
 
-        if panic_receipts:
+        # One claim per family, in the order a reader acts on them. Reported
+        # together they were a single figure nobody could use.
+        for family, (template, importance) in PANIC_REPORTING.items():
+            found = panic_receipts.get(family, [])
+            if not found:
+                continue
             claims.append(
                 self._claim(
                     snapshot,
                     created_at,
-                    text=(
-                        f"{len(panic_receipts)} panicking call sites appear in Rust source "
-                        "(`unwrap`, `expect`, `panic!`, `unreachable!`, `todo!`, "
-                        "`unimplemented!`, `assert!`); on the failing path each aborts the "
-                        "thread rather than returning an error. Whether any of them can fail "
-                        "is not decided here."
-                    ),
+                    text=template.format(count=f"{len(found):,}"),
                     category="panic_site",
-                    supporting=tuple(sorted(set(panic_receipts))[:200]),
-                    importance="high",
+                    supporting=tuple(sorted(set(found))[:200]),
+                    importance=importance,
                 )
             )
 
