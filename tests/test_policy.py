@@ -23,6 +23,12 @@ class ScanPolicyTests(TestCase):
         self.assertEqual(classify_language(Path("component.tsx")), "TypeScript JSX")
         self.assertEqual(classify_role(Path("tests/test_parser.py")), "test")
         self.assertEqual(classify_role(Path("docs/design.md")), "documentation")
+        # A compiler keeps its negative cases in `fixtures/`: files malformed
+        # on purpose so a diagnostic fires. Read as product source, a language
+        # project reported 24 compiler errors "in the analyzed sources" while
+        # its real programs had none.
+        self.assertEqual(classify_role(Path("fixtures/malformed_item.hum")), "test")
+        self.assertEqual(classify_role(Path("crates/x/fixtures/bad.hum")), "test")
         self.assertEqual(classify_role(Path(".github/workflows/ci.yml")), "workflow")
 
 

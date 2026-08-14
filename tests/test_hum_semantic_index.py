@@ -281,6 +281,48 @@ class HumGraphFactTests(TestCase):
         self.assertIn("3 warning(s) of H0107", found[0].claim)
         self.assertEqual(len(found[0].supporting_evidence), 3)
 
+    def test_a_fixture_diagnostic_is_not_reported_beside_a_real_one(self) -> None:
+        # A compiler's negative fixtures are malformed on purpose so a rule
+        # fires. Counted together with real sources this reported "24 error(s)
+        # in the analyzed sources" for a language project whose actual
+        # programs had none -- every error it had was a fixture proving a rule
+        # works, which is the opposite of a defect.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            (root / "fixtures").mkdir(parents=True)
+            (root / "divide.hum").write_text(self.SOURCE, encoding="utf-8")
+            (root / "fixtures" / "bad.hum").write_text(self.SOURCE, encoding="utf-8")
+            document = self._document(
+                files=[
+                    {"path": "divide.hum", "module": "divide", "symbols": []},
+                    {"path": "fixtures/bad.hum", "module": "bad", "symbols": []},
+                ],
+                diagnostics=[
+                    {
+                        "code": "H0612",
+                        "title": "app start duplicated",
+                        "severity": "error",
+                        "span": {"file": path, "line": 1},
+                    }
+                    for path in ("divide.hum", "fixtures/bad.hum")
+                ],
+            )
+            index = workspace / "graph.json"
+            index.write_text(json.dumps(document), encoding="utf-8")
+            result = HumSemanticIndexAnalyzer([index]).analyze(scan_repository(root))
+
+        found = {
+            ("fixture" if "test material, where" in c.claim else "real"): c
+            for c in result.claims
+            if c.category == "hum_diagnostic"
+        }
+        self.assertEqual(set(found), {"fixture", "real"})
+        self.assertIn("outside the test material", found["real"].claim)
+        self.assertEqual(found["real"].importance, "high")
+        # A rule firing where it was meant to fire is evidence the rule works.
+        self.assertEqual(found["fixture"].importance, "low")
+
     def test_an_error_outranks_a_warning(self) -> None:
         result = self._analyze(
             self._document(

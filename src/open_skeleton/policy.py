@@ -250,7 +250,14 @@ def classify_role(path: Path) -> str:
         or "_spec." in name
         or "selftest" in name
     )
-    if "test" in parts or "tests" in parts:
+    # `fixtures/` is test material wherever it sits. A compiler keeps its
+    # negative cases there -- files deliberately malformed so a diagnostic
+    # fires -- and reading them as product source made a language project
+    # report 24 compiler errors "in the analyzed sources" when every one was a
+    # fixture doing its job and the real programs had none. Classifying them
+    # `test` is not a new concept: every consumer that already distinguishes a
+    # suite from the system handles them correctly the moment they say so.
+    if {"test", "tests", "fixtures"} & parts:
         return "test"
     if named_like_a_test and not operator_directory:
         return "test"

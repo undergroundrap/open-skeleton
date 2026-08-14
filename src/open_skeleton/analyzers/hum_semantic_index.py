@@ -154,7 +154,12 @@ def _graph_facts(
     # occurrence: a reader wants to know that a rule fires and where to look,
     # and four hundred rows of the same rule is the shape that teaches a
     # reader to skip the section.
-    grouped: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+    # Split by whether the file is test material. A compiler's negative
+    # fixtures are malformed on purpose so a diagnostic fires, and counting
+    # them beside real ones reported "24 error(s) in the analyzed sources" for
+    # a project whose actual programs had none. Every error it had was a
+    # fixture proving a rule works, which is the opposite of a defect.
+    grouped: dict[tuple[str, str, str, bool], list[str]] = defaultdict(list)
     for entry in document.get("diagnostics") or []:
         if not isinstance(entry, dict):
             continue
@@ -169,19 +174,25 @@ def _graph_facts(
             continue
         supporting = receipt(path, _span_line(span), "hum_diagnostic", code)
         if supporting is not None:
-            grouped[(code, title, severity)].append(supporting)
+            record = files_by_path.get(path)
+            fixture = record is not None and str(getattr(record, "role", "")) == "test"
+            grouped[(code, title, severity, fixture)].append(supporting)
 
-    for (code, title, severity), receipts in sorted(grouped.items()):
+    for (code, title, severity, fixture), receipts in sorted(grouped.items()):
         noun = "error" if severity == "error" else severity or "diagnostic"
-        text = (
-            f"The Hum compiler reports {len(receipts)} {noun}(s) of {code} "
-            f"({title}) in the analyzed sources."
+        where = (
+            "in test material, where a diagnostic firing is what the file exists to prove"
+            if fixture
+            else "in sources outside the test material"
         )
+        text = f"The Hum compiler reports {len(receipts)} {noun}(s) of {code} ({title}) {where}."
         claim(
             text,
             "hum_diagnostic",
             tuple(dict.fromkeys(receipts))[:24],
-            "high" if severity == "error" else "medium",
+            # A rule firing where it was meant to fire is not a finding to
+            # raise; it is evidence the rule works.
+            "low" if fixture else ("high" if severity == "error" else "medium"),
         )
 
     # Declared contracts. A predicate place is a clause a task states about
