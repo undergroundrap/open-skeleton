@@ -133,6 +133,31 @@ class AnalyzerTests(TestCase):
             self._claims({"tests/test_fixture.md": "The run completed in 5 ms.\n"}), []
         )
 
+    def _coverage(self, sources: dict[str, str]) -> tuple[int, int]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            root.mkdir()
+            for name, body in sources.items():
+                (root / name).write_text(body, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            record = next(item for item in result.coverage if item.analyzer == ANALYZER_VERSION)
+            return record.eligible_files, record.analyzed_files
+
+    def test_a_document_stating_no_figure_is_not_counted_as_eligible(self) -> None:
+        # Counting every documentation file put the yield at 17% and listed
+        # this analyzer under "Where this analysis is thin", telling a reader
+        # the section was weakly supported when nineteen of twenty-three
+        # documents simply publish no figures. No claim changed, which is why
+        # nothing else here would have caught it.
+        eligible, analyzed = self._coverage(
+            {
+                "PERF.md": "The suite completed in 16 seconds.\n",
+                "GUIDE.md": "# Guide\n\nRun the tool on a repository.\n",
+                "NOTES.md": "# Notes\n\nNothing quantitative here at all.\n",
+            }
+        )
+        self.assertEqual((eligible, analyzed), (1, 1))
+
     def test_a_long_table_states_what_it_withheld(self) -> None:
         rows = "".join(f"| step{index} | {index} ms |\n" for index in range(40))
         found = self._claims({"PERF.md": f"Measured:\n\n| a | b |\n|---|---|\n{rows}"})

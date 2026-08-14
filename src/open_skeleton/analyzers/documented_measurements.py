@@ -190,7 +190,7 @@ class DocumentedMeasurementAnalyzer:
         claims: list[ClaimRecord] = []
         failures: list[str] = []
 
-        eligible = [
+        candidates = [
             item
             for item in snapshot.files
             if Path(item.path).suffix.lower() in DOCUMENTATION_SUFFIXES
@@ -200,9 +200,17 @@ class DocumentedMeasurementAnalyzer:
             and str(item.role) == "documentation"
             and item.size_bytes <= MAX_SOURCE_BYTES
         ]
-        analyzed_files = 0
 
-        for file_record in eligible:
+        # Eligibility is "this file states a magnitude at all", not "this file
+        # is documentation". Counting every documentation file put the yield at
+        # 17% and listed this analyzer under "Where this analysis is thin",
+        # which told a reader the section was weakly supported when the honest
+        # reading is that nineteen of twenty-three documents publish no figures
+        # and correctly produced none. That warning exists to catch an analyzer
+        # that read a language and understood none of it; diluting it with
+        # analyzers whose subject is simply absent costs it its meaning.
+        eligible: list[tuple[FileRecord, str]] = []
+        for file_record in candidates:
             source_path = snapshot.root / Path(file_record.path)
             try:
                 payload = source_path.read_bytes()
@@ -212,6 +220,11 @@ class DocumentedMeasurementAnalyzer:
             except (OSError, UnicodeDecodeError, ValueError) as exc:
                 failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
                 continue
+            if QUANTITY.search(source):
+                eligible.append((file_record, source))
+
+        analyzed_files = 0
+        for file_record, source in eligible:
             analyzed_files += 1
             for kind in ("measured", "budget"):
                 lines = [item for item in scan(source) if item[1] == kind]
