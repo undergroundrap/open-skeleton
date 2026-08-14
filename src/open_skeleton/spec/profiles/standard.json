@@ -1964,6 +1964,52 @@
           "cross_references": [
             "verification.tests"
           ]
+        },
+        {
+          "id": "verification.recorded-measurements",
+          "number": "7.6",
+          "title": "Recorded Measurements",
+          "concern": "Performance figures this repository records having observed.",
+          "framing": "These are quotations, not results. Nothing in this analysis re-ran a benchmark, checked the machine a figure was taken on, or established that it still holds. What is verified is that the document says this, on this line.",
+          "probes": [
+            {
+              "name": "Recorded measurements",
+              "kind": "claim_category",
+              "terms": [
+                "recorded_measurement"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "recorded_measurement"
+            ],
+            "limit": 40,
+            "min_importance": "low"
+          }
+        },
+        {
+          "id": "verification.stated-budgets",
+          "number": "7.7",
+          "title": "Stated Performance Budgets",
+          "concern": "Performance targets the repository states, whether or not anything checks them.",
+          "framing": "A budget is a want, and it is kept apart from §7.6 for that reason. Nobody in the repository said any of these were met, and this analysis does not say so either. A target with no measurement beside it is the interesting case, not an omission.",
+          "probes": [
+            {
+              "name": "Stated budgets",
+              "kind": "claim_category",
+              "terms": [
+                "stated_budget"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "stated_budget"
+            ],
+            "limit": 40,
+            "min_importance": "low"
+          }
         }
       ]
     },

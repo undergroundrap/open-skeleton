@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from open_skeleton.analyzers.base import Analyzer
+from open_skeleton.analyzers.documented_measurements import DocumentedMeasurementAnalyzer
 from open_skeleton.analyzers.hum_semantic_index import HumSemanticIndexAnalyzer
 from open_skeleton.analyzers.java_lexical import JavaLexicalAnalyzer
 from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
@@ -683,6 +684,7 @@ def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Ana
         JavaLexicalAnalyzer(),
         ProjectMetadataAnalyzer(),
         SqlSchemaAnalyzer(),
+        DocumentedMeasurementAnalyzer(),
         HumSemanticIndexAnalyzer(hum_index),
     )
 
