@@ -94,6 +94,35 @@ class CapabilityClusteringTests(TestCase):
         self.assertEqual(len(labels["action"].routes), 2)
         self.assertEqual(len(labels["player"].routes), 1)
 
+    def test_a_harness_module_is_not_catalogued_as_a_capability(self) -> None:
+        # A benchmark's `main` is not something the product does. Five of this
+        # repository's own capabilities were benchmark scripts, and because
+        # nothing tests a benchmark all five counted as "implemented but
+        # reached by no test", taking the summary's headline from 2 to 7.
+        #
+        # No filter here does this: capabilities are drawn from `source` files
+        # and a harness file simply is not one. The test guards that the role
+        # keeps carrying the meaning rather than that a list stays current.
+        files = (*self.FILES, {"path": "benchmarks/run_bench.py", "role": "harness"})
+        symbols = (
+            *self.SYMBOLS,
+            {
+                "qualified_name": "benchmarks.run_bench.main",
+                "kind": "function",
+                "path": "benchmarks/run_bench.py",
+            },
+        )
+        capabilities = build_capabilities(
+            files=files,
+            claims=self.CLAIMS,
+            symbols=symbols,
+            edges=(),
+            evidence_by_id=self.EVIDENCE,
+        )
+        labels = {item.label for item in capabilities}
+        self.assertNotIn("run_bench", labels)
+        self.assertNotIn("benchmarks", labels)
+
     def test_identifiers_are_sequential_with_no_gaps(self) -> None:
         capabilities = self._build(())
         self.assertEqual(

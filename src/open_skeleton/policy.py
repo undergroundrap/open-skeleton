@@ -259,6 +259,19 @@ def classify_role(path: Path) -> str:
     # suite from the system handles them correctly the moment they say so.
     if {"test", "tests", "fixtures"} & parts:
         return "test"
+    # Code that exercises or demonstrates the product rather than being it.
+    # Not `test`: these assert nothing, and counting them as a suite would
+    # inflate every statement about what verifies this repository. Not
+    # `source` either, which is what they were -- 13 benchmark scripts
+    # supplied 13 of this repository's "application entry points", and five
+    # of them became capabilities that no test reaches, inflating the one
+    # number the summary leads with.
+    #
+    # `scripts`, `tools` and `bin` are deliberately absent. A hand-run script
+    # there is often the real quality gate, `_exercising_paths` already treats
+    # it as one, and demoting it would withdraw that.
+    if {"benchmarks", "bench", "benches", "examples", "example", "demo", "demos"} & parts:
+        return "harness"
     if named_like_a_test and not operator_directory:
         return "test"
     if suffix in {".md", ".rst"} or "docs" in parts or "documentation" in parts:

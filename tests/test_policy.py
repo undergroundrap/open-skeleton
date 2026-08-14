@@ -55,6 +55,27 @@ class TestRoleConventionTests(TestCase):
         ):
             self.assertEqual(classify_role(Path(path)), "test", path)
 
+    def test_code_that_exercises_the_product_is_not_the_product(self) -> None:
+        # 13 benchmark scripts supplied 13 of this repository's "application
+        # entry points", and five became capabilities no test reaches --
+        # inflating the one number the executive summary leads with from 2
+        # to 7.
+        for path in (
+            "benchmarks/comparison/run_comparison.py",
+            "benches/throughput.rs",
+            "examples/task_list.hum",
+            "demo/walkthrough.ts",
+        ):
+            self.assertEqual(classify_role(Path(path)), "harness", path)
+
+    def test_a_hand_run_script_stays_source(self) -> None:
+        # Deliberate. A script under `scripts/` is frequently the real quality
+        # gate, `_exercising_paths` already counts one as verification, and
+        # demoting it would withdraw that. Only directories that exist to
+        # exercise or demonstrate are harness.
+        for path in ("scripts/gate.py", "tools/release.sh", "bin/run.py"):
+            self.assertEqual(classify_role(Path(path)), "source", path)
+
     def test_a_directory_saying_a_person_runs_this_outranks_the_filename(self) -> None:
         # `scripts/smoke_test.py` is named like a suite and contains none:
         # 417 lines of argparse and a hand-rolled `check` helper, from which
