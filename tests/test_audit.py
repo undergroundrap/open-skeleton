@@ -163,3 +163,16 @@ class OutboundHttpFramingTests(TestCase):
 
     def test_the_same_claim_from_application_code_is_not_flagged(self) -> None:
         self.assertNotIn("test-only-evidence", self._checks("http_client_inventory", "source"))
+
+    def test_a_harness_is_no_more_the_system_than_a_suite_is(self) -> None:
+        # The check named one role instead of asking the question, so when
+        # `harness` arrived it went blind again in exactly the way it was
+        # written to prevent: a benchmark opening a SQLite connection was
+        # filed as this repository's storage behaviour and audited clean.
+        self.assertIn("test-only-evidence", self._checks("storage", "harness"))
+        self.assertIn("test-only-evidence", self._checks("http_client_inventory", "harness"))
+
+    def test_a_role_that_is_neither_is_still_not_the_product(self) -> None:
+        # The predicate asks what the product is rather than listing what it
+        # is not, so a role added later needs no edit here.
+        self.assertIn("test-only-evidence", self._checks("storage", "documentation"))

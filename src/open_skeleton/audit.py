@@ -29,6 +29,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from open_skeleton.policy import describes_the_product
+
 # Claims that are a statement about the repository rather than about any file
 # in it. Their receipts are census receipts by construction, so the
 # no-file-evidence check would fire on every repository forever.
@@ -201,22 +203,30 @@ def audit_claims(
             )
 
         if category in PRODUCTION_CATEGORIES and sourced:
-            test_only = [
+            # Any file that exercises the system rather than being it, which
+            # since the `harness` role means benchmarks and examples too. This
+            # check was written for exactly that error and then missed it,
+            # because it named one role instead of asking the question: a
+            # benchmark opening a SQLite connection was filed as this
+            # repository's storage behaviour and audited clean.
+            not_the_product = [
                 claim
                 for claim, paths in sourced
-                if paths and all(role_by_path.get(path) == "test" for path in paths)
+                if paths
+                and not any(describes_the_product(role_by_path.get(path)) for path in paths)
             ]
-            if test_only:
+            if not_the_product:
                 findings.append(
                     Finding(
                         check="test-only-evidence",
                         category=category,
                         detail=(
-                            f"{len(test_only):,} of {len(sourced):,} claims rest only on "
-                            "test-role files. A finding about production behaviour "
-                            "evidenced solely by the suite describes the suite."
+                            f"{len(not_the_product):,} of {len(sourced):,} claims rest only "
+                            "on files that exercise this system rather than being it. A "
+                            "finding about production behaviour evidenced solely by the "
+                            "suite or a harness describes the suite or the harness."
                         ),
-                        claim_ids=tuple(str(item.get("claim_id", "")) for item in test_only),
+                        claim_ids=tuple(str(item.get("claim_id", "")) for item in not_the_product),
                     )
                 )
 
