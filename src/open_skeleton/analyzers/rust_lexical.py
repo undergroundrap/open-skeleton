@@ -43,6 +43,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import describes_the_product
 
 ANALYZER_NAME = "rust-lexical"
 ANALYZER_VERSION = "rust-lexical/v1"
@@ -1320,7 +1321,11 @@ class RustLexicalAnalyzer:
                                 analyzer=ANALYZER_VERSION,
                             )
                         )
-                        if name_token.value == "main" and token.value == "fn":
+                        if (
+                            name_token.value == "main"
+                            and token.value == "fn"
+                            and describes_the_product(file_record.role)
+                        ):
                             claims.append(
                                 self._claim(
                                     snapshot,

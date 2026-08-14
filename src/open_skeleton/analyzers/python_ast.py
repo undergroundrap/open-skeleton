@@ -26,6 +26,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import describes_the_product
 
 ANALYZER_NAME = "python-ast"
 ANALYZER_VERSION = "python-ast/v2"
@@ -1607,7 +1608,11 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             if numeric_value is not None:
                 self.numeric_constants[name] = numeric_value
                 self.constant_lines.setdefault(name, node.lineno)
-            if call_name and call_name.split(".")[-1] == "FastAPI":
+            if (
+                call_name
+                and call_name.split(".")[-1] == "FastAPI"
+                and describes_the_product(getattr(self.file_record, "role", None))
+            ):
                 self._claim(
                     text=f"{qualified} constructs a FastAPI application.",
                     category="application_entry",
@@ -1690,7 +1695,11 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_If(self, node: ast.If) -> None:
-        if len(self.scope_names) == 1 and _is_main_guard(node):
+        if (
+            len(self.scope_names) == 1
+            and _is_main_guard(node)
+            and describes_the_product(getattr(self.file_record, "role", None))
+        ):
             evidence = self._evidence(
                 start_line=node.lineno,
                 end_line=node.end_lineno or node.lineno,

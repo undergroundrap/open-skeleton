@@ -43,6 +43,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import describes_the_product
 
 IDENTIFIER_START = re.compile(r"[A-Za-z_$]")
 IDENTIFIER_BODY = re.compile(r"[A-Za-z0-9_$]")
@@ -992,17 +993,18 @@ class JavaLexicalAnalyzer:
                     supporting = receipt(
                         path, member.line, "java_entry", owner, line_text(member.line)
                     )
-                    claims.append(
-                        self._claim(
-                            snapshot,
-                            created_at,
-                            text=f"{owner}.main is a program entry point.",
-                            category="application_entry",
-                            supporting=(supporting,),
-                            importance="high",
-                            path=path,
+                    if describes_the_product(file_record.role):
+                        claims.append(
+                            self._claim(
+                                snapshot,
+                                created_at,
+                                text=f"{owner}.main is a program entry point.",
+                                category="application_entry",
+                                supporting=(supporting,),
+                                importance="high",
+                                path=path,
+                            )
                         )
-                    )
                 if TEST_ANNOTATIONS & set(member.annotations):
                     test_receipts.append(
                         receipt(path, member.line, "java_test", owner, line_text(member.line))

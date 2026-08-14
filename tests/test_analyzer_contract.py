@@ -82,6 +82,51 @@ class AnalyzerContractTests(TestCase):
                     "reported as thin analysis rather than as nothing to say",
                 )
 
+    def test_no_analyzer_calls_a_harness_entry_point_an_application_entry(self) -> None:
+        # `benchmarks/run.py` really does define a `__main__` guard, so the
+        # claim was never false -- but filed under "how this application
+        # starts" it answers a question nobody asked, and thirteen of them
+        # buried this repository's five real answers.
+        #
+        # Written across all analyzers at once on purpose. Four of them emit
+        # this category, and fixing one is the failure mode this file exists
+        # for: a correct fix that never crosses to the others.
+        sources = {
+            "benchmarks/run_bench.py": 'if __name__ == "__main__":\n    print("x")\n',
+            "benchmarks/bench.rs": "fn main() {}\n",
+            "examples/Demo.java": "public class Demo { public static void main(String[] a) {} }\n",
+            "app.py": 'if __name__ == "__main__":\n    print("real")\n',
+        }
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            (root / "benchmarks").mkdir(parents=True)
+            (root / "examples").mkdir(parents=True)
+            for name, body in sources.items():
+                (root / name).write_text(body, encoding="utf-8")
+            snapshot = scan_repository(root)
+            result = analyze_snapshot(snapshot)
+
+        role_by_path = {item.path: str(item.role) for item in snapshot.files}
+        offenders: list[str] = []
+        by_id = {item.evidence_id: item for item in result.evidence}
+        for claim in result.claims:
+            if claim.category != "application_entry":
+                continue
+            for evidence_id in claim.supporting_evidence:
+                record = by_id.get(evidence_id)
+                if record is None:
+                    continue
+                role = role_by_path.get(str(record.path), "")
+                if role and role != "source":
+                    offenders.append(f"{claim.produced_by} -> {record.path} ({role})")
+        self.assertEqual(offenders, [], "harness files reported as application entry points")
+        # And the real one still is one, so this is a correction rather than
+        # a suppression.
+        self.assertTrue(
+            any(claim.category == "application_entry" for claim in result.claims),
+            "the product's own entry point must survive",
+        )
+
     def test_every_analyzer_reports_coverage_under_the_version_it_declares(self) -> None:
         # `version` is read by nothing, which is how six analyzers came to hold
         # the qualified identity that appears in records ("python-ast/v2") and

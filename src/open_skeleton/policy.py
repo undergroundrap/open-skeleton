@@ -283,3 +283,22 @@ def classify_role(path: Path) -> str:
     if suffix in LANGUAGES_BY_SUFFIX:
         return "source"
     return "unknown"
+
+
+# Roles whose files are the system rather than something that exercises or
+# describes it. Used where a claim asserts a property *of the product*, so
+# that a fact true of a benchmark is not filed as a fact about the program.
+PRODUCT_ROLES = frozenset({"source"})
+
+
+def describes_the_product(role: str | None) -> bool:
+    """Whether a claim sourced from this file is about the system itself.
+
+    An entry point is the motivating case. `benchmarks/run_comparison.py`
+    genuinely defines a `__main__` guard, so reporting it was not false -- but
+    filed under "how this application starts" it answered a question nobody
+    asked, and thirteen of them buried the five real answers. The predicate is
+    shared so that four analyzers cannot drift on what counts as the product.
+    """
+
+    return str(role or "") in PRODUCT_ROLES
