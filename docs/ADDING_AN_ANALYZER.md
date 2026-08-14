@@ -79,11 +79,15 @@ spec profile section, or it lands in §9.4 as unrouted.
 | Native AST | The language ships a parser you can call from Python | exact |
 | Lexical | You can tokenize safely but not parse | lexical |
 | Native index | The toolchain emits a semantic graph you can consume | supplied index |
+| Declared | The fact is stated outright in the source and needs no parser | declared |
 
 `PythonAstAnalyzer` uses the stdlib `ast` module — the reference parser, so its
 facts are exact. `RustLexicalAnalyzer` and `TypeScriptLexicalAnalyzer` tokenize.
 `HumSemanticIndexAnalyzer` consumes `hum.semantic_graph.v0` and **never runs the
 compiler**; without a supplied index it reports zero coverage and says so.
+`SqlSchemaAnalyzer` is `declared`: DDL states the schema rather than implying
+it, so the columns and keys it reports are exact even though the file holding
+them was never parsed as a program.
 
 Prefer a native index over a lexical guess when the toolchain offers one. Prefer
 saying "lexical" over implying more.

@@ -616,7 +616,7 @@
               "storage_serialization",
               "test_storage"
             ],
-            "limit": 25,
+            "limit": 60,
             "min_importance": "low"
           },
           "cross_references": [

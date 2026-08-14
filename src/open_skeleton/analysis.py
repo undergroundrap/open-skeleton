@@ -18,6 +18,7 @@ from open_skeleton.analyzers.java_lexical import JavaLexicalAnalyzer
 from open_skeleton.analyzers.project_metadata import ProjectMetadataAnalyzer
 from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
 from open_skeleton.analyzers.rust_lexical import RustLexicalAnalyzer
+from open_skeleton.analyzers.sql_schema import SqlSchemaAnalyzer
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
@@ -681,6 +682,7 @@ def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Ana
         RustLexicalAnalyzer(),
         JavaLexicalAnalyzer(),
         ProjectMetadataAnalyzer(),
+        SqlSchemaAnalyzer(),
         HumSemanticIndexAnalyzer(hum_index),
     )
 
