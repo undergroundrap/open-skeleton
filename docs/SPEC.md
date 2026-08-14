@@ -270,6 +270,29 @@ to their static prefix before comparison, because a client builds
 `/action/attack/{player_id}` with an f-string and the recorded literal is only
 `/action/attack/`.
 
+A call is credited only when its name identifies one definition. Matching is
+lexical, so a name defined in several files says nothing about which of them
+ran: `main` is defined in sixteen files of this repository and `to_dict` in
+fourteen, and crediting every capability holding such a name reported the
+agent-loop gate as exercised by `tests/test_cli.py calls main` — the CLI's
+`main`, not the gate's. Three of that capability's four references were that
+shape, and before a real test existed it still read as covered. An ambiguous
+name now credits nothing, which is the rule the route reader already follows
+for an unresolved receiver.
+
+That trade costs recall and is the right way round for this engine. A
+genuinely tested capability whose entry point shares a common name now reads
+as untraced, and a surface naming verification that does not exist is worse
+than one omitting verification that does. Uniqueness is also measured among
+extracted symbols rather than in the program, so a call to something this
+engine never extracted can still land on the one capability that declares
+that name.
+
+A repository whose suite leaves no call edge at all — one driving a built
+artifact or an HTTP surface — is told so explicitly rather than being reported
+as untested, and that distinction is drawn from files carrying the `test` role
+rather than from any claim about testing.
+
 Two deliberate exclusions keep the number honest:
 
 - A verifying file calling a helper **defined in that same file** is
