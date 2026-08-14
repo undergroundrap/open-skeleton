@@ -216,6 +216,7 @@ def _graph_facts(
 class HumSemanticIndexAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
+    eligibility = "language"
 
     def __init__(self, index_paths: Sequence[Path] | Path | None = None) -> None:
         """Accept one index or several.

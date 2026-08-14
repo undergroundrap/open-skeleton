@@ -2179,6 +2179,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 class PythonAstAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
+    eligibility = "language"
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()

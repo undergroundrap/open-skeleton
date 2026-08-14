@@ -1435,6 +1435,7 @@ def _state_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
 class TypeScriptLexicalAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
+    eligibility = "language"
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()

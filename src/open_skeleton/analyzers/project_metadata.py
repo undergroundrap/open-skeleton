@@ -407,6 +407,7 @@ def _declared_commitments(source: str) -> list[tuple[str, int, int]]:
 class ProjectMetadataAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
+    eligibility = "language"
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()

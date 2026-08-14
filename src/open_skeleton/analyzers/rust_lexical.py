@@ -1036,6 +1036,7 @@ def _use_target(tokens: list[Token], start: int) -> tuple[str, int]:
 class RustLexicalAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
+    eligibility = "language"
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()

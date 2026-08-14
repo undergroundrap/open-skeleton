@@ -404,7 +404,8 @@ class SqlSchemaAnalyzer:
     """Relational schema facts read from DDL, in any file that carries it."""
 
     name = "sql-schema"
-    version = "v1"
+    version = ANALYZER_VERSION
+    eligibility = "subject"
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()

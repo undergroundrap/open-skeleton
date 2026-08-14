@@ -34,6 +34,25 @@ analyzers = (
 Order matters only in that `ProjectMetadataAnalyzer` reconciles documentation
 against what earlier analyzers found, so keep it last.
 
+## Declare what makes a file eligible
+
+Set `eligibility` on the class to `"language"` or `"subject"`. The choice
+decides what a low yield means about your analyzer, and `tests/
+test_analyzer_contract.py` fails if you leave it out.
+
+| Kind | Eligible is | A low yield means |
+|---|---|---|
+| `language` | Every file of your declared language | A real limit — you parsed it and had nothing to say, which belongs in "Where this analysis is thin" |
+| `subject` | Every file carrying the thing you read: DDL, a published figure, a manifest | Your reader is weak, because a file without the subject should not have been eligible |
+
+A `subject` analyzer must report **zero** eligible files in a repository that
+holds none of its subject. Counting every candidate instead is invisible in
+the output — the claims are identical and only the denominator moves — and it
+puts your analyzer under a thin-coverage warning for correctly finding
+nothing. The contract test enforces this against a fixture of ordinary code
+and prose; if your subject genuinely appears there, extend the fixture rather
+than exempt yourself.
+
 ## Non-negotiables
 
 These are enforced by the model and by review, not by convention:

@@ -181,7 +181,8 @@ class DocumentedMeasurementAnalyzer:
     """Performance figures a repository states, separated by what they are."""
 
     name = "documented-measurements"
-    version = "v1"
+    version = ANALYZER_VERSION
+    eligibility = "subject"
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
