@@ -1670,6 +1670,78 @@ class UnreadLanguageTests(TestCase):
         self.assertNotIn("could not read", render_spec_markdown(idle))
 
 
+class AbsenceGroundingTests(TestCase):
+    """An absence must say how much of the repository it rests on.
+
+    "This repository does not implement authentication" and "the files that
+    would have shown it did not parse" produce the same probe result, and the
+    summary presented the first reading of both. It went further and titled the
+    section "Concerns this repository does not implement", which is a positive
+    claim about the code derived entirely from a null result.
+    """
+
+    def _document(self) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            ledger = _analyzed(root, workspace / "state")
+            return build_spec(ledger, load_profile())
+
+    def test_a_complete_read_says_the_limit_is_the_analyzers(self) -> None:
+        markdown = render_spec_markdown(self._document())
+        self.assertIn("Concerns with no matching evidence", markdown)
+        self.assertIn("Every eligible file parsed", markdown)
+        self.assertIn("not by anything left unread", markdown)
+
+    def test_an_unparsed_file_qualifies_every_absence(self) -> None:
+        partial = replace(
+            self._document(),
+            coverage=(
+                {
+                    "analyzer": "python-ast/v1",
+                    "language": "Python",
+                    "eligible_files": 40,
+                    "analyzed_files": 37,
+                    "failed_files": 3,
+                    "coverage_ratio": 0.925,
+                    "yield_ratio": 0.5,
+                },
+            ),
+        )
+        markdown = render_spec_markdown(partial)
+        self.assertIn("These hold only over what was read", markdown)
+        self.assertIn("3 eligible file(s) (Python) were not read", markdown)
+        self.assertNotIn("Every eligible file parsed", markdown)
+
+    def test_the_heading_no_longer_asserts_what_the_repository_does(self) -> None:
+        # The old heading turned zero matches into a statement about the code.
+        self.assertNotIn(
+            "Concerns this repository does not implement", render_spec_markdown(self._document())
+        )
+
+    def test_many_unread_languages_avoid_the_remainder_idiom(self) -> None:
+        # "and N more" is how the enumeration checker recognises the remainder
+        # of the *section* list in this same paragraph. Sharing the phrasing
+        # would put a language count where a section count is expected.
+        rows = tuple(
+            {
+                "analyzer": f"invented-{index}/v1",
+                "language": name,
+                "eligible_files": 10,
+                "analyzed_files": 1,
+                "failed_files": 9,
+                "coverage_ratio": 0.1,
+                "yield_ratio": 0.0,
+            }
+            for index, name in enumerate(["Ada", "Bash", "COBOL", "Dart", "Elm", "Fortran"])
+        )
+        markdown = render_spec_markdown(replace(self._document(), coverage=rows))
+        self.assertIn("plus 2 other language(s)", markdown)
+        self.assertIn("54 eligible file(s)", markdown)
+
+
 class UntracedCapabilityDisclosureTests(TestCase):
     """A count and a list that disagree must say so.
 

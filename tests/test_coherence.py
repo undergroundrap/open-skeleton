@@ -24,7 +24,7 @@ from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, every_claim, load_profile, render_spec_markdown
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.coherence import check_coherence, check_conservation
-from open_skeleton.spec.render import CLAIM_PAGE
+from open_skeleton.spec.render import ABSENCE_HEADING, CLAIM_PAGE
 from tests.helpers import create_sample_repository
 
 
@@ -69,6 +69,27 @@ class CoherenceTests(TestCase):
             ),
         )
         self.assertIn("verdict-contradicts-findings", self._checks(broken))
+
+    def test_a_wrong_absence_tally_is_still_caught(self) -> None:
+        # The tally check finds its paragraph by heading and reports "coherent"
+        # when it finds none, so renaming the section in the renderer alone
+        # would disable it silently. Both sides now import one constant; this
+        # proves the checker still reaches the paragraph by corrupting the
+        # count and requiring the complaint.
+        document = self._sample()
+        markdown = render_spec_markdown(document)
+        self.assertIn(ABSENCE_HEADING, markdown)
+        target = next((item for item in document.sections if item.verdict == "absent"), None)
+        self.assertIsNotNone(target, "the fixture should leave some concern absent")
+        assert target is not None
+        fewer = replace(
+            document,
+            sections=tuple(
+                replace(item, verdict="structural") if item is target else item
+                for item in document.sections
+            ),
+        )
+        self.assertIn("absence-tally-disagrees", self._checks(fewer, markdown))
 
     def test_a_silently_truncated_list_is_caught(self) -> None:
         # "21 of 48" followed by ten names, with no ellipsis and no

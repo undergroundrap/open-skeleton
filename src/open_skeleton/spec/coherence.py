@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from open_skeleton.spec.render import SpecDocument
+from open_skeleton.spec.render import ABSENCE_HEADING, SpecDocument
 
 # Verdicts whose sentence tells a reader the concern was not found. A section
 # carrying one of these may not also render findings, because the findings are
@@ -164,7 +164,7 @@ def _enumerations(markdown: str) -> list[Incoherence]:
 def _absence_count(document: SpecDocument, markdown: str) -> list[Incoherence]:
     """The summary's absence tally must match the sections that carry one."""
 
-    marker = "### Concerns this repository does not implement"
+    marker = ABSENCE_HEADING
     if marker not in markdown:
         return []
     paragraph = markdown.split(marker, 1)[1].split("\n\n")[1]

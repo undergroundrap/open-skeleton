@@ -684,6 +684,36 @@ def _escape(value: str) -> str:
 
 MAX_RENDERED_CITATIONS = 6
 MAX_SUMMARY_ROWS = 10
+MAX_UNREAD_LANGUAGES = 4
+
+# The coherence checker locates the absence tally by this heading. Both sides
+# import it so that renaming the section cannot quietly disable the check that
+# guards it -- a mismatch would leave the checker returning "no incoherence"
+# for a paragraph it had stopped reading.
+ABSENCE_HEADING = "### Concerns with no matching evidence"
+
+
+def _unread_files(coverage: Iterable[dict[str, Any]]) -> tuple[int, tuple[str, ...]]:
+    """Eligible files that no analyzer parsed, and the languages they sit in.
+
+    An absence is only as strong as the read it rests on. "This repository does
+    not implement authentication" and "the files that would have shown it did
+    not parse" produce the identical probe result -- zero matches -- and the
+    difference between them is the entire question a reader is asking. The
+    counts already exist per analyzer, so this re-reads nothing.
+    """
+
+    total = 0
+    languages: list[str] = []
+    for item in coverage:
+        missed = int(item["eligible_files"]) - int(item["analyzed_files"])
+        if missed <= 0:
+            continue
+        total += missed
+        language = str(item["language"])
+        if language not in languages:
+            languages.append(language)
+    return total, tuple(sorted(languages))
 
 
 def _spread_by_category(claims: list[RenderedClaim], limit: int) -> list[RenderedClaim]:
@@ -938,10 +968,32 @@ def _executive_summary(document: SpecDocument) -> list[str]:
         names = ", ".join(f"§{item.number} {item.title}" for item in absent[:MAX_SUMMARY_ROWS])
         remainder = len(absent) - MAX_SUMMARY_ROWS
         suffix = f", and {remainder:,} more" if remainder > 0 else ""
+        missed, missed_languages = _unread_files(document.coverage)
+        if missed:
+            listed = ", ".join(missed_languages[:MAX_UNREAD_LANGUAGES])
+            beyond = len(missed_languages) - MAX_UNREAD_LANGUAGES
+            if beyond > 0:
+                # Deliberately not "and N more": the enumeration checker reads
+                # that idiom as the remainder of the *section* list in the same
+                # paragraph, and would compare this count against that total.
+                listed += f", plus {beyond:,} other language(s)"
+            grounding = (
+                # "did not parse" would overclaim: the shortfall counts files
+                # that failed *and* files no analyzer was equipped to attempt,
+                # and only the first of those was ever read.
+                f" These hold only over what was read: {missed:,} eligible file(s) "
+                f"({listed}) were not read, so evidence inside them was never "
+                "available to be found."
+            )
+        else:
+            grounding = (
+                " Every eligible file parsed, so these absences are bounded by what the "
+                "analyzers can express, not by anything left unread."
+            )
         lines.append(
-            f"### Concerns this repository does not implement\n\n"
+            f"{ABSENCE_HEADING}\n\n"
             f"{len(absent):,} of {len(probed):,} probed concerns returned no matches: "
-            f"{names}{suffix}. Each prints the query that found nothing.\n\n"
+            f"{names}{suffix}. Each prints the query that found nothing.{grounding}\n\n"
         )
 
     unmapped = next(
