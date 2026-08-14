@@ -37,6 +37,9 @@ condition fail loudly instead.
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -67,6 +70,59 @@ def _emit(header: str, lines: list[str]) -> None:
         print(f"  {line}")
     if len(lines) > MAX_LINES:
         print(f"  ... and {len(lines) - MAX_LINES:,} more")
+
+
+def _split_command(text: str) -> list[str]:
+    """Split a command string into words without handing it to a shell.
+
+    Neither `shlex` mode is right on its own on Windows. POSIX mode treats a
+    backslash as an escape, so a native path loses every separator it has.
+    Non-POSIX mode keeps the backslashes -- and also keeps the quote
+    characters *inside* the token, so a quoted path containing a space
+    reaches `subprocess` with its quotes attached and cannot be found.
+
+    So: split without escape handling, then strip the quotes it split on.
+    """
+
+    words = shlex.split(text, posix=os.name != "nt")
+    if os.name != "nt":
+        return words
+    return [
+        word[1:-1] if len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'" else word
+        for word in words
+    ]
+
+
+def _usable_indexes(paths: list[Path]) -> bool:
+    """Whether the declared indexes exist and parse as a semantic graph.
+
+    A generator's exit code is not a verdict on its output. `hum graph` exits
+    non-zero whenever the sources carry an error, and a compiler's own test
+    corpus carries them on purpose -- hum-lang exits 1 while writing a
+    complete 2.26 MB graph of 229 files. Failing the gate on that status
+    rejected every turn on the repository this gate was built for, and the
+    reason would have read as a broken generator rather than as a working one
+    reporting the errors it was asked to find.
+
+    So the status is a signal and the output is the evidence. Nothing here
+    judges *quality*: a file that parses and names the schema is enough to say
+    the run produced something to read.
+    """
+
+    if not paths:
+        # Nothing was declared, so there is nothing to inspect and the exit
+        # code is the only information available.
+        return False
+    for path in paths:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(document, dict) or not str(document.get("schema", "")).startswith(
+            "hum.semantic_graph"
+        ):
+            return False
+    return True
 
 
 def run(
@@ -188,10 +244,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--hum-graph-command",
-        nargs="+",
+        # One quoted string, split the way a shell would but never handed to
+        # one. As a list of words (`nargs="+"`) argparse stopped at the first
+        # token beginning with `-`, so the example this help text used to give
+        # -- `hum graph --out build/graph.json` -- was rejected as unrecognized
+        # arguments. Every realistic generator invocation takes a flag, so the
+        # regeneration path could not be used as documented.
         help=(
-            "Command that regenerates the Hum index before gating, "
-            "for example: --hum-graph-command hum graph --out build/graph.json"
+            "Command that regenerates the Hum index before gating, as one "
+            'quoted string: --hum-graph-command "hum graph src --out build/graph.json"'
         ),
     )
     parser.add_argument(
@@ -242,12 +303,24 @@ def main() -> int:
     if arguments.hum_graph_command:
         # Regenerating the index is the caller's decision, never implicit:
         # this tool does not run a target compiler on its own.
-        completed = subprocess.run(  # noqa: S603
-            arguments.hum_graph_command, cwd=repository, capture_output=True, text=True, check=False
-        )
-        if completed.returncode:
+        command = _split_command(arguments.hum_graph_command)
+        if not command:
+            print("HUM INDEX — --hum-graph-command was empty.")
+            return 1
+        try:
+            completed = subprocess.run(  # noqa: S603
+                command, cwd=repository, capture_output=True, text=True, check=False
+            )
+        except OSError as exc:
+            # A generator that is not installed is not a verdict on the work.
+            # Exiting 2 keeps "ask me again" distinct from "this change is
+            # bad", which is the whole point of this script's exit codes.
+            print(f"HUM INDEX — could not run `{command[0]}`: {exc.__class__.__name__}: {exc}")
+            return 2
+        if completed.returncode and not _usable_indexes(arguments.hum_index):
             print("HUM INDEX — the generator failed, so Hum sources will read as nothing:")
-            print(f"  {(completed.stderr or completed.stdout).strip().splitlines()[-1][:200]}")
+            detail = (completed.stderr or completed.stdout).strip().splitlines()
+            print(f"  {detail[-1][:200] if detail else 'no output'}")
             return 1
 
     try:

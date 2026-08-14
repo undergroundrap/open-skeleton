@@ -18,7 +18,10 @@ the gap this file closes.
 from __future__ import annotations
 
 import importlib.util
+import io
+import shlex
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -110,6 +113,98 @@ class TurnGateTests(TestCase):
         # Without --fast the document is built and checked against itself and
         # against the ledger, which is a different code path entirely.
         self.assertEqual(self._run(self.CLEAN, fast=False), 0)
+
+    def test_a_generator_that_fails_but_writes_a_graph_is_believed(self) -> None:
+        """A compiler exits non-zero on a corpus that carries errors on purpose.
+
+        `hum graph` over hum-lang exits 1 and writes a complete 2.26 MB graph
+        of 229 files, because 24 of its `.hum` files are malformed deliberately
+        so a diagnostic fires. Reading that status as a broken generator failed
+        the gate on every turn of the repository it was built for, and said so
+        in words blaming the generator.
+        """
+
+        with TemporaryDirectory() as temporary:
+            index = Path(temporary) / "graph.json"
+            index.write_text(
+                '{"schema": "hum.semantic_graph.v0", "summary": {}, "files": []}',
+                encoding="utf-8",
+            )
+            self.assertTrue(turn_gate._usable_indexes([index]))
+
+    def test_a_generator_that_writes_nothing_usable_is_not(self) -> None:
+        with TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "absent.json"
+            self.assertFalse(turn_gate._usable_indexes([missing]))
+            truncated = Path(temporary) / "half.json"
+            truncated.write_text('{"schema": "hum.semantic', encoding="utf-8")
+            self.assertFalse(turn_gate._usable_indexes([truncated]))
+            other = Path(temporary) / "other.json"
+            other.write_text('{"schema": "something.else.v1"}', encoding="utf-8")
+            self.assertFalse(turn_gate._usable_indexes([other]))
+
+    def test_an_undeclared_index_leaves_only_the_exit_code(self) -> None:
+        # With nothing declared there is no output to inspect, so a failing
+        # generator must still fail rather than be assumed fine.
+        self.assertFalse(turn_gate._usable_indexes([]))
+
+    def _gate_with_generator(self, exit_code: int, write_index: bool) -> tuple[int, str]:
+        """Run the entry point with a generator that exits how we say.
+
+        Returns the status and what was printed. The status alone cannot
+        answer this: the gate legitimately returns 1 for an audit finding, so
+        asserting on it tested something other than the decision under test.
+        """
+
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            (root / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+            (root / "demo.hum").write_text("task greet\n", encoding="utf-8")
+            index = workspace / "graph.json"
+            if write_index:
+                index.write_text(
+                    '{"schema": "hum.semantic_graph.v0", "summary": {}, "files": []}',
+                    encoding="utf-8",
+                )
+            generator = workspace / "generator.py"
+            generator.write_text(f"import sys\nsys.exit({exit_code})\n", encoding="utf-8")
+            argv = [
+                "turn_gate.py",
+                "--repo",
+                str(root),
+                "--state",
+                str(workspace / "state"),
+                "--hum-index",
+                str(index),
+                "--fast",
+                "--hum-graph-command",
+                f"{shlex.quote(sys.executable)} {shlex.quote(str(generator))}",
+            ]
+            original = sys.argv
+            sys.argv = argv
+            captured = io.StringIO()
+            try:
+                with redirect_stdout(captured):
+                    code = int(turn_gate.main())
+            finally:
+                sys.argv = original
+            return code, captured.getvalue()
+
+    REJECTED = "the generator failed"
+
+    def test_the_entry_point_believes_a_graph_over_an_exit_code(self) -> None:
+        # The helper above is tested in isolation, and that was not enough:
+        # removing the guard at the call site left every one of those cases
+        # green. This drives the decision the gate actually makes.
+        _, output = self._gate_with_generator(1, write_index=True)
+        self.assertNotIn(self.REJECTED, output)
+
+    def test_the_entry_point_still_fails_when_nothing_was_written(self) -> None:
+        code, output = self._gate_with_generator(1, write_index=False)
+        self.assertIn(self.REJECTED, output)
+        self.assertEqual(code, 1)
 
     def test_a_state_directory_inside_the_repository_is_refused(self) -> None:
         # The engine never writes into the tree it is analyzing, and the gate
