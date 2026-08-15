@@ -48,6 +48,11 @@ class ProbeResult:
     query: str
     match_count: int
     matches: tuple[str, ...]
+    # The individual things looked for. Carried apart from `query` because a
+    # reader learning what is absent needs the artifacts named one at a time:
+    # "no `Dockerfile`, `docker-compose.yml` or `Containerfile`" says what
+    # `path_glob: Dockerfile, docker-compose.yml, Containerfile` does not.
+    terms: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +61,7 @@ class ProbeResult:
             "query": self.query,
             "match_count": self.match_count,
             "matches": list(self.matches),
+            "terms": list(self.terms),
         }
 
 
@@ -179,6 +185,7 @@ def run_probe(probe: SpecProbe, corpus: LedgerCorpus) -> ProbeResult:
         query=probe.query_display,
         match_count=len(unique),
         matches=tuple(unique[:MAX_RECORDED_MATCHES]),
+        terms=tuple(probe.terms),
     )
 
 

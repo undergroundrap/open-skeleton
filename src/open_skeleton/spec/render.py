@@ -685,12 +685,53 @@ def _escape(value: str) -> str:
 MAX_RENDERED_CITATIONS = 6
 MAX_SUMMARY_ROWS = 10
 MAX_UNREAD_LANGUAGES = 4
+# Enough to name the conventions a reader knows without printing a dictionary.
+MAX_NAMED_ABSENCES = 8
 
 # The coherence checker locates the absence tally by this heading. Both sides
 # import it so that renaming the section cannot quietly disable the check that
 # guards it -- a mismatch would leave the checker returning "no incoherence"
 # for a paragraph it had stopped reading.
 ABSENCE_HEADING = "### Concerns with no matching evidence"
+
+
+def _absent_artifacts(results: Iterable[ProbeResult]) -> str:
+    """Name what was looked for and not found, one artifact at a time.
+
+    This said "`path_glob: Dockerfile, docker-compose.yml` also matched
+    nothing", which asks a reader to parse a query language to learn that
+    there is no Dockerfile. Naming each artifact in its own span is how the
+    sentence reads as a fact rather than as a log line -- and a measurement of
+    this document against a long-form baseline put its coverage of *absence*
+    facts at 2.4%, because absence was reported in the vocabulary of the tool
+    instead of the vocabulary of the repository.
+    """
+
+    # Only kinds whose terms name something a reader could go and look for. A
+    # claim category does not "appear in a snapshot" the way a file does, and
+    # listing `delivery_automation` beside `Dockerfile` in one sentence claims
+    # they are the same sort of thing.
+    named: list[str] = []
+    for result in results:
+        if result.kind not in LEGIBLE_PROBE_KINDS:
+            continue
+        for term in result.terms:
+            if term not in named:
+                named.append(term)
+    if not named:
+        return "Nothing adjacent to this concern is present either."
+    spans = [f"`{_escape(term)}`" for term in named[:MAX_NAMED_ABSENCES]]
+    remainder = len(named) - len(spans)
+    if remainder > 0:
+        spans.append(f"the {remainder:,} other name(s) queried")
+    listed = spans[0] if len(spans) == 1 else ", ".join(spans[:-1]) + f" or {spans[-1]}"
+    # "None of ... appears" stays grammatical whether one name is listed or
+    # nine, which the previous phrasing did not.
+    return (
+        f"None of {listed} appears anywhere in this snapshot, so the concern is "
+        "absent from what a reader would look for as well as from what the "
+        "analyzers report."
+    )
 
 
 def _unread_files(coverage: Iterable[dict[str, Any]]) -> tuple[int, tuple[str, ...]]:
@@ -1154,12 +1195,7 @@ def render_spec_markdown(document: SpecDocument) -> str:
                     "is a reading of what is here rather than only a query that missed._\n\n"
                 )
             else:
-                queries = "; ".join(
-                    f"`{_escape(item.query)}`" for item in section.candidate_results
-                )
-                lines.append(
-                    f"_Nothing adjacent is present either: {queries} also matched nothing._\n\n"
-                )
+                lines.append(f"_{_absent_artifacts(section.candidate_results)}_\n\n")
 
         if section.framing:
             lines.append(f"{section.framing}\n\n")

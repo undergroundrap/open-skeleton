@@ -173,6 +173,31 @@
           ],
           "panels": [
             "endpoint_catalog"
+          ],
+          "candidates": [
+            {
+              "name": "Web frameworks",
+              "kind": "dependency_name",
+              "terms": [
+                "flask",
+                "fastapi",
+                "django",
+                "starlette",
+                "tornado",
+                "bottle",
+                "sanic",
+                "express",
+                "koa",
+                "hapi",
+                "@nestjs/core",
+                "next",
+                "actix-web",
+                "axum",
+                "rocket",
+                "warp",
+                "spring-boot-starter-web"
+              ]
+            }
           ]
         },
         {
@@ -745,6 +770,19 @@
               "terms": [
                 "process_local_state"
               ]
+            },
+            {
+              "name": "Cache clients",
+              "kind": "dependency_name",
+              "terms": [
+                "redis",
+                "hiredis",
+                "aioredis",
+                "memcached",
+                "pymemcache",
+                "ioredis",
+                "node-cache"
+              ]
             }
           ]
         },
@@ -945,7 +983,23 @@
             ],
             "limit": 60,
             "min_importance": "low"
-          }
+          },
+          "candidates": [
+            {
+              "name": "Deployment and topology manifests",
+              "kind": "path_glob",
+              "terms": [
+                "docker-compose.yml",
+                "docker-compose.yaml",
+                "Procfile",
+                "*.service",
+                "k8s/**",
+                "kubernetes/**",
+                "helm/**",
+                "*.tf"
+              ]
+            }
+          ]
         },
         {
           "id": "integration.failure",
@@ -1074,6 +1128,20 @@
                 "configuration_read",
                 "environment_setting"
               ]
+            },
+            {
+              "name": "Secret material and its configuration",
+              "kind": "path_glob",
+              "terms": [
+                ".env",
+                ".env.*",
+                "*.pem",
+                "*.key",
+                "secrets.*",
+                "vault.*",
+                ".npmrc",
+                ".netrc"
+              ]
             }
           ]
         },
@@ -1138,6 +1206,24 @@
                 "process_local_state",
                 "storage_schema"
               ]
+            },
+            {
+              "name": "Message brokers and queues",
+              "kind": "dependency_name",
+              "terms": [
+                "celery",
+                "kombu",
+                "pika",
+                "kafka-python",
+                "confluent-kafka",
+                "aio-pika",
+                "bullmq",
+                "bull",
+                "amqplib",
+                "sidekiq",
+                "nats-py",
+                "lapin"
+              ]
             }
           ]
         },
@@ -1177,7 +1263,22 @@
               ]
             }
           ],
-          "framing": "A repository handling payments carries compliance obligations that one merely calling an API does not. This records which provider is integrated, not whether the integration is compliant."
+          "framing": "A repository handling payments carries compliance obligations that one merely calling an API does not. This records which provider is integrated, not whether the integration is compliant.",
+          "candidates": [
+            {
+              "name": "Payment processors",
+              "kind": "dependency_name",
+              "terms": [
+                "stripe",
+                "braintree",
+                "paypalrestsdk",
+                "square",
+                "adyen",
+                "razorpay",
+                "@stripe/stripe-js"
+              ]
+            }
+          ]
         },
         {
           "id": "integration.analytics",
@@ -1224,7 +1325,24 @@
               ]
             }
           ],
-          "framing": "Behavioural data leaving the process is a privacy obligation, and runtime flags mean deployed code paths are not decided by the deployment. Both change what a reviewer must check."
+          "framing": "Behavioural data leaving the process is a privacy obligation, and runtime flags mean deployed code paths are not decided by the deployment. Both change what a reviewer must check.",
+          "candidates": [
+            {
+              "name": "Analytics and feature-flag services",
+              "kind": "dependency_name",
+              "terms": [
+                "segment",
+                "analytics-python",
+                "amplitude",
+                "mixpanel",
+                "posthog",
+                "launchdarkly-server-sdk",
+                "unleash-client",
+                "statsig",
+                "@sentry/browser"
+              ]
+            }
+          ]
         },
         {
           "id": "integration.search",
@@ -2125,6 +2243,17 @@
                 "delivery_automation",
                 "documented_runtime_command"
               ]
+            },
+            {
+              "name": "Container build files",
+              "kind": "path_glob",
+              "terms": [
+                "Dockerfile",
+                "Dockerfile.*",
+                "Containerfile",
+                ".dockerignore",
+                "*.dockerfile"
+              ]
             }
           ]
         },
@@ -2292,7 +2421,24 @@
               "process_termination"
             ],
             "limit": 6
-          }
+          },
+          "candidates": [
+            {
+              "name": "Telemetry and metrics clients",
+              "kind": "dependency_name",
+              "terms": [
+                "opentelemetry-api",
+                "opentelemetry-sdk",
+                "prometheus-client",
+                "statsd",
+                "datadog",
+                "ddtrace",
+                "sentry-sdk",
+                "newrelic",
+                "prom-client"
+              ]
+            }
+          ]
         },
         {
           "id": "operations.error-tracking",

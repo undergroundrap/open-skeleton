@@ -17,7 +17,7 @@ from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, verify_spec
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.panels import PanelContext, build_panel, short_form
-from open_skeleton.spec.probes import LedgerCorpus, run_probe
+from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import (
     MAX_PANEL_ROWS,
@@ -1668,6 +1668,54 @@ class UnreadLanguageTests(TestCase):
             ),
         )
         self.assertNotIn("could not read", render_spec_markdown(idle))
+
+
+class NamedAbsenceTests(TestCase):
+    """An absence should name what was looked for, not the query that missed.
+
+    This read "`path_glob: Dockerfile, docker-compose.yml` also matched
+    nothing", which asks a reader to parse a query language to learn there is
+    no Dockerfile.
+    """
+
+    def _sentence(self, results: tuple[ProbeResult, ...]) -> str:
+        from open_skeleton.spec.render import _absent_artifacts
+
+        return _absent_artifacts(results)
+
+    def _probe(self, kind: str, *terms: str) -> ProbeResult:
+        return ProbeResult(name="n", kind=kind, query="q", match_count=0, matches=(), terms=terms)
+
+    def test_each_artifact_is_named_in_its_own_span(self) -> None:
+        sentence = self._sentence((self._probe("path_glob", "Dockerfile", "Containerfile"),))
+        self.assertIn("`Dockerfile`", sentence)
+        self.assertIn("`Containerfile`", sentence)
+
+    def test_a_claim_category_is_not_listed_beside_a_filename(self) -> None:
+        # A claim category does not "appear in a snapshot" the way a file
+        # does, and listing them together claims they are the same sort of
+        # thing.
+        sentence = self._sentence(
+            (
+                self._probe("claim_category", "delivery_automation"),
+                self._probe("path_glob", "Dockerfile"),
+            )
+        )
+        self.assertIn("`Dockerfile`", sentence)
+        self.assertNotIn("delivery_automation", sentence)
+
+    def test_nothing_legible_falls_back_rather_than_naming_internals(self) -> None:
+        sentence = self._sentence((self._probe("claim_category", "caching"),))
+        self.assertNotIn("caching", sentence)
+        self.assertIn("Nothing adjacent", sentence)
+
+    def test_the_sentence_stays_grammatical_at_every_length(self) -> None:
+        # "No `a`, `b`, and 9 other name(s) queried appears" was none of
+        # singular, plural, or a sentence.
+        one = self._sentence((self._probe("path_glob", "Dockerfile"),))
+        self.assertIn("None of `Dockerfile` appears", one)
+        many = self._sentence((self._probe("dependency_name", *[f"p{i}" for i in range(12)]),))
+        self.assertIn("or the 4 other name(s) queried appears", many)
 
 
 class AbsenceGroundingTests(TestCase):
