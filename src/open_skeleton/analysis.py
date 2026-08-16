@@ -8,6 +8,7 @@ import hashlib
 import re
 import sys
 import time
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -309,6 +310,115 @@ def _append_testing_census(
             invalidation_keys=("snapshot:file-set",),
             alternative_hypotheses=(
                 "Tests may use project-specific naming conventions not recognized by the scanner.",
+            ),
+        )
+    )
+    return (*evidence, census)
+
+
+# Below this a helper is used by one suite and is that suite's own setup, not
+# shared test infrastructure anyone needs to know about.
+MIN_SUITES_FOR_A_SHARED_HELPER = 2
+# Enough to name where test data comes from without listing a module's imports.
+MAX_NAMED_HELPERS = 6
+
+
+def _append_shared_test_helpers(
+    snapshot: Snapshot,
+    *,
+    created_at: str,
+    symbols: tuple[SymbolRecord, ...],
+    edges: tuple[EdgeRecord, ...],
+    evidence: tuple[EvidenceRecord, ...],
+    claims: list[ClaimRecord],
+) -> tuple[EvidenceRecord, ...]:
+    """Functions defined in the suite that several test modules call.
+
+    "Where does the test data come from" is one of the first questions asked
+    of an unfamiliar repository, and the answer is a handful of builders the
+    suite shares. Both halves were already in the ledger -- the call edges and
+    the symbols -- and nothing put them together.
+
+    Callees are resolved against symbols defined in test-role files, which is
+    what separates a shared builder from `assertEqual` and `TemporaryDirectory`.
+    Without that filter the most-called names in any suite are the assertion
+    methods, which say nothing about the repository.
+    """
+
+    test_paths = {item.path for item in snapshot.files if str(item.role) == "test"}
+    if not test_paths:
+        return evidence
+    # A name defined in more than one test module is ambiguous: five suites
+    # each declaring their own `_claim` helper are not five callers of one
+    # shared thing, and reporting them as such invents infrastructure. The
+    # same rule already governs capability attribution, where accepting the
+    # ambiguous case cost more in wrong answers than it bought in coverage.
+    declared: dict[str, set[str]] = defaultdict(set)
+    for symbol in symbols:
+        if symbol.path in test_paths and symbol.kind in {"function", "method"}:
+            declared[symbol.qualified_name.rsplit(".", 1)[-1]].add(symbol.path)
+    defined = {name: next(iter(paths)) for name, paths in declared.items() if len(paths) == 1}
+    callers: dict[str, set[str]] = defaultdict(set)
+    for edge in edges:
+        if edge.relationship != "calls" or edge.source_path not in test_paths:
+            continue
+        if edge.target_ref in defined:
+            callers[edge.target_ref].add(edge.source_path)
+    shared = sorted(
+        (
+            (name, defined[name], len(paths))
+            for name, paths in callers.items()
+            if len(paths) >= MIN_SUITES_FOR_A_SHARED_HELPER
+        ),
+        key=lambda item: (-item[2], item[0]),
+    )
+    if not shared:
+        return evidence
+
+    census = EvidenceRecord(
+        evidence_id=stable_id(
+            "evidence", (snapshot.snapshot_id, ".", "shared_test_helpers", PIPELINE_VERSION)
+        ),
+        snapshot_id=snapshot.snapshot_id,
+        path=".",
+        start_line=None,
+        end_line=None,
+        symbol=None,
+        evidence_kind="snapshot_census",
+        excerpt_sha256=snapshot.snapshot_id,
+        analyzer=PIPELINE_VERSION,
+        created_at=created_at,
+    )
+    named = ", ".join(
+        f"`{name}` ({path}, {count:,} module(s))"
+        for name, path, count in shared[:MAX_NAMED_HELPERS]
+    )
+    remainder = len(shared) - min(len(shared), MAX_NAMED_HELPERS)
+    tail = f", and {remainder:,} more" if remainder else ""
+    text = (
+        f"{len(shared):,} helper(s) defined in the test suite are called by more than one "
+        f"test module: {named}{tail}. These are where this suite's fixtures come from."
+    )
+    claims.append(
+        ClaimRecord(
+            claim_id=stable_id("claim", (snapshot.snapshot_id, "testing", text, PIPELINE_VERSION)),
+            snapshot_id=snapshot.snapshot_id,
+            claim=text,
+            category="testing",
+            status="verified",
+            confidence=1.0,
+            importance="medium",
+            produced_by=PIPELINE_VERSION,
+            created_at=created_at,
+            verified_at=created_at,
+            supporting_evidence=(census.evidence_id,),
+            invalidation_keys=("snapshot:file-set",),
+            alternative_hypotheses=(
+                (
+                    "Callees are matched by their last name segment. A helper whose name is "
+                    "declared in more than one test module is skipped as ambiguous rather "
+                    "than attributed to one of them."
+                ),
             ),
         )
     )
@@ -752,6 +862,14 @@ def analyze_snapshot(
     evidence = _append_testing_census(
         snapshot,
         created_at=created_at,
+        evidence=evidence,
+        claims=claims,
+    )
+    evidence = _append_shared_test_helpers(
+        snapshot,
+        created_at=created_at,
+        symbols=symbols,
+        edges=edges,
         evidence=evidence,
         claims=claims,
     )

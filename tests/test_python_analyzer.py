@@ -206,6 +206,65 @@ def scale(player):
             self.assertIn("may still exist", census.claim)
             self.assertTrue(census.alternative_hypotheses)
 
+    def _suite(self, sources: dict[str, str]) -> list[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tests").mkdir()
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            for name, body in sources.items():
+                (root / "tests" / name).write_text(body, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            return [item.claim for item in result.claims if "helper(s) defined" in item.claim]
+
+    def test_a_builder_several_suites_share_is_named(self) -> None:
+        # "Where does the test data come from" is among the first questions
+        # asked of an unfamiliar repository. Both halves of the answer were in
+        # the ledger -- the call edges and the symbols -- and nothing put them
+        # together.
+        found = self._suite(
+            {
+                "helpers.py": "def build_repo(root):\n    return root\n",
+                "test_a.py": "from tests.helpers import build_repo\n\ndef test_a():\n    build_repo(1)\n",
+                "test_b.py": "from tests.helpers import build_repo\n\ndef test_b():\n    build_repo(2)\n",
+            }
+        )
+        self.assertTrue(found)
+        self.assertIn("`build_repo`", found[0])
+        self.assertIn("2 module(s)", found[0])
+
+    def test_a_helper_only_one_suite_uses_is_its_own_setup(self) -> None:
+        found = self._suite(
+            {
+                "helpers.py": "def build_repo(root):\n    return root\n",
+                "test_a.py": "from tests.helpers import build_repo\n\ndef test_a():\n    build_repo(1)\n",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_a_name_each_suite_declares_for_itself_is_not_shared(self) -> None:
+        # Five suites each defining their own `_claim` are not five callers of
+        # one shared thing, and reporting them as such invents infrastructure
+        # the repository does not have.
+        found = self._suite(
+            {
+                "test_a.py": "def _claim(x):\n    return x\n\ndef test_a():\n    _claim(1)\n",
+                "test_b.py": "def _claim(x):\n    return x\n\ndef test_b():\n    _claim(2)\n",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_an_assertion_method_is_not_a_fixture_builder(self) -> None:
+        # Without resolving callees against symbols defined in the suite, the
+        # most-called names in any test tree are the assertion methods, which
+        # say nothing about the repository.
+        found = self._suite(
+            {
+                "test_a.py": "def test_a():\n    assert len([1]) == 1\n",
+                "test_b.py": "def test_b():\n    assert len([2]) == 1\n",
+            }
+        )
+        self.assertEqual(found, [])
+
     def test_analysis_reports_progress_after_each_adapter(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
