@@ -85,7 +85,13 @@ def _executable_statements(text: str) -> list[str]:
 
 def _reference(
     statements: list[str],
-) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, list[str]], list[str]]:
+) -> tuple[
+    dict[str, list[str]],
+    dict[str, list[str]],
+    dict[str, list[str]],
+    dict[str, list[tuple[str, str]]],
+    list[str],
+]:
     """SQLite's reading of the schema, and the statements it agreed to run.
 
     The accepted statements are returned so the reader can be given exactly
@@ -123,8 +129,14 @@ def _reference(
             "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
         )
     }
+    # `PRAGMA foreign_key_list` reports the referential action SQLite parsed,
+    # which is the only independent check on the reader's own reading of it.
+    references: dict[str, list[tuple[str, str]]] = {}
+    for name in tables:
+        rows = list(connection.execute(f"PRAGMA foreign_key_list('{name}')"))
+        references[name] = sorted((str(row[2]), str(row[6]).upper()) for row in rows)
     connection.close()
-    return tables, keys, indexes, accepted
+    return tables, keys, indexes, references, accepted
 
 
 def compare(text: str) -> list[str]:
@@ -133,7 +145,9 @@ def compare(text: str) -> list[str]:
     statements = _executable_statements(text)
     if not statements:
         return []
-    reference_tables, reference_keys, reference_indexes, accepted = _reference(statements)
+    reference_tables, reference_keys, reference_indexes, reference_actions, accepted = _reference(
+        statements
+    )
     joined = "\n".join(accepted)
     mine_tables = {table.name: table for table in parse_tables(joined)}
     mine_indexes = {index.name: index for index in parse_indexes(joined)}
@@ -148,6 +162,12 @@ def compare(text: str) -> list[str]:
         if mine != reference_tables[name]:
             findings.append(
                 f"table {name} columns: sqlite {reference_tables[name]} / reader {mine}"
+            )
+        mine_refs = sorted((key.table, key.on_delete) for key in mine_tables[name].foreign_keys)
+        if mine_refs != reference_actions.get(name, []):
+            findings.append(
+                f"table {name} references: sqlite {reference_actions.get(name, [])} / "
+                f"reader {mine_refs}"
             )
         if sorted(mine_tables[name].primary_key) != sorted(reference_keys[name]):
             findings.append(

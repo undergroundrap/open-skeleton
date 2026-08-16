@@ -81,7 +81,7 @@ class TableTests(TestCase):
         table = parse_tables(strip_comments(sql))[0]
         self.assertEqual([column.name for column in table.columns], ["id", "customer", "note"])
         self.assertEqual(table.primary_key, ("id", "customer"))
-        self.assertEqual(table.foreign_keys, ("customers",))
+        self.assertEqual([key.table for key in table.foreign_keys], ["customers"])
         self.assertEqual(table.checks, 1)
 
     def test_a_named_constraint_is_not_counted_as_a_column(self) -> None:
@@ -109,6 +109,54 @@ class TableTests(TestCase):
 
     def test_an_unclosed_statement_is_skipped_rather_than_guessed(self) -> None:
         self.assertEqual(parse_tables(strip_comments("CREATE TABLE t (a TEXT")), [])
+
+
+class ReferentialActionTests(TestCase):
+    """What happens to a child row when its parent goes is declared, not implied.
+
+    A schema whose references all cascade behaves differently under a delete
+    from one that nulls them, and the clause saying which sits right there in
+    the DDL. Reading only the target table threw that away.
+    """
+
+    # Each statement below is one unbroken string on purpose. The SQLite
+    # differential scans this file's own text, and a statement split across
+    # implicit Python concatenation reaches it with the quotes and newline
+    # embedded -- which both readers then misparse, differently, and report as
+    # a disagreement about the reader.
+    def test_the_action_is_read_from_the_clause(self) -> None:
+        sql = "CREATE TABLE kid (a TEXT REFERENCES parent(id) ON DELETE CASCADE, b TEXT REFERENCES other(id) ON DELETE SET NULL);"
+        keys = parse_tables(strip_comments(sql))[0].foreign_keys
+        self.assertEqual(
+            {(key.table, key.on_delete) for key in keys},
+            {("parent", "CASCADE"), ("other", "SET NULL")},
+        )
+
+    def test_an_omitted_clause_is_recorded_as_the_sql_default(self) -> None:
+        # Silence means `NO ACTION` -- the delete is refused. "Nothing was
+        # said" and "nothing happens" are the same outcome and not the same
+        # statement, so the default is named rather than left blank.
+        sql = "CREATE TABLE lone (a TEXT REFERENCES parent(id));"
+        self.assertEqual(
+            parse_tables(strip_comments(sql))[0].foreign_keys[0].on_delete, "NO ACTION"
+        )
+
+    def test_a_table_level_foreign_key_carries_its_action_too(self) -> None:
+        sql = (
+            "CREATE TABLE ward (a TEXT, FOREIGN KEY (a) REFERENCES parent(id) ON DELETE RESTRICT);"
+        )
+        keys = parse_tables(strip_comments(sql))[0].foreign_keys
+        self.assertEqual((keys[0].table, keys[0].on_delete), ("parent", "RESTRICT"))
+
+    def test_the_action_of_one_column_does_not_leak_to_another(self) -> None:
+        # The clause is searched from the end of its own `REFERENCES`, not
+        # anywhere in the definition, so a cascade on one column cannot be
+        # read as a cascade on the column beside it.
+        sql = "CREATE TABLE pair (a TEXT REFERENCES p(id), b TEXT REFERENCES q(id) ON DELETE CASCADE);"
+        keys = {
+            key.table: key.on_delete for key in parse_tables(strip_comments(sql))[0].foreign_keys
+        }
+        self.assertEqual(keys, {"p": "NO ACTION", "q": "CASCADE"})
 
 
 class IndexTests(TestCase):

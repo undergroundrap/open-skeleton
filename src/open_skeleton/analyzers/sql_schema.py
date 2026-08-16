@@ -99,6 +99,16 @@ TABLE_CONSTRAINT_OPENERS = frozenset(
 )
 
 REFERENCES = re.compile(rf"\bREFERENCES\s+(?P<table>{_QUALIFIED})", re.IGNORECASE)
+# What the database does to a child row when its parent goes. A schema
+# whose foreign keys all cascade behaves very differently under a delete
+# from one that nulls them, and the difference is declared right here
+# rather than inferred. The clause is optional and its absence means
+# `NO ACTION`, which is reported as the default rather than as a finding.
+ON_DELETE = re.compile(
+    r"\bON\s+DELETE\s+"
+    r"(?P<action>CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION)",
+    re.IGNORECASE,
+)
 PRIMARY_KEY_COLUMNS = re.compile(r"\bPRIMARY\s+KEY\s*\((?P<columns>[^)]*)\)", re.IGNORECASE)
 
 MAX_SOURCE_BYTES = 4_000_000
@@ -106,6 +116,14 @@ MAX_SOURCE_BYTES = 4_000_000
 # Below two indexes there is no shared pattern to report, only a restatement of
 # the single index already claimed on its own.
 MIN_INDEXES_FOR_A_PATTERN = 2
+
+
+@dataclass(frozen=True, slots=True)
+class ForeignKey:
+    """One declared reference and what it does when the parent row goes."""
+
+    table: str
+    on_delete: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +140,7 @@ class Table:
     line: int
     columns: list[Column] = field(default_factory=list)
     primary_key: tuple[str, ...] = ()
-    foreign_keys: tuple[str, ...] = ()
+    foreign_keys: tuple[ForeignKey, ...] = ()
     checks: int = 0
     unique_constraints: int = 0
     # The virtual-table module, when the table is one. A virtual table has no
@@ -283,6 +301,19 @@ def _column_list(raw: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _reference(definition: str, target: re.Match[str]) -> ForeignKey:
+    """One `REFERENCES` clause, with the action that follows it.
+
+    An omitted `ON DELETE` is `NO ACTION` in SQL, so the default is recorded
+    rather than left blank: a reader comparing two schemas needs "this one
+    says nothing, which means the delete is refused" to be visible.
+    """
+
+    action = ON_DELETE.search(definition, target.end())
+    spelled = " ".join(action.group("action").split()).upper() if action else "NO ACTION"
+    return ForeignKey(table=_unquote(target.group("table")), on_delete=spelled)
+
+
 def parse_tables(text: str) -> list[Table]:
     """Every `CREATE TABLE` in ``text``, with its columns and constraints."""
 
@@ -296,7 +327,7 @@ def parse_tables(text: str) -> list[Table]:
             name=_unquote(match.group("name")), line=text.count("\n", 0, match.start()) + 1
         )
         primary: list[str] = []
-        foreign: list[str] = []
+        foreign: list[ForeignKey] = []
         for definition in split_definitions(body):
             words = definition.split()
             if not words:
@@ -311,7 +342,7 @@ def parse_tables(text: str) -> list[Table]:
                 elif "foreign key" in folded:
                     target = REFERENCES.search(definition)
                     if target:
-                        foreign.append(_unquote(target.group("table")))
+                        foreign.append(_reference(definition, target))
                 elif folded.startswith("check"):
                     table.checks += 1
                 elif folded.startswith("unique"):
@@ -332,9 +363,14 @@ def parse_tables(text: str) -> list[Table]:
             if "check" in folded and "(" in definition:
                 table.checks += 1
             if target:
-                foreign.append(column.references or "")
+                foreign.append(_reference(definition, target))
         table.primary_key = tuple(primary)
-        table.foreign_keys = tuple(sorted({item for item in foreign if item}))
+        table.foreign_keys = tuple(
+            sorted(
+                {item for item in foreign if item.table},
+                key=lambda item: (item.table, item.on_delete),
+            )
+        )
         tables.append(table)
     tables.extend(_virtual_tables(text))
     return tables
@@ -561,7 +597,8 @@ class SqlSchemaAnalyzer:
                             path=path,
                         )
                     )
-                for target in table.foreign_keys:
+                for reference in table.foreign_keys:
+                    target = reference.table
                     edges.append(
                         EdgeRecord(
                             edge_id=stable_id(
@@ -643,6 +680,44 @@ class SqlSchemaAnalyzer:
                         target_symbol_id=None,
                         evidence_id=mark.evidence_id,
                         analyzer=ANALYZER_VERSION,
+                    )
+                )
+
+            # The shape of the whole schema, which no per-table claim states.
+            # A reader asking "what does this system store" wants the totals
+            # first and the tables second, and the referential actions are the
+            # difference between a delete that cleans up after itself and one
+            # the database refuses.
+            # A file holding only `CREATE INDEX` has no table to cite, and the
+            # receipt has to point somewhere real.
+            if not fixture and tables:
+                base = [item for item in tables if not item.module]
+                virtual = [item for item in tables if item.module]
+                references = [key for item in base for key in item.foreign_keys]
+                actions = Counter(key.on_delete for key in references)
+                spelled = ", ".join(
+                    f"{count:,} `ON DELETE {action}`"
+                    for action, count in sorted(actions.items(), key=lambda pair: -pair[1])
+                )
+                shape = (
+                    f"`{path}` declares {len(base):,} base table(s), "
+                    f"{len(virtual):,} virtual table(s) and {len(indexes):,} index(es)"
+                )
+                if references:
+                    shape += f", joined by {len(references):,} reference(s): {spelled}"
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=shape + ".",
+                        category="storage_schema",
+                        supporting=(
+                            receipt(
+                                path, lines, tables[0].line, "sql_schema_shape", None
+                            ).evidence_id,
+                        ),
+                        importance="high",
+                        path=path,
                     )
                 )
 
