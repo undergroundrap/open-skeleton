@@ -2,14 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms: see NOTICE.md for visible attribution requirements.
 
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.project_metadata import (
     ProjectMetadataAnalyzer,
     _checked_out_revision,
+    _declared_commands,
     _declared_commitments,
     is_declarative_document,
     is_non_goal_heading,
@@ -172,6 +175,56 @@ mcp = ["mcp>=2,<3"]
         result = self._analyze('[tool.poetry.dependencies]\nrequests = "^2.0"\n')
         declared = [edge for edge in result.edges if edge.relationship == "declares_dependency"]
         self.assertEqual(declared, [])
+
+
+class DeclaredCommandTests(TestCase):
+    """The name a user types is declared in the manifest, not in the code.
+
+    A `__main__` guard says a module can be run. It does not say the package
+    installs a command called `open-skeleton`, and the engine reported the
+    first and never the second -- so a document listed five runnable files and
+    neither of the two commands the project actually ships.
+    """
+
+    def _commands(self, document: Mapping[str, Any], manifest: str) -> list[tuple[str, str]]:
+        # `Mapping` rather than `dict`: the latter is invariant, so every
+        # literal below would need its value type spelled out to match.
+        return _declared_commands(dict(document), manifest)
+
+    def test_python_console_scripts_are_read(self) -> None:
+        document = {"project": {"scripts": {"tool": "pkg.cli:main"}}}
+        self.assertEqual(self._commands(document, "pyproject.toml"), [("tool", "pkg.cli:main")])
+
+    def test_python_gui_scripts_are_read_too(self) -> None:
+        document = {"project": {"gui-scripts": {"tool-gui": "pkg.gui:main"}}}
+        self.assertEqual(self._commands(document, "pyproject.toml"), [("tool-gui", "pkg.gui:main")])
+
+    def test_a_node_bin_map_is_read(self) -> None:
+        # A rule that understood only Python would report a Node package as
+        # shipping no commands, which is a statement about this reader.
+        document = {"name": "thing", "bin": {"thing": "./cli.js", "thing-dev": "./dev.js"}}
+        self.assertEqual(
+            self._commands(document, "package.json"),
+            [("thing", "./cli.js"), ("thing-dev", "./dev.js")],
+        )
+
+    def test_a_node_bin_string_takes_the_package_name(self) -> None:
+        # `"bin": "./cli.js"` installs one command named after the package.
+        document = {"name": "thing", "bin": "./cli.js"}
+        self.assertEqual(self._commands(document, "package.json"), [("thing", "./cli.js")])
+
+    def test_a_cargo_binary_table_is_read(self) -> None:
+        document = {"bin": [{"name": "hum", "path": "src/main.rs"}]}
+        self.assertEqual(self._commands(document, "Cargo.toml"), [("hum", "src/main.rs")])
+
+    def test_a_manifest_declaring_none_reports_none(self) -> None:
+        self.assertEqual(self._commands({"project": {"name": "x"}}, "pyproject.toml"), [])
+
+    def test_a_malformed_entry_is_skipped_rather_than_coerced(self) -> None:
+        # A non-string target is not a command name; guessing at one would put
+        # an invented entry point in the document.
+        document = {"project": {"scripts": {"ok": "pkg:main", "bad": {"nested": True}}}}
+        self.assertEqual(self._commands(document, "pyproject.toml"), [("ok", "pkg:main")])
 
 
 class ThirdPartyOriginTests(TestCase):

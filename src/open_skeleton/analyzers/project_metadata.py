@@ -222,6 +222,53 @@ def _normalize_requirement(value: object) -> str | None:
     return match.group(1).casefold().replace("_", "-")
 
 
+def _declared_commands(document: dict[str, Any], manifest: str) -> list[tuple[str, str]]:
+    """Commands a manifest installs, as ``(name, target)`` pairs.
+
+    A `__main__` guard says a file can be run. It does not say what a user
+    types, and the name they type is declared here rather than in the code:
+    `open-skeleton = "open_skeleton.cli:main"` is the difference between "this
+    module is runnable" and "this package installs a command called
+    open-skeleton". The engine reported the first and never the second.
+
+    Three ecosystems spell it differently and all three are read, because a
+    rule that only understood Python would report a Node package as shipping
+    no commands at all -- which is a statement about this reader.
+    """
+
+    found: list[tuple[str, str]] = []
+    if manifest == "pyproject.toml":
+        project = document.get("project")
+        if isinstance(project, dict):
+            for table in ("scripts", "gui-scripts"):
+                entries = project.get(table)
+                if isinstance(entries, dict):
+                    found.extend(
+                        (str(name), str(target))
+                        for name, target in entries.items()
+                        if isinstance(target, str)
+                    )
+    elif manifest == "package.json":
+        binaries = document.get("bin")
+        if isinstance(binaries, str):
+            name = document.get("name")
+            if isinstance(name, str):
+                found.append((name, binaries))
+        elif isinstance(binaries, dict):
+            found.extend(
+                (str(name), str(target))
+                for name, target in binaries.items()
+                if isinstance(target, str)
+            )
+    elif manifest == "Cargo.toml":
+        binaries = document.get("bin")
+        if isinstance(binaries, list):
+            for entry in binaries:
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                    found.append((str(entry["name"]), str(entry.get("path", "src/main.rs"))))
+    return sorted(dict.fromkeys(found))
+
+
 def _pyproject_name(document: dict[str, Any]) -> str | None:
     project = document.get("project")
     if isinstance(project, dict) and isinstance(project.get("name"), str):
@@ -581,6 +628,38 @@ class ProjectMetadataAnalyzer:
                     file_record.path,
                 )
                 manifest_receipts.append(manifest_evidence.evidence_id)
+                commands = _declared_commands(project, "pyproject.toml")
+                if commands:
+                    named = ", ".join(f"`{name}` (`{target}`)" for name, target in commands)
+                    command_text = (
+                        f"`{file_record.path}` installs {len(commands):,} command(s): "
+                        f"{named}. These are the names a user types; a `__main__` guard "
+                        "elsewhere says only that a module can be run."
+                    )
+                    claims.append(
+                        ClaimRecord(
+                            claim_id=stable_id(
+                                "claim",
+                                (
+                                    snapshot.snapshot_id,
+                                    "application_entry",
+                                    command_text,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            claim=command_text,
+                            category="application_entry",
+                            status="verified",
+                            confidence=1.0,
+                            importance="high",
+                            produced_by=ANALYZER_VERSION,
+                            created_at=created_at,
+                            verified_at=created_at,
+                            supporting_evidence=(manifest_evidence.evidence_id,),
+                            invalidation_keys=(f"file:{file_record.path}",),
+                        )
+                    )
                 symbol_id = stable_id(
                     "symbol",
                     (
