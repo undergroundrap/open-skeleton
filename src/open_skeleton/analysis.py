@@ -21,6 +21,7 @@ from open_skeleton.analyzers.python_ast import PythonAstAnalyzer
 from open_skeleton.analyzers.rust_lexical import RustLexicalAnalyzer
 from open_skeleton.analyzers.sql_schema import SqlSchemaAnalyzer
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer
+from open_skeleton.analyzers.workflow_triggers import WorkflowTriggerAnalyzer
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -685,6 +686,7 @@ def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Ana
         ProjectMetadataAnalyzer(),
         SqlSchemaAnalyzer(),
         DocumentedMeasurementAnalyzer(),
+        WorkflowTriggerAnalyzer(),
         HumSemanticIndexAnalyzer(hum_index),
     )
 
