@@ -719,7 +719,10 @@ def _absent_artifacts(results: Iterable[ProbeResult]) -> str:
             if term not in named:
                 named.append(term)
     if not named:
-        return "Nothing adjacent to this concern is present either."
+        # Nothing a reader could go and look for, so there is nothing to say
+        # that the query table above does not already say. The caller omits
+        # the sentence rather than printing a claim about the tool.
+        return ""
     spans = [f"`{_escape(term)}`" for term in named[:MAX_NAMED_ABSENCES]]
     remainder = len(named) - len(spans)
     if remainder > 0:
@@ -1183,19 +1186,26 @@ def render_spec_markdown(document: SpecDocument) -> str:
         )
         lines.append(f"{sentence}\n\n")
 
-        if section.candidate_results:
-            matched = [item for item in section.candidate_results if item.match_count]
-            if matched:
-                described = "; ".join(
-                    f"{_escape(item.name)} ({item.match_count:,})" for item in matched
-                )
-                lines.append(
-                    f"_Adjacent to this concern and present: {described}. Those records "
-                    "exist and none of them satisfies the concern above, so the absence "
-                    "is a reading of what is here rather than only a query that missed._\n\n"
-                )
-            else:
-                lines.append(f"_{_absent_artifacts(section.candidate_results)}_\n\n")
+        matched_candidates = [item for item in section.candidate_results if item.match_count]
+        if matched_candidates:
+            described = "; ".join(
+                f"{_escape(item.name)} ({item.match_count:,})" for item in matched_candidates
+            )
+            lines.append(
+                f"_Adjacent to this concern and present: {described}. Those records "
+                "exist and none of them satisfies the concern above, so the absence "
+                "is a reading of what is here rather than only a query that missed._\n\n"
+            )
+        elif section.verdict == "absent":
+            # Drawn from the concern's own probes as well as its adjacent ones.
+            # Wiring this to candidates alone left 27 of 33 absent sections
+            # naming 546 artifacts in a query column and none of them in a
+            # sentence: §8.7 already asked after `structlog`, `loguru`,
+            # `winston` and `pino`, and said so only as
+            # `dependency_name: structlog, loguru, ...`.
+            named = _absent_artifacts((*section.probe_results, *section.candidate_results))
+            if named:
+                lines.append(f"_{named}_\n\n")
 
         if section.framing:
             lines.append(f"{section.framing}\n\n")

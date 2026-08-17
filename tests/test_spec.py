@@ -1704,10 +1704,20 @@ class NamedAbsenceTests(TestCase):
         self.assertIn("`Dockerfile`", sentence)
         self.assertNotIn("delivery_automation", sentence)
 
-    def test_nothing_legible_falls_back_rather_than_naming_internals(self) -> None:
-        sentence = self._sentence((self._probe("claim_category", "caching"),))
-        self.assertNotIn("caching", sentence)
-        self.assertIn("Nothing adjacent", sentence)
+    def test_nothing_legible_says_nothing_rather_than_naming_internals(self) -> None:
+        # There is nothing here a reader could go and look for, so the query
+        # table above already says everything. A sentence at this point would
+        # be a statement about the tool.
+        self.assertEqual(self._sentence((self._probe("claim_category", "caching"),)), "")
+
+    def test_a_concern_s_own_probes_name_what_was_looked_for(self) -> None:
+        # Wired to adjacent probes alone, this left 27 of 33 absent sections
+        # naming 546 artifacts in a query column and none in a sentence:
+        # "Structured Logging" already asked after `structlog` and `loguru`
+        # and reported it as `dependency_name: structlog, loguru, ...`.
+        sentence = self._sentence((self._probe("dependency_name", "structlog", "loguru"),))
+        self.assertIn("`structlog`", sentence)
+        self.assertIn("`loguru`", sentence)
 
     def test_the_sentence_stays_grammatical_at_every_length(self) -> None:
         # "No `a`, `b`, and 9 other name(s) queried appears" was none of
