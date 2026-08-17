@@ -1185,10 +1185,14 @@ def _external_calls(symbols: tuple[dict[str, Any], ...]) -> Panel:
         alignments=("left", "left", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
         note=(
-            "The receiver has to trace back to an import, so a call on self or "
-            "on a parameter is this module's own wiring and is excluded. A name "
+            "The receiver has to trace back to an import, so a call on a "
+            "parameter is this module's own wiring and is excluded. A name "
             "bound from a call to an imported name is followed one step, so a "
-            "client constructed from an SDK counts as that SDK."
+            "client constructed from an SDK counts as that SDK — including one "
+            "held on an attribute, which is the shape an SDK client usually "
+            "takes: `self.client = AsyncOpenAI(...)` followed by "
+            "`self.client.chat.completions.create(...)` is reported as an "
+            "`openai` call."
         ),
     )
 

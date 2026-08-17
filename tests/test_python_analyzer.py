@@ -657,6 +657,57 @@ class ExternalCallTests(TestCase):
         )
         self.assertEqual(calls["client.chat.create"]["via"], "AsyncOpenAI")
 
+    def test_a_client_held_on_an_attribute_is_followed_too(self) -> None:
+        # The shape an SDK client actually takes. Binding only bare names meant
+        # the call that follows is rooted at `self`, which is never an import,
+        # so the single operation an external service contract consists of --
+        # `chat.completions.create` -- was parsed into the call graph and then
+        # dropped from the runtime surface.
+        source = (
+            "import openai\n"
+            "class Client:\n"
+            "    def __init__(self):\n"
+            "        self.client = openai.AsyncOpenAI(base_url='x')\n"
+            "    async def ask(self):\n"
+            "        return await self.client.chat.completions.create(model='m')\n"
+        )
+        calls = self._calls(source)
+        self.assertEqual(calls["self.client.chat.completions.create"]["via"], "openai")
+
+    def test_a_bare_self_call_is_still_this_module_s_own_wiring(self) -> None:
+        # Only an attribute *bound from an import* resolves. `self.helper()`
+        # must stay excluded, or every method call in the repository becomes an
+        # external dependency.
+        source = (
+            "import openai\n"
+            "class Client:\n"
+            "    def __init__(self):\n"
+            "        self.client = openai.AsyncOpenAI()\n"
+            "    def go(self):\n"
+            "        self.helper()\n"
+            "        self.other.thing()\n"
+        )
+        calls = self._calls(source)
+        self.assertNotIn("self.helper", calls)
+        self.assertNotIn("self.other.thing", calls)
+
+    def test_the_longest_bound_prefix_wins(self) -> None:
+        # Two clients on one object must not collapse into whichever was seen
+        # first.
+        source = (
+            "import openai\nimport redis\n"
+            "class C:\n"
+            "    def __init__(self):\n"
+            "        self.ai = openai.AsyncOpenAI()\n"
+            "        self.cache = redis.Redis()\n"
+            "    def go(self):\n"
+            "        self.ai.chat.create()\n"
+            "        self.cache.get('k')\n"
+        )
+        calls = self._calls(source)
+        self.assertEqual(calls["self.ai.chat.create"]["via"], "openai")
+        self.assertEqual(calls["self.cache.get"]["via"], "redis")
+
     def test_an_alias_resolves_to_the_imported_name(self) -> None:
         calls = self._calls("import numpy as np\nnp.array([1])\n")
         self.assertEqual(calls["np.array"]["via"], "numpy")

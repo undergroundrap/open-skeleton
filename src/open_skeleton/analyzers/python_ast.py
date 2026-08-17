@@ -603,6 +603,14 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
             for target in node.targets:
                 for name in _assigned_names(target):
                     imported.setdefault(name, imported[root])
+                # `self.client = AsyncOpenAI(...)` is the shape an SDK client
+                # actually takes, and binding only bare names missed it: the
+                # call that follows is rooted at `self`, which is nothing, so
+                # the one operation the service contract consists of --
+                # `chat.completions.create` -- was parsed and dropped.
+                attribute = _expr_name(target)
+                if attribute and "." in attribute:
+                    imported.setdefault(attribute, imported[root])
 
     found: dict[str, dict[str, Any]] = {}
     for node in ast.walk(tree):
@@ -611,11 +619,22 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
         dotted = _expr_name(node.func)
         if not dotted or "." not in dotted:
             continue
-        root = dotted.split(".")[0]
-        if root not in imported:
+        # Longest prefix wins. `self.client.chat.completions.create` is bound
+        # at `self.client`; taking the first segment asks whether `self` is an
+        # import, which it never is.
+        segments = dotted.split(".")
+        bound = next(
+            (
+                candidate
+                for length in range(len(segments) - 1, 0, -1)
+                if (candidate := ".".join(segments[:length])) in imported
+            ),
+            None,
+        )
+        if bound is None:
             continue
         entry = found.setdefault(
-            dotted, {"count": 0, "first_line": node.lineno, "via": imported[root]}
+            dotted, {"count": 0, "first_line": node.lineno, "via": imported[bound]}
         )
         entry["count"] = int(entry["count"]) + 1
         entry["first_line"] = min(int(entry["first_line"]), node.lineno)
