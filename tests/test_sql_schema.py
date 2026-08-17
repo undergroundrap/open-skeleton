@@ -23,6 +23,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.sql_schema import (
     ANALYZER_VERSION,
     parse_indexes,
+    parse_statements,
     parse_tables,
     split_definitions,
     strip_comments,
@@ -157,6 +158,65 @@ class ReferentialActionTests(TestCase):
             key.table: key.on_delete for key in parse_tables(strip_comments(sql))[0].foreign_keys
         }
         self.assertEqual(keys, {"p": "NO ACTION", "q": "CASCADE"})
+
+
+class StatementTests(TestCase):
+    """What the code does with the rows, not only how the table was declared.
+
+    This reader scans raw source text, so the dominant failure is prose that
+    happens to pair `select` with `from`. A React component containing
+    "Invalid selection. Type a number from the list" was reported as issuing
+    two SELECTs against a table named `the`.
+    """
+
+    def _statements(self, sql: str) -> dict[str, dict[str, int]]:
+        return {
+            verb: dict(counts) for verb, counts in parse_statements(strip_comments(sql)).items()
+        }
+
+    def test_each_verb_names_the_table_it_acts_on(self) -> None:
+        sql = (
+            "SELECT data FROM players WHERE id = ?; "
+            "INSERT OR REPLACE INTO players VALUES (?, ?); "
+            "UPDATE zones SET name = ? WHERE id = ?; "
+            "DELETE FROM zones WHERE id = ?;"
+        )
+        self.assertEqual(
+            self._statements(sql),
+            {
+                "SELECT": {"players": 1},
+                "INSERT": {"players": 1},
+                "UPDATE": {"zones": 1},
+                "DELETE": {"zones": 1},
+            },
+        )
+
+    def test_prose_pairing_select_with_from_is_not_a_query(self) -> None:
+        prose = 'addLog("Invalid selection. Type a number from the list, or new to start")'
+        self.assertEqual(self._statements(prose), {})
+
+    def test_an_article_is_never_a_table_name(self) -> None:
+        self.assertEqual(self._statements("please select an item from the shelf and go"), {})
+
+    def test_a_clause_is_required_after_the_table(self) -> None:
+        # A statement has to look like one. This costs a bare `SELECT * FROM t`
+        # with no clause at all, which is the trade taken: a table nobody
+        # queries is worse to print than a query nobody lists.
+        self.assertEqual(self._statements("SELECT name FROM widgets"), {})
+        self.assertEqual(
+            self._statements("SELECT name FROM widgets WHERE id = 1"), {"SELECT": {"widgets": 1}}
+        )
+
+    def test_the_clause_is_looked_for_where_the_table_ends(self) -> None:
+        # `pattern.match(text, pos)` anchors at `pos`, but `^` in the pattern
+        # still means the start of the whole string -- so an anchored guard
+        # never fired and rejected every real statement in the file.
+        sql = "x = 1\ny = 2\nquery = 'SELECT data FROM players WHERE id = ?'\n"
+        self.assertEqual(self._statements(sql), {"SELECT": {"players": 1}})
+
+    def test_a_join_counts_the_table_after_from(self) -> None:
+        sql = "SELECT a.x FROM players AS a JOIN zones AS b ON a.z = b.id WHERE a.id = ?"
+        self.assertEqual(self._statements(sql)["SELECT"], {"players": 1})
 
 
 class IndexTests(TestCase):

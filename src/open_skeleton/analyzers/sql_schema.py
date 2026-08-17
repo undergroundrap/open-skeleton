@@ -65,7 +65,14 @@ INELIGIBLE_ROLES = frozenset({"documentation", "unknown"})
 # A cheap prefilter. Reading every source file to look for schema is affordable
 # only because the overwhelming majority are rejected by a substring test
 # before anything is parsed.
-DDL_HINT = re.compile(r"create\s+(?:temp\w*\s+)?(?:table|(?:unique\s+)?index)", re.IGNORECASE)
+DDL_HINT = re.compile(
+    r"create\s+(?:temp\w*\s+)?(?:table|(?:unique\s+)?index)"
+    r"|select\s+.{0,200}?\sfrom\s"
+    r"|insert\s+(?:or\s+\w+\s+)?into\s"
+    r"|update\s+\w+\s+set\s"
+    r"|delete\s+from\s",
+    re.IGNORECASE | re.DOTALL,
+)
 
 _IDENT = r'(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|[A-Za-z_][A-Za-z_0-9$]*)'
 _QUALIFIED = rf"{_IDENT}(?:\s*\.\s*{_IDENT})*"
@@ -314,6 +321,102 @@ def _reference(definition: str, target: re.Match[str]) -> ForeignKey:
     return ForeignKey(table=_unquote(target.group("table")), on_delete=spelled)
 
 
+# What the code does with the rows, as opposed to how the table was declared.
+# "Which SQL does this issue" is among the first questions asked of a
+# persistence layer, and the reader answered only "what tables exist".
+#
+# Each pattern names the table it acts on. `SELECT` takes the table after
+# `FROM`, which is the one a reader is looking for even when the projection is
+# a join: what else the query touches is not decided here.
+STATEMENTS: dict[str, re.Pattern[str]] = {
+    "SELECT": re.compile(
+        rf"\bSELECT\b.{{0,400}}?\bFROM\s+(?P<table>{_QUALIFIED})", re.IGNORECASE | re.DOTALL
+    ),
+    "INSERT": re.compile(
+        rf"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+(?P<table>{_QUALIFIED})", re.IGNORECASE
+    ),
+    "UPDATE": re.compile(rf"\bUPDATE\s+(?P<table>{_QUALIFIED})\s+SET\b", re.IGNORECASE),
+    "DELETE": re.compile(rf"\bDELETE\s+FROM\s+(?P<table>{_QUALIFIED})", re.IGNORECASE),
+}
+# A subquery alias is not a table, and neither is an English article. This
+# reader scans raw source text, so "Invalid selection. Type a number from the
+# list" matched `SELECT ... FROM the` and reported a table named `the` in a
+# React component. Prose that happens to contain both words is the dominant
+# false positive, and the table position is where it shows.
+SQL_NOISE = frozenset(
+    {
+        "select",
+        "where",
+        "values",
+        "set",
+        "from",
+        "the",
+        "a",
+        "an",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "them",
+        "here",
+        "there",
+        "your",
+        "my",
+        "our",
+        "their",
+        "his",
+        "her",
+        "its",
+        "each",
+        "any",
+        "all",
+        "some",
+        "one",
+        "two",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "and",
+        "or",
+        "not",
+    }
+)
+# A statement has to look like one. Prose pairs `select` with `from` and stops
+# there; SQL almost always carries a clause or a placeholder after the table.
+# Requiring one costs a bare `SELECT * FROM t` with no clause at all, which is
+# the trade this project takes: a table nobody queries is a worse thing to
+# print than a query nobody lists.
+SQL_CONTINUATION = re.compile(
+    # No `^`: `match(text, pos)` already anchors at `pos`, and `^` would
+    # still mean the start of the whole string, so the guard never fired.
+    r"\s*(?:WHERE|JOIN|INNER|LEFT|RIGHT|OUTER|CROSS|ORDER\s+BY|GROUP\s+BY|HAVING"
+    r"|LIMIT|OFFSET|UNION|VALUES|SET|RETURNING|ON\b|USING\b|AS\b|[;)])",
+    re.IGNORECASE,
+)
+
+
+def parse_statements(text: str) -> dict[str, Counter[str]]:
+    """Which verbs act on which tables, counted.
+
+    Returns `{verb: {table: count}}`. Nothing here decides whether a statement
+    runs -- it is text in a source file, and a query behind a branch that never
+    executes looks identical to one that runs on every request.
+    """
+
+    found: dict[str, Counter[str]] = {}
+    for verb, pattern in STATEMENTS.items():
+        for match in pattern.finditer(text):
+            table = _unquote(match.group("table"))
+            if not table or table.casefold() in SQL_NOISE:
+                continue
+            if verb in {"SELECT", "DELETE"} and not SQL_CONTINUATION.match(text, match.end()):
+                continue
+            found.setdefault(verb, Counter())[table] += 1
+    return found
+
+
 def parse_tables(text: str) -> list[Table]:
     """Every `CREATE TABLE` in ``text``, with its columns and constraints."""
 
@@ -512,10 +615,11 @@ class SqlSchemaAnalyzer:
                 text = strip_comments(source)
                 tables = parse_tables(text)
                 indexes = parse_indexes(text)
+                statements = parse_statements(text)
             except (RecursionError, ValueError) as exc:
                 failures.append(f"{path}: {exc.__class__.__name__}: {exc}")
                 continue
-            if not tables and not indexes:
+            if not tables and not indexes and not statements:
                 # The prefilter matched a phrase that was not DDL. The file was
                 # read successfully, so it counts as analyzed and simply had
                 # nothing to say.
@@ -680,6 +784,34 @@ class SqlSchemaAnalyzer:
                         target_symbol_id=None,
                         evidence_id=mark.evidence_id,
                         analyzer=ANALYZER_VERSION,
+                    )
+                )
+
+            if statements and not fixture:
+                # `table` is a `Table` in the loop above; a statement names one
+                # by string only.
+                by_table: dict[str, list[str]] = {}
+                for verb, counts in statements.items():
+                    for table_name, count in counts.items():
+                        by_table.setdefault(table_name, []).append(f"{count:,} {verb}")
+                described = "; ".join(
+                    f"`{named}` ({', '.join(sorted(parts))})"
+                    for named, parts in sorted(by_table.items())
+                )
+                total = sum(sum(counts.values()) for counts in statements.values())
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"`{path}` issues {total:,} SQL statement(s) against "
+                            f"{len(by_table):,} table(s): {described}. These are statements "
+                            "present in the source; whether each one runs is not decided here."
+                        ),
+                        category="storage",
+                        supporting=(receipt(path, lines, 1, "sql_statements", None).evidence_id,),
+                        importance="high",
+                        path=path,
                     )
                 )
 
