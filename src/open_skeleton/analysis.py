@@ -36,7 +36,40 @@ from open_skeleton.models import (
 )
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
-EXPONENTIAL_BASE_PATTERN = re.compile(r"exponentiates base ([0-9]+(?:\.[0-9]+)?)")
+EXPONENTIAL_BASE_PATTERN = re.compile(
+    r"exponentiates base (?P<base>[0-9]+(?:\.[0-9]+)?) by `(?P<exponent>[^`]+)`"
+)
+
+
+# Words too common to mean two expressions describe the same quantity. Without
+# this, `retry_count` and `user_count` would be read as one variable.
+GENERIC_EXPONENT_TOKENS = frozenset(
+    {"count", "n", "i", "x", "value", "index", "idx", "num", "number", "total", "size", "len"}
+)
+
+
+def _exponent_subject(expression: str) -> frozenset[str]:
+    """The quantity an exponent expression refers to, as comparable tokens.
+
+    Two bases only diverge against each other when they are raised to the same
+    thing, and the same thing is rarely spelled the same way twice:
+    `player.ascension_count`, `args.ascensions` and `ascensions` are one
+    quantity written three ways. Comparing the expressions literally finds no
+    pair; pooling every base in the repository compares curves that share
+    nothing.
+
+    Tokens are split on non-letters, lowercased, and singularised crudely by
+    dropping a trailing `s`. Words that carry no subject of their own are
+    dropped, so `retry_count` and `user_count` do not become the same thing on
+    the strength of `count`.
+    """
+
+    tokens = {
+        part.rstrip("s") or part
+        for part in re.split(r"[^A-Za-z]+", expression.casefold())
+        if len(part) > 2
+    }
+    return frozenset(tokens - GENERIC_EXPONENT_TOKENS)
 
 
 def _append_orphan_candidates(
@@ -168,16 +201,37 @@ def _append_mathematical_conflicts(
     evidence: tuple[EvidenceRecord, ...],
     claims: list[ClaimRecord],
 ) -> tuple[EvidenceRecord, ...]:
-    scaling_claims: list[tuple[float, ClaimRecord]] = []
+    # Grouped by the exponent, not pooled across the repository. Two bases
+    # only diverge against each other when they are raised to the same thing:
+    # `1.25 ** tier` and `2 ** retries` are unrelated curves, and comparing
+    # them would report a ratio nothing computes. The original code compared
+    # every base to every other and was correct only because the one
+    # repository it ran on raised both to the same variable.
+    measured: list[tuple[float, frozenset[str], str, ClaimRecord]] = []
     for claim in claims:
         if claim.category != "exponential_scaling":
             continue
         match = EXPONENTIAL_BASE_PATTERN.search(claim.claim)
         if match:
-            scaling_claims.append((float(match.group(1)), claim))
-    distinct_bases = sorted({base for base, _ in scaling_claims})
-    if len(distinct_bases) < 2:
+            written = match.group("exponent")
+            measured.append(
+                (float(match.group("base")), _exponent_subject(written), written, claim)
+            )
+    shared: list[tuple[str, list[tuple[float, ClaimRecord]]]] = []
+    for _base, subject, written, _claim in measured:
+        if not subject:
+            continue
+        group = [
+            (other_base, other_claim)
+            for other_base, other_subject, _, other_claim in measured
+            if other_subject & subject
+        ]
+        if len({item[0] for item in group}) >= 2:
+            shared.append((written, group))
+    if not shared:
         return evidence
+    exponent, scaling_claims = shared[0]
+    distinct_bases = sorted({base for base, _ in scaling_claims})
 
     file_records = {item.path: item for item in snapshot.files}
     comment_receipts: list[EvidenceRecord] = []
@@ -216,9 +270,6 @@ def _append_mathematical_conflicts(
                     created_at=created_at,
                 )
             )
-    if not comment_receipts:
-        return evidence
-
     lower, upper = distinct_bases[0], distinct_bases[-1]
     if lower <= 0 or upper <= lower:
         return evidence
@@ -232,10 +283,22 @@ def _append_mathematical_conflicts(
             }
         )
     )
+    # The divergence is a fact about the arithmetic and holds with or without
+    # anything written about it. This used to be reported only when a comment
+    # contained "never trivial" or "wall forever" -- two phrases from the game
+    # this pipeline was first written against -- so two competing growth curves
+    # in any other repository were computed, compared, and then discarded for
+    # want of a sentence nobody else would write.
+    divergence = (
+        f"Exponential bases {upper:g} and {lower:g} are both raised to `{exponent}`, so "
+        f"their ratio is ({upper:g}/{lower:g})^N and grows without bound as that value "
+        "does. Whether anything caps it is not decided here."
+    )
     text = (
-        f"Ascension-related exponential bases {upper:g} and {lower:g} imply a relative "
-        f"factor of ({upper:g}/{lower:g})^N, which is unbounded as N grows; source comments "
-        "claiming a fixed wall stays non-trivial forever conflict with those formulas."
+        f"{divergence} Source comments assert that the gap stays fixed, which those "
+        "formulas contradict."
+        if comment_receipts
+        else divergence
     )
     claims.append(
         ClaimRecord(
@@ -245,18 +308,36 @@ def _append_mathematical_conflicts(
             snapshot_id=snapshot.snapshot_id,
             claim=text,
             category="mathematical_conflict",
-            status="conflict",
+            # A conflict needs two sides. Without a documented assertion this
+            # is an unchallenged property of the arithmetic, and calling it a
+            # conflict would invent the other side.
+            status="conflict" if comment_receipts else "verified",
             confidence=1.0,
-            importance="high",
+            importance="high" if comment_receipts else "medium",
             produced_by=PIPELINE_VERSION,
             created_at=created_at,
             supporting_evidence=supporting,
             contradicting_evidence=tuple(item.evidence_id for item in comment_receipts),
-            invalidation_keys=tuple(sorted({f"file:{item.path}" for item in comment_receipts})),
+            # Keyed on the formulas as well as on anything contradicting them.
+            # Deriving these from the comments alone left a claim with no
+            # invalidation key at all once the comment stopped being required,
+            # so editing the arithmetic it describes would never have retired
+            # it.
+            invalidation_keys=tuple(
+                sorted(
+                    {f"file:{item.path}" for item in comment_receipts}
+                    | {
+                        key
+                        for _, claim in scaling_claims
+                        for key in claim.invalidation_keys
+                        if key.startswith("file:")
+                    }
+                )
+            ),
             alternative_hypotheses=(
                 (
-                    "A finite ascension cap or another faster-growing mechanic could bound the "
-                    "advantage, but neither follows from the compared exponentials alone."
+                    "A cap on the exponent, or another term growing faster, could bound the "
+                    "ratio in practice; neither follows from the compared exponentials alone."
                 ),
             ),
         )

@@ -637,6 +637,100 @@ class SchemaMigrationTests(TestCase):
         self.assertEqual(claims, [])
 
 
+class ExponentialScalingTests(TestCase):
+    """Growth reported by shape, not by the vocabulary of one repository.
+
+    This fired only when the exponent expression contained the word
+    "ascension", a term from the game the analyzer was first written against.
+    The generalization benchmark exists to catch exactly that: the category
+    appeared for one repository out of eight, which it flags as either a rare
+    property or an analyzer fitted to one codebase. It was the second.
+    """
+
+    def _scaling(self, source: str) -> list[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "app.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            return [item.claim for item in result.claims if item.category == "exponential_scaling"]
+
+    def test_growth_by_any_named_value_is_reported(self) -> None:
+        for source, token in (
+            ("def f(level):\n    return 1.15 ** level\n", "level"),
+            ("def f(retries):\n    return 2 ** retries\n", "retries"),
+            ("def f(tier):\n    return 1.5 ** tier\n", "tier"),
+        ):
+            found = self._scaling(source)
+            self.assertTrue(found, f"{token} should be reported as a growth curve")
+            self.assertIn(token, found[0])
+
+    def test_a_constant_power_is_arithmetic_rather_than_growth(self) -> None:
+        # `10 ** 6` is a number. Nothing about it varies at runtime, so there
+        # is no curve to report.
+        self.assertEqual(self._scaling("def f():\n    return 10 ** 6\n"), [])
+
+    def _divergence(self, source: str) -> list[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "m.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            return [
+                item.claim for item in result.claims if item.category == "mathematical_conflict"
+            ]
+
+    def test_two_bases_on_one_quantity_diverge(self) -> None:
+        source = "def a(level):\n    return 1.25 ** level\n\ndef b(level):\n    return 2 ** level\n"
+        found = self._divergence(source)
+        self.assertTrue(found)
+        self.assertIn("`level`", found[0])
+
+    def test_the_same_quantity_spelled_differently_still_pairs(self) -> None:
+        # `player.ascension_count`, `args.ascensions` and `ascensions` are one
+        # quantity written three ways. Comparing the expressions literally
+        # finds no pair and loses the finding this check exists for.
+        source = (
+            "def a(player):\n    return 1.1 ** player.ascension_count\n\n"
+            "def b(ascensions):\n    return 1.15 ** ascensions\n"
+        )
+        self.assertTrue(self._divergence(source))
+
+    def test_unrelated_curves_are_not_compared(self) -> None:
+        # `1.25 ** tier` and `2 ** retries` are different curves. Reporting a
+        # ratio between them would describe something nothing computes.
+        source = (
+            "def a(tier):\n    return 1.25 ** tier\n\ndef b(retries):\n    return 2 ** retries\n"
+        )
+        self.assertEqual(self._divergence(source), [])
+
+    def test_a_shared_generic_word_is_not_a_shared_quantity(self) -> None:
+        # `retry_count` and `user_count` share only `count`, which carries no
+        # subject of its own.
+        source = (
+            "def a(retry_count):\n    return 2 ** retry_count\n\n"
+            "def b(user_count):\n    return 3 ** user_count\n"
+        )
+        self.assertEqual(self._divergence(source), [])
+
+    def test_a_divergence_nothing_contradicts_is_not_a_conflict(self) -> None:
+        # A conflict needs two sides. Without a documented assertion this is an
+        # unchallenged property of the arithmetic.
+        source = "def a(level):\n    return 1.25 ** level\n\ndef b(level):\n    return 2 ** level\n"
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "m.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        claim = next(item for item in result.claims if item.category == "mathematical_conflict")
+        self.assertEqual(claim.status, "verified")
+        self.assertTrue(claim.invalidation_keys, "a claim nothing can retire is a claim forever")
+
+    def test_the_original_domain_case_still_fires(self) -> None:
+        # The word is no longer required, but removing the requirement must
+        # not stop it matching where it always did.
+        found = self._scaling("def f(player):\n    return 1.10 ** player.ascension_count\n")
+        self.assertTrue(found)
+        self.assertIn("ascension_count", found[0])
+
+
 class ExternalCallTests(TestCase):
     """An import edge names a module; this names what is called through it."""
 

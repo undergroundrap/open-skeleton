@@ -1840,7 +1840,15 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             if base is None and isinstance(node.left, ast.Name):
                 base = self.numeric_constants.get(node.left.id)
             exponent = ast.unparse(node.right)
-            if base is not None and "ascension" in exponent.casefold():
+            # A constant base raised to something computed grows exponentially
+            # with that something, whatever it is called. This used to require
+            # the word "ascension" in the exponent -- a term from the game this
+            # analyzer was first written against -- so `1.15 ** level`,
+            # `2 ** retries` and `1.5 ** tier` were all invisible, and the
+            # category fired for exactly one repository. A literal exponent is
+            # excluded because `10 ** 6` is a number, not a growth curve.
+            varying = _literal_number(node.right) is None
+            if base is not None and varying and exponent:
                 evidence = self._evidence(
                     start_line=node.lineno,
                     end_line=node.end_lineno or node.lineno,
@@ -1850,7 +1858,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 self._claim(
                     text=(
                         f"{self.current_qualified_name} exponentiates base {base:g} by "
-                        f"ascension-related expression `{exponent}`."
+                        f"`{exponent}`, so the result grows exponentially with that value."
                     ),
                     category="exponential_scaling",
                     status="verified",
