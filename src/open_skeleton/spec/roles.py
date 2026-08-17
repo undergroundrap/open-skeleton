@@ -54,7 +54,6 @@ CATEGORY_FAMILY: dict[str, str] = {
     "failure_surface": "verification",
     "error_surface": "verification",
     "hardcoded_endpoint": "integration",
-    "environment_setting": "integration",
     "configuration_read": "integration",
     "external_calls": "integration",
     "ai_failure_behavior": "integration",

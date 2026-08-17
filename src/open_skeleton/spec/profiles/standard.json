@@ -1067,8 +1067,7 @@
           ],
           "findings": {
             "categories": [
-              "configuration_read",
-              "environment_setting"
+              "configuration_read"
             ],
             "limit": 20,
             "min_importance": "low"
@@ -1125,8 +1124,7 @@
               "name": "Configuration read at run time",
               "kind": "claim_category",
               "terms": [
-                "configuration_read",
-                "environment_setting"
+                "configuration_read"
               ]
             },
             {

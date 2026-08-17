@@ -1946,7 +1946,11 @@ class TypeScriptLexicalAnalyzer:
                 )
                 add_claim(
                     f"{module} reads environment setting {setting}.",
-                    "environment_setting",
+                    # `configuration_read` rather than a name only this
+                    # analyzer used: the same read in Python and Rust files
+                    # under a different category made a Node repository's
+                    # configuration invisible to any section probing one name.
+                    "configuration_read",
                     "medium",
                     [env_receipt.evidence_id],
                     file_record.path,

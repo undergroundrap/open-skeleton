@@ -61,7 +61,6 @@ PRODUCTION_CATEGORIES = frozenset(
         "storage_schema",
         "process_local_state",
         "security_boundary",
-        "environment_setting",
         "third_party_origin",
         "hardcoded_endpoint",
         "schema_migration",
