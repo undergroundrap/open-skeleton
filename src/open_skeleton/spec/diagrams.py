@@ -16,10 +16,16 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+# Shared with the capability builder rather than restated. Both modules held
+# their own copy of this pattern, both anchored it at the end of the string
+# with a greedy handler group, and both broke the same way when one sentence
+# was appended to the route claim: the handler swallowed the sentence, the
+# participant could not be resolved, and 981 lines of sequence diagram left
+# a document with nothing reporting the loss.
+from open_skeleton.spec.capabilities import ROUTE_CLAIM as _ROUTE_CLAIM
+
 MAX_DIAGRAM_NODES = 40
 MAX_DIAGRAM_EDGES = 60
-
-_ROUTE_CLAIM = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>.+)\.$")
 
 
 @dataclass(frozen=True, slots=True)

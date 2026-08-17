@@ -89,6 +89,34 @@ class RouteSequenceTests(TestCase):
             evidence_by_id=self.EVIDENCE,
         )
 
+    def test_a_route_claim_that_says_more_still_draws_its_diagram(self) -> None:
+        # This module and the capability builder each kept their own copy of
+        # the route pattern, both anchored at the end of the string with a
+        # greedy handler group. Appending one sentence to the route claim --
+        # the HTTP statuses it names -- made the handler swallow that sentence,
+        # so the participant could not be resolved and 981 lines of sequence
+        # diagram left a document with nothing reporting the loss. The pattern
+        # is now shared; this is the case that has to keep passing.
+        verbose = (
+            _claim(
+                "http_route",
+                "POST /action/attack/{id} is handled by backend.main.attack. "
+                "It names HTTP status `404`, `429` on paths through it; whether each "
+                "is reachable is not decided here.",
+            ),
+        )
+        drawn = build_diagrams(
+            "route_sequence",
+            files=(),
+            claims=verbose,
+            symbols=self.SYMBOLS,
+            edges=self._edges(),
+            evidence_by_id=self.EVIDENCE,
+        )
+        self.assertTrue(drawn, "a route carrying extra prose must still produce a diagram")
+        assert drawn[0].mermaid is not None
+        self.assertIn("participant vec_db", drawn[0].mermaid)
+
     def test_module_owned_collaborator_becomes_a_participant(self) -> None:
         diagram = self._build()[0]
         assert diagram.mermaid is not None

@@ -30,7 +30,12 @@ BUILD_CONTAINERS = frozenset({"src", "lib", "app", "source", "js", "ts", "script
 MIN_CLUSTER_MEMBERS = 1
 MAX_CAPABILITIES = 60
 
-_ROUTE_CLAIM = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>.+)\.$")
+# The handler is a dotted name, and the claim may say more after it. Anchoring
+# this at the end of the string with a greedy `.+` meant that adding one
+# sentence to the route claim -- the statuses it names -- swallowed that
+# sentence into the handler, so clustering by module failed and four
+# capabilities vanished from a document without anything reporting it.
+ROUTE_CLAIM = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) is handled by (?P<handler>[\w.]+)\.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +140,7 @@ def _route_clusters(
     for claim in claims:
         if str(claim["category"]) != "http_route":
             continue
-        match = _ROUTE_CLAIM.match(str(claim["claim"]))
+        match = ROUTE_CLAIM.match(str(claim["claim"]))
         if match is None:
             continue
         path = match.group("path")

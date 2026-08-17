@@ -94,6 +94,56 @@ class CapabilityClusteringTests(TestCase):
         self.assertEqual(len(labels["action"].routes), 2)
         self.assertEqual(len(labels["player"].routes), 1)
 
+    def test_a_route_claim_that_says_more_still_clusters(self) -> None:
+        # The handler is a dotted name and the claim may continue after it.
+        # This pattern was anchored to the end of the string with a greedy
+        # `.+`, so adding one sentence to the route claim -- the HTTP statuses
+        # it names -- swallowed that sentence into the handler. Clustering by
+        # module then failed and four capabilities vanished from a document,
+        # with nothing reporting the loss.
+        verbose = (
+            *self.CLAIMS,
+            _claim(
+                "r9",
+                "http_route",
+                "GET /player/{player_id}/gear is handled by backend.main.gear. "
+                "It names HTTP status `404`, `429` on paths through it; whether each "
+                "is reachable is not decided here.",
+                ("e1",),
+            ),
+        )
+        capabilities = build_capabilities(
+            files=self.FILES,
+            claims=verbose,
+            symbols=self.SYMBOLS,
+            edges=(),
+            evidence_by_id=self.EVIDENCE,
+        )
+        plain = (
+            *self.CLAIMS,
+            _claim(
+                "r9",
+                "http_route",
+                "GET /player/{player_id}/gear is handled by backend.main.gear.",
+                ("e1",),
+            ),
+        )
+        baseline = build_capabilities(
+            files=self.FILES,
+            claims=plain,
+            symbols=self.SYMBOLS,
+            edges=(),
+            evidence_by_id=self.EVIDENCE,
+        )
+        # The route is captured either way -- the path is not what broke. What
+        # broke is the handler, and through it the clustering, so the assertion
+        # has to be that the two documents describe the same capabilities.
+        self.assertEqual(
+            [(item.kind, item.label, item.routes) for item in capabilities],
+            [(item.kind, item.label, item.routes) for item in baseline],
+            "a route claim carrying extra prose must cluster exactly as the plain one does",
+        )
+
     def test_a_harness_module_is_not_catalogued_as_a_capability(self) -> None:
         # A benchmark's `main` is not something the product does. Five of this
         # repository's own capabilities were benchmark scripts, and because
