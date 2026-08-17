@@ -849,6 +849,53 @@ def _environment_reads(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
+# Items a `pub` can introduce. Wider than `ITEM_KEYWORDS`, which exists to
+# create symbols: a `pub const` is part of what a crate exposes even though a
+# constant is not an item this analyzer indexes.
+PUBLIC_ITEMS = frozenset(
+    {"fn", "struct", "enum", "trait", "union", "mod", "const", "type", "static"}
+)
+
+
+def _public_surface(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Names a crate exposes, as `(kind, name, line)`.
+
+    The Python analyzer reports a module's public surface and the Rust one
+    reported nothing, so the primary fact about a library crate -- what a
+    caller may depend on -- was missing for every crate this engine read.
+
+    `pub(crate)` is deliberately excluded. It is a visibility qualifier that
+    restricts a name to this crate, so counting it as the public surface would
+    tell a reader they can depend on something no other crate can reach. Only
+    a bare `pub` widens the surface; `pub(super)` and `pub(in path)` are
+    narrower still and excluded for the same reason.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "pub":
+            continue
+        cursor = index + 1
+        # `pub(crate)`, `pub(super)`, `pub(in ...)` all restrict rather than
+        # expose, and every one of them opens with a parenthesis.
+        if cursor < total and tokens[cursor].value == "(":
+            continue
+        # `pub async fn`, `pub unsafe fn`, `pub extern "C" fn`.
+        while cursor < total and tokens[cursor].value in FUNCTION_QUALIFIERS - {"fn"}:
+            cursor += 1
+            if cursor < total and tokens[cursor].kind == "string":
+                cursor += 1
+        if cursor >= total or tokens[cursor].value not in PUBLIC_ITEMS:
+            continue
+        kind = tokens[cursor].value
+        name_index = cursor + 1
+        if name_index >= total or tokens[name_index].kind != "identifier":
+            continue
+        found.append((kind, tokens[name_index].value, token.line))
+    return found
+
+
 def _http_routes(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """Served paths and their methods, as `(method, path, line)`.
 
@@ -1243,6 +1290,7 @@ class RustLexicalAnalyzer:
             file_traits = _trait_implementations(tokens)
             file_routes = _http_routes(tokens)
             file_environment = _environment_reads(tokens)
+            file_public = _public_surface(tokens)
             file_calls = _client_calls(tokens)
             file_call_sites = _call_sites(tokens)
             declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
@@ -1270,6 +1318,34 @@ class RustLexicalAnalyzer:
                     },
                 )
             )
+
+            if file_public:
+                names = sorted({name for _, name, _ in file_public})
+                shown = ", ".join(names[:12])
+                remainder = len(names) - min(len(names), 12)
+                surface = (
+                    f"{module} declares {len(names):,} name(s) as its public surface: "
+                    f"{shown}{f', and {remainder:,} more' if remainder else ''}. "
+                    "`pub(crate)` items are excluded: they are visible inside this crate "
+                    "and to nobody depending on it."
+                )
+                first = file_public[0][2]
+                excerpt = lines[first - 1] if 0 < first <= len(lines) else ""
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=surface,
+                        category="public_api",
+                        supporting=(
+                            receipt(
+                                file_record.path, first, "public_surface", module, excerpt
+                            ).evidence_id,
+                        ),
+                        importance="high",
+                        path=file_record.path,
+                    )
+                )
 
             for setting, when, line in dict.fromkeys(file_environment):
                 excerpt = lines[line - 1] if 0 < line <= len(lines) else ""

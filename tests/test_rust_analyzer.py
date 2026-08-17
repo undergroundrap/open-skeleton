@@ -164,6 +164,46 @@ class PanicCensusTests(TestCase):
         self.assertEqual(panics["todo!"][1], "high")
 
 
+class PublicSurfaceTests(TestCase):
+    """What a crate exposes, which is the primary fact about a library.
+
+    The Python analyzer reports a module's public surface. The Rust one
+    reported nothing, so what a caller may depend on was missing for every
+    crate this engine read.
+    """
+
+    def _surface(self, source: str) -> set[str]:
+        claim = next(
+            (item for item in _analyze(source).claims if item.category == "public_api"), None
+        )
+        if claim is None:
+            return set()
+        body = claim.claim.split("public surface: ", 1)[1].split(". `pub(crate)`", 1)[0]
+        return {part.strip() for part in body.split(",") if part.strip()}
+
+    def test_each_kind_of_public_item_is_named(self) -> None:
+        source = (
+            "pub fn open() {}\npub struct Config;\npub enum Mode { A }\n"
+            "pub trait Store {}\npub mod api;\npub const LIMIT: u32 = 5;\npub type Id = u64;\n"
+        )
+        self.assertEqual(
+            self._surface(source), {"open", "Config", "Mode", "Store", "api", "LIMIT", "Id"}
+        )
+
+    def test_a_crate_visible_item_is_not_public_surface(self) -> None:
+        # `pub(crate)` restricts a name to this crate. Counting it would tell
+        # a reader they can depend on something no other crate can reach.
+        source = "pub fn exposed() {}\npub(crate) fn internal() {}\npub(super) fn narrow() {}\n"
+        self.assertEqual(self._surface(source), {"exposed"})
+
+    def test_a_qualifier_between_pub_and_the_item_is_stepped_over(self) -> None:
+        source = 'pub async fn fetch() {}\npub unsafe fn raw() {}\npub extern "C" fn ffi() {}\n'
+        self.assertEqual(self._surface(source), {"fetch", "raw", "ffi"})
+
+    def test_a_private_item_is_not_reported(self) -> None:
+        self.assertEqual(self._surface("fn hidden() {}\nstruct Inner;\n"), set())
+
+
 class EnvironmentReadTests(TestCase):
     """What a crate needs from its environment, which Rust reported as nothing.
 
