@@ -844,11 +844,60 @@ class EndpointCatalogTests(TestCase):
         base.update(metadata)
         return {"path": "main.py", "qualified_name": "app.main.act", "metadata": base}
 
+    def _signatures(self, **parameters: Any) -> dict[str, Any]:
+        """A module symbol carrying one handler's signature."""
+
+        return {
+            "path": "main.py",
+            "qualified_name": "app.main",
+            "metadata": {
+                "signatures": {"act": {"line": 9, "parameters": list(parameters["args"])}}
+            },
+        }
+
+    def test_the_parameters_a_handler_binds_are_named(self) -> None:
+        # What a caller has to send is half of an endpoint's contract, and the
+        # census never showed it: the signature was recorded against the
+        # declaring module and rendered nowhere.
+        panel = self._catalog(
+            (
+                self._handler(),
+                self._signatures(
+                    args=[
+                        {"name": "player_id", "kind": "positional", "annotation": "str"},
+                        {"name": "pronouns", "kind": "positional", "default": '"They/Them"'},
+                    ]
+                ),
+            )
+        )
+        binds = panel.rows[0][3]
+        self.assertIn("`player_id`", binds)
+        # A default is what makes a parameter optional, which is the question.
+        self.assertIn('`pronouns="They/Them"`', binds)
+
+    def test_a_handler_binding_nothing_says_so(self) -> None:
+        self.assertEqual(self._catalog((self._handler(),)).rows[0][3], "—")
+
+    def test_self_is_not_a_parameter_a_caller_supplies(self) -> None:
+        panel = self._catalog(
+            (
+                self._handler(),
+                self._signatures(
+                    args=[
+                        {"name": "self", "kind": "positional"},
+                        {"name": "player_id", "kind": "positional"},
+                    ]
+                ),
+            )
+        )
+        self.assertNotIn("self", panel.rows[0][3])
+        self.assertIn("`player_id`", panel.rows[0][3])
+
     def test_a_route_reports_its_handler_and_declaration_site(self) -> None:
         panel = self._catalog((self._handler(),))
         self.assertEqual(panel.rows[0][0], "POST")
         self.assertEqual(panel.rows[0][2], "main.act")
-        self.assertEqual(panel.rows[0][6], "main.py:9")
+        self.assertEqual(panel.rows[0][7], "main.py:9")
 
     def test_guards_are_counted_and_http_refusals_are_named(self) -> None:
         panel = self._catalog(
@@ -862,9 +911,9 @@ class EndpointCatalogTests(TestCase):
                 ),
             )
         )
-        self.assertEqual(panel.rows[0][3], "1")
+        self.assertEqual(panel.rows[0][4], "1")
         # A non-HTTP raise is a failure but not a refusal a caller sees as a status.
-        self.assertEqual(panel.rows[0][4], "HTTP 404")
+        self.assertEqual(panel.rows[0][5], "HTTP 404")
 
     def test_response_fields_join_by_function_name_not_symbol(self) -> None:
         # Payload shapes are recorded against the declaring module, so a join
@@ -875,12 +924,12 @@ class EndpointCatalogTests(TestCase):
             "metadata": {"payload_shapes": {"act": {"fields": ["ok", "message"], "line": 9}}},
         }
         panel = self._catalog((self._handler(), module))
-        self.assertIn("`ok`", panel.rows[0][5])
-        self.assertIn("`message`", panel.rows[0][5])
+        self.assertIn("`ok`", panel.rows[0][6])
+        self.assertIn("`message`", panel.rows[0][6])
 
     def test_a_handler_with_no_guard_is_reported_as_such(self) -> None:
         panel = self._catalog((self._handler(),))
-        self.assertEqual(panel.rows[0][3], "0")
+        self.assertEqual(panel.rows[0][4], "0")
         assert panel.note is not None
         self.assertIn("no guard recorded", panel.note)
 

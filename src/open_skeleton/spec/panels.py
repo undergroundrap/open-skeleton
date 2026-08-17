@@ -882,6 +882,23 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
             shapes_by_function.setdefault(str(name), []).extend(
                 str(item) for item in entry.get("fields", ())
             )
+    # Signatures are recorded against the declaring module for the same reason
+    # payload shapes are, so the join is the same one. What a caller has to
+    # send is half of an endpoint's contract and the census never showed it.
+    parameters_by_function: dict[str, list[str]] = {}
+    for symbol in symbols:
+        for name, entry in ((symbol.get("metadata") or {}).get("signatures") or {}).items():
+            rendered: list[str] = []
+            for parameter in entry.get("parameters", ()):
+                argument = str(parameter.get("name", ""))
+                if not argument or argument in {"self", "cls"}:
+                    continue
+                default = parameter.get("default")
+                # A default is what makes a parameter optional, and which ones
+                # a caller may omit is the question being asked.
+                rendered.append(f"{argument}={default}" if default is not None else argument)
+            if rendered:
+                parameters_by_function.setdefault(str(name), rendered)
 
     rows: list[tuple[str, ...]] = []
     for symbol in symbols:
@@ -899,7 +916,9 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
             }
         )
         handler = str(symbol.get("qualified_name", ""))
-        fields = shapes_by_function.get(handler.rsplit(".", 1)[-1], [])
+        short_name = handler.rsplit(".", 1)[-1]
+        fields = shapes_by_function.get(short_name, [])
+        bound = parameters_by_function.get(short_name, [])
         for route in routes:
             if str(route.get("role", "")) == "test":
                 # Registered to exercise the framework, not to serve traffic.
@@ -909,6 +928,7 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
                     str(route.get("method", "")),
                     f"`{route.get('path', '')}`",
                     short_form(handler),
+                    _truncate(tuple(bound)),
                     f"{guards:,}",
                     ", ".join(refusals) or "—",
                     ", ".join(f"`{item}`" for item in sorted(set(fields))[:6]) or "—",
@@ -924,12 +944,13 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
             "Method",
             "Path",
             "Handler",
+            "Binds",
             "Guards",
             "Refuses with",
             "Response fields",
             "Declared at",
         ),
-        alignments=("left", "left", "left", "right", "left", "left", "left"),
+        alignments=("left", "left", "left", "left", "right", "left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
         note=(
             f"{len(rows):,} served routes, of which {unguarded:,} reach their body with no guard "
