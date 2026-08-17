@@ -206,64 +206,6 @@ def scale(player):
             self.assertIn("may still exist", census.claim)
             self.assertTrue(census.alternative_hypotheses)
 
-    def _route_claim(self, source: str) -> str:
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "main.py").write_text(source, encoding="utf-8")
-            result = analyze_snapshot(scan_repository(root))
-            return next(item.claim for item in result.claims if item.category == "http_route")
-
-    APP = "from fastapi import FastAPI, HTTPException\napp = FastAPI()\n"
-
-    def test_a_route_names_the_statuses_its_handler_raises(self) -> None:
-        # "Which failure statuses can this route return" is a question a
-        # maintainer asks constantly and this engine could not answer: it gave
-        # the method, the path and the handler and stopped, while the codes sat
-        # in a tree it had already walked.
-        claim = self._route_claim(
-            self.APP + "@app.get('/p/{i}')\ndef get_p(i: int):\n"
-            "    if i < 0:\n        raise HTTPException(status_code=400, detail='bad')\n"
-            "    raise HTTPException(status_code=404, detail='gone')\n"
-        )
-        self.assertIn("`400`, `404`", claim)
-        self.assertIn("whether each is reachable is not decided here", claim)
-
-    def test_a_status_on_the_decorator_counts_too(self) -> None:
-        # `status_code=201` on the route decorator declares the success code,
-        # which is as much part of the contract as the failures.
-        claim = self._route_claim(
-            self.APP + "@app.post('/p', status_code=201)\ndef make_p():\n    return {}\n"
-        )
-        self.assertIn("`201`", claim)
-
-    def test_a_positional_abort_is_read(self) -> None:
-        claim = self._route_claim(
-            self.APP + "@app.get('/p')\ndef get_p():\n    abort(403)\n    return {}\n"
-        )
-        self.assertIn("`403`", claim)
-
-    def test_a_route_naming_no_status_says_nothing_extra(self) -> None:
-        claim = self._route_claim(self.APP + "@app.get('/p')\ndef get_p():\n    return {}\n")
-        self.assertIn("is handled by", claim)
-        self.assertNotIn("names HTTP status", claim)
-
-    def test_a_status_built_from_a_variable_is_not_guessed(self) -> None:
-        # A code this reader cannot name is one it must not invent; guessing
-        # would put a contract in the document that nobody wrote.
-        claim = self._route_claim(
-            self.APP + "CODE = 418\n@app.get('/p')\ndef get_p():\n"
-            "    raise HTTPException(status_code=CODE)\n"
-        )
-        self.assertNotIn("names HTTP status", claim)
-
-    def test_a_small_integer_flag_is_not_a_status_code(self) -> None:
-        # `status=1` is a flag. Reading it as a status would report a route
-        # returning HTTP 1.
-        claim = self._route_claim(
-            self.APP + "@app.get('/p')\ndef get_p():\n    record(status=1)\n    return {}\n"
-        )
-        self.assertNotIn("names HTTP status", claim)
-
     def _suite(self, sources: dict[str, str]) -> list[str]:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

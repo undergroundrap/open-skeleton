@@ -248,45 +248,6 @@ def _assigned_names(node: ast.AST) -> list[str]:
     return []
 
 
-# Calls whose first positional argument is an HTTP status. `abort(404)` is
-# Flask's spelling, `HTTPException(404)` Starlette's when written positionally.
-STATUS_POSITIONAL = frozenset({"abort", "HTTPException"})
-
-
-def _declared_status_codes(node: ast.AST) -> tuple[int, ...]:
-    """HTTP statuses a handler names, from its decorators and its body.
-
-    "Which failure statuses can this route return" is a question a maintainer
-    asks constantly and this engine could not answer: it reported the method,
-    the path and the handler, and stopped. The codes are right there --
-    `raise HTTPException(status_code=404, ...)` -- in a tree already walked.
-
-    Named, not returned. A code appearing in the handler says the author wrote
-    that branch, not that anything reaches it, and the claim says so. Only
-    integer literals count: a status assembled from a variable is a code this
-    reader cannot name, and guessing would put an invented contract in the
-    document.
-    """
-
-    found: set[int] = set()
-    for candidate in ast.walk(node):
-        if not isinstance(candidate, ast.Call):
-            continue
-        for keyword in candidate.keywords:
-            if keyword.arg in {"status_code", "status"} and isinstance(keyword.value, ast.Constant):
-                value = keyword.value.value
-                if isinstance(value, int) and not isinstance(value, bool):
-                    found.add(value)
-        name = (_expr_name(candidate.func) or "").split(".")[-1]
-        if name in STATUS_POSITIONAL and candidate.args:
-            first = candidate.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, int):
-                found.add(first.value)
-    # Below 100 is not a status code; a `status=1` flag elsewhere in the
-    # handler would otherwise be reported as one.
-    return tuple(sorted(code for code in found if 100 <= code <= 599))
-
-
 def _is_mutable_initializer(node: ast.AST | None) -> bool:
     if isinstance(node, (ast.Dict, ast.List, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)):
         return True
@@ -1520,21 +1481,13 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             # a large test suite it is most of the census, and reporting a test
             # fixture as an endpoint misdescribes what the system exposes.
             in_test = str(self.file_record.role) == "test"
-            statuses = _declared_status_codes(node)
-            served = f"{route['method']} {route['path']} is handled by {qualified}."
-            if statuses:
-                served += (
-                    " It names HTTP status "
-                    + ", ".join(f"`{code}`" for code in statuses)
-                    + " on paths through it; whether each is reachable is not decided here."
-                )
             self._claim(
                 text=(
                     f"{route['method']} {route['path']} is registered by {qualified} "
                     "inside a test file, so it exercises the framework rather than "
                     "forming part of the served surface."
                     if in_test
-                    else served
+                    else f"{route['method']} {route['path']} is handled by {qualified}."
                 ),
                 category="test_route" if in_test else "http_route",
                 status="verified",
