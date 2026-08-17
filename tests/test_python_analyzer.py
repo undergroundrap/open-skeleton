@@ -708,6 +708,40 @@ class ExternalCallTests(TestCase):
         self.assertEqual(calls["self.ai.chat.create"]["via"], "openai")
         self.assertEqual(calls["self.cache.get"]["via"], "redis")
 
+    def test_the_standard_library_is_marked_as_such(self) -> None:
+        # Ranked purely by how often each name is called, `random.choice` at
+        # forty-four sites outranked the two calls reaching a language model,
+        # so a panel headed "what does this program touch" led with `time.time`.
+        calls = self._calls("import time\ntime.time()\n")
+        self.assertEqual(calls["time.time"]["origin"], "standard library")
+
+    def test_the_repository_s_own_module_is_not_a_dependency(self) -> None:
+        # `from app.core.vector_db import vec_db` binds an *object*, so the
+        # module it lives in is not recoverable from the bound name. Without
+        # tracking it separately, a repository's own storage layer was reported
+        # as something the program depends on.
+        calls = _external_calls(
+            ast.parse("from app.core.vector_db import vec_db\nvec_db.get_player(1)\n"),
+            frozenset({"backend.app.core.vector_db", "backend.main"}),
+        )
+        self.assertEqual(calls["vec_db.get_player"]["origin"], "this repository")
+
+    def test_an_unrecognised_module_is_reported_as_a_dependency(self) -> None:
+        # The honest residual: neither the standard library nor this
+        # repository. It does not claim a manifest declares it.
+        calls = _external_calls(
+            ast.parse("import openai\nopenai.AsyncOpenAI()\n"), frozenset({"backend.main"})
+        )
+        self.assertEqual(calls["openai.AsyncOpenAI"]["origin"], "dependency")
+
+    def test_via_still_names_what_it_always_named(self) -> None:
+        # The module is tracked alongside `via`, not instead of it; changing
+        # what `via` means would silently rewrite every existing row.
+        calls = self._calls(
+            "from openai import AsyncOpenAI\nclient = AsyncOpenAI()\nclient.chat.create()\n"
+        )
+        self.assertEqual(calls["client.chat.create"]["via"], "AsyncOpenAI")
+
     def test_an_alias_resolves_to_the_imported_name(self) -> None:
         calls = self._calls("import numpy as np\nnp.array([1])\n")
         self.assertEqual(calls["np.array"]["via"], "numpy")

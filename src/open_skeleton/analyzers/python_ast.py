@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Iterable
@@ -570,7 +571,40 @@ def _name_index(tree: ast.Module) -> dict[str, int]:
     return found
 
 
-def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
+def _call_origin(via: str, local_modules: frozenset[str]) -> str:
+    """Where the called name comes from: the standard library, here, or neither.
+
+    A reader asking what a program touches at runtime is asking about the last
+    of those. Ranked purely by how often each name is called, `random.choice`
+    at forty-four sites outranks the two calls that reach a language model,
+    and the panel answering "what does this depend on" leads with `time.time`.
+
+    `sys.stdlib_module_names` is exact and costs nothing. A module the
+    repository itself defines is local. What remains is a dependency, which is
+    the honest residual: this says the name resolves to neither the standard
+    library nor this repository, not that a manifest declares it.
+    """
+
+    root = via.split(".", maxsplit=1)[0]
+    if root in sys.stdlib_module_names:
+        return "standard library"
+    # `from app.core import vec_db` binds the bare name while the repository
+    # knows the module as `backend.app.core.vec_db`, so a leading-segment test
+    # called every local helper a dependency -- on one repository that put
+    # `vec_db.get_player`, its own storage layer, at the top of a panel headed
+    # by what the program depends on.
+    # Suffix match on the whole dotted path. An import is written relative to
+    # a source root -- `app.core.vector_db` -- while the repository knows the
+    # file as `backend.app.core.vector_db`, so comparing leading segments
+    # matches nothing and every local helper reads as a dependency.
+    if any(name == via or name.endswith(f".{via}") for name in local_modules):
+        return "this repository"
+    return "dependency"
+
+
+def _external_calls(
+    tree: ast.Module, local_modules: frozenset[str] = frozenset()
+) -> dict[str, dict[str, Any]]:
     """Calls made through an imported name: the runtime surface this module uses.
 
     An import edge records that `asyncio` is a dependency. It does not record
@@ -585,14 +619,24 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     imported: dict[str, str] = {}
+    # Where each bound name came from. `from app.core.vector_db import vec_db`
+    # binds an *object*, so `via` records `vec_db` and the module it lives in
+    # is lost -- which made a repository's own storage layer indistinguishable
+    # from a third-party package. This keeps the module without changing what
+    # `via` has always meant.
+    sources: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                imported[alias.asname or alias.name] = alias.name
+                bound = alias.asname or alias.name
+                imported[bound] = alias.name
+                sources[bound] = node.module or ""
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 # `import a.b.c` binds `a` unless aliased.
-                imported[alias.asname or alias.name.split(".")[0]] = alias.name
+                bound = alias.asname or alias.name.split(".")[0]
+                imported[bound] = alias.name
+                sources[bound] = alias.name
 
     # `client = AsyncOpenAI(...)` makes `client` stand for the imported name.
     for node in ast.walk(tree):
@@ -603,6 +647,7 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
             for target in node.targets:
                 for name in _assigned_names(target):
                     imported.setdefault(name, imported[root])
+                    sources.setdefault(name, sources.get(root, ""))
                 # `self.client = AsyncOpenAI(...)` is the shape an SDK client
                 # actually takes, and binding only bare names missed it: the
                 # call that follows is rooted at `self`, which is nothing, so
@@ -611,6 +656,7 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
                 attribute = _expr_name(target)
                 if attribute and "." in attribute:
                     imported.setdefault(attribute, imported[root])
+                    sources.setdefault(attribute, sources.get(root, ""))
 
     found: dict[str, dict[str, Any]] = {}
     for node in ast.walk(tree):
@@ -623,7 +669,7 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
         # at `self.client`; taking the first segment asks whether `self` is an
         # import, which it never is.
         segments = dotted.split(".")
-        bound = next(
+        receiver = next(
             (
                 candidate
                 for length in range(len(segments) - 1, 0, -1)
@@ -631,10 +677,17 @@ def _external_calls(tree: ast.Module) -> dict[str, dict[str, Any]]:
             ),
             None,
         )
-        if bound is None:
+        if receiver is None:
             continue
+        via = imported[receiver]
         entry = found.setdefault(
-            dotted, {"count": 0, "first_line": node.lineno, "via": imported[bound]}
+            dotted,
+            {
+                "count": 0,
+                "first_line": node.lineno,
+                "via": via,
+                "origin": _call_origin(sources.get(receiver) or via, local_modules),
+            },
         )
         entry["count"] = int(entry["count"]) + 1
         entry["first_line"] = min(int(entry["first_line"]), node.lineno)
@@ -1157,6 +1210,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         tree: ast.Module,
         created_at: str,
         module: str,
+        local_modules: frozenset[str] = frozenset(),
     ) -> None:
         self.snapshot = snapshot
         self.file_record = file_record
@@ -1200,7 +1254,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.caught_families = _caught_families(tree)
         self.caught_family_evidence: dict[str, list[str]] = {}
         self.signatures = _signatures(tree)
-        self.external_calls = _external_calls(tree)
+        self.external_calls = _external_calls(tree, local_modules)
         self.name_index = _name_index(tree)
         module_symbol = self._symbol(
             qualified_name=self.module,
@@ -2247,6 +2301,7 @@ class PythonAstAnalyzer:
                     tree=tree,
                     created_at=created_at,
                     module=module_names[file_record.path],
+                    local_modules=frozenset(module_names.values()),
                 )
                 analyzer.visit(tree)
                 analyzer.finalize()

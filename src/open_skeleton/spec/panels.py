@@ -1168,21 +1168,39 @@ def _external_calls(symbols: tuple[dict[str, Any], ...]) -> Panel:
                 {
                     "count": 0,
                     "via": str(entry.get("via", "")),
+                    "origin": str(entry.get("origin", "")),
                     "site": f"{symbol['path']}:{entry['first_line']}",
                 },
             )
             running["count"] = int(running["count"]) + int(entry["count"])
+    # A dependency first, then this repository, then the standard library.
+    # Ranked purely by how often each name is called, `random.choice` at
+    # forty-four sites outranked the two calls reaching a language model, and
+    # the panel answering "what does this program touch" led with `time.time`.
+    # Within a rank the count still decides.
+    order = {"dependency": 0, "this repository": 1, "standard library": 2}
     rows = tuple(
-        (name, str(entry["via"]), f"{int(entry['count']):,}", str(entry["site"]))
+        (
+            name,
+            str(entry["via"]),
+            str(entry["origin"]) or "—",
+            f"{int(entry['count']):,}",
+            str(entry["site"]),
+        )
         for name, entry in sorted(
-            totals.items(), key=lambda item: (-int(item[1]["count"]), item[0])
+            totals.items(),
+            key=lambda item: (
+                order.get(str(item[1].get("origin", "")), 3),
+                -int(item[1]["count"]),
+                item[0],
+            ),
         )
     )
     return Panel(
         name="external_calls",
         title="Calls through imported names",
-        columns=("Call", "Imported as", "Sites", "First seen"),
-        alignments=("left", "left", "right", "left"),
+        columns=("Call", "Imported as", "Origin", "Sites", "First seen"),
+        alignments=("left", "left", "left", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
         note=(
             "The receiver has to trace back to an import, so a call on a "
@@ -1192,7 +1210,13 @@ def _external_calls(symbols: tuple[dict[str, Any], ...]) -> Panel:
             "held on an attribute, which is the shape an SDK client usually "
             "takes: `self.client = AsyncOpenAI(...)` followed by "
             "`self.client.chat.completions.create(...)` is reported as an "
-            "`openai` call."
+            "`openai` call. Rows are ordered by origin before frequency, "
+            "because a call leaving the process is what this panel is for: "
+            "sorted by count alone, forty-four calls to `random.choice` "
+            "outrank two that reach a language model. `dependency` is a "
+            "residual — neither the standard library nor a module this "
+            "repository defines — and is not a claim that a manifest declares "
+            "it."
         ),
     )
 
