@@ -164,6 +164,58 @@ class PanicCensusTests(TestCase):
         self.assertEqual(panics["todo!"][1], "high")
 
 
+class EnvironmentReadTests(TestCase):
+    """What a crate needs from its environment, which Rust reported as nothing.
+
+    The Python analyzer has reported `os.getenv` since the beginning. A crate
+    that will not start without `DATABASE_URL` said so in Python and stayed
+    silent in Rust, which is a statement about the analyzer rather than about
+    the code.
+    """
+
+    def _settings(self, source: str) -> dict[str, str]:
+        result = _analyze(source)
+        found = {}
+        for claim in result.claims:
+            if claim.category != "configuration_read":
+                continue
+            for word in claim.claim.split():
+                if word.isupper() and len(word) > 2:
+                    found[word] = "compile" if "compile time" in claim.claim else "run"
+        return found
+
+    def test_a_runtime_read_is_reported_as_one(self) -> None:
+        source = 'fn go() { let a = std::env::var("APPDATA").unwrap(); }\n'
+        self.assertEqual(self._settings(source), {"APPDATA": "run"})
+
+    def test_a_compile_time_substitution_is_distinguished(self) -> None:
+        # `env!` is replaced by the compiler, so the value is fixed in the
+        # binary. Naming it the way `env::var` is named would tell an operator
+        # to set a variable that nothing will ever read.
+        source = 'fn go() { let a = env!("BUILD_ROOT"); }\n'
+        self.assertEqual(self._settings(source), {"BUILD_ROOT": "compile"})
+
+    def test_option_env_is_also_compile_time(self) -> None:
+        source = 'fn go() { let a = option_env!("OPTIONAL_ROOT"); }\n'
+        self.assertEqual(self._settings(source), {"OPTIONAL_ROOT": "compile"})
+
+    def test_a_read_inside_a_comment_is_not_a_read(self) -> None:
+        # The tokenizer is comment-safe, which is the whole reason this is
+        # read from tokens rather than by matching the source text.
+        source = 'fn go() {\n    // std::env::var("COMMENTED")\n    let a = 1;\n}\n'
+        self.assertEqual(self._settings(source), {})
+
+    def test_a_name_built_at_runtime_is_not_guessed(self) -> None:
+        source = "fn go(key: &str) { let a = std::env::var(key); }\n"
+        self.assertEqual(self._settings(source), {})
+
+    def test_an_unrelated_var_call_is_not_an_environment_read(self) -> None:
+        # `var` is an ordinary name. Only one reached through `env::` counts,
+        # or every helper called `var` becomes configuration.
+        source = 'fn go() { let a = config::var("NOT_ENV"); }\n'
+        self.assertEqual(self._settings(source), {})
+
+
 class ItemAndImportTests(TestCase):
     def test_items_become_symbols(self) -> None:
         result = _analyze("struct S;\nenum E { A }\ntrait T {}\nfn f() {}")

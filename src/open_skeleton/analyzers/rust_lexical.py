@@ -793,6 +793,62 @@ def _trait_implementations(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
+def _environment_reads(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Environment settings a crate reads, as `(name, when, line)`.
+
+    The Python analyzer has reported `os.getenv` since the beginning and the
+    Rust one reported nothing, so a crate that will not start without
+    `DATABASE_URL` said so in Python and stayed silent in Rust. What a program
+    needs from its environment is the same question in both.
+
+    `when` separates two things Rust spells almost identically. `env::var` is
+    read when the program runs and can be missing on the machine that runs it;
+    `env!` is substituted by the compiler, so its value is fixed in the binary
+    and a reader looking for something to configure will never find it. Naming
+    them the same way would tell an operator to set a variable that nothing
+    will ever read.
+
+    A name built at runtime yields no string token and is not recorded: the
+    value is not knowable without running the program.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier":
+            continue
+        # `env!("X")` and `option_env!("X")` -- compile time.
+        if (
+            token.value in {"env", "option_env"}
+            and index + 3 < total
+            and tokens[index + 1].value == "!"
+            and tokens[index + 2].value == "("
+            and tokens[index + 3].kind == "string"
+        ):
+            name = tokens[index + 3].value
+            if name:
+                found.append((name, "compile time", token.line))
+            continue
+        # `env::var("X")`, with or without a `std::` prefix -- run time.
+        if token.value == "var" and index + 2 < total:
+            preceded_by_env = (
+                index >= 2
+                and tokens[index - 1].value == ":"
+                and tokens[index - 2].value == ":"
+                and index >= 3
+                and tokens[index - 3].value == "env"
+            )
+            if (
+                preceded_by_env
+                and tokens[index + 1].value == "("
+                and tokens[index + 2].kind == "string"
+            ):
+                name = tokens[index + 2].value
+                if name:
+                    found.append((name, "run time", token.line))
+    return found
+
+
 def _http_routes(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """Served paths and their methods, as `(method, path, line)`.
 
@@ -1186,6 +1242,7 @@ class RustLexicalAnalyzer:
             file_errors = _error_surface(tokens)
             file_traits = _trait_implementations(tokens)
             file_routes = _http_routes(tokens)
+            file_environment = _environment_reads(tokens)
             file_calls = _client_calls(tokens)
             file_call_sites = _call_sites(tokens)
             declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
@@ -1213,6 +1270,32 @@ class RustLexicalAnalyzer:
                     },
                 )
             )
+
+            for setting, when, line in dict.fromkeys(file_environment):
+                excerpt = lines[line - 1] if 0 < line <= len(lines) else ""
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"{file_record.path} reads environment setting {setting} at {when}."
+                            if when == "run time"
+                            else (
+                                f"{file_record.path} substitutes environment setting "
+                                f"{setting} at {when}, so its value is fixed in the built "
+                                "binary rather than read on the machine that runs it."
+                            )
+                        ),
+                        category="configuration_read",
+                        supporting=(
+                            receipt(
+                                file_record.path, line, "environment_read", module, excerpt
+                            ).evidence_id,
+                        ),
+                        importance="medium",
+                        path=file_record.path,
+                    )
+                )
 
             index = 0
             while index < len(tokens):
