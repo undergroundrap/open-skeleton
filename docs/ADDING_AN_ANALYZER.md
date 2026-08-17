@@ -53,6 +53,35 @@ nothing. The contract test enforces this against a fixture of ordinary code
 and prose; if your subject genuinely appears there, extend the fixture rather
 than exempt yourself.
 
+## Before you extract anything: check what the document already says
+
+Generate the specification for a repository that has the fact, and grep it for
+the **fact itself** — a status code, a symbol, a value — not for the claim
+category you are about to add.
+
+```bash
+python -m open_skeleton spec <repo> --state <dir> --out <dir> && grep -n "404" <dir>/spec.md
+```
+
+Querying the claim categories is not this check. Panels and diagrams render
+from symbol *metadata*, so a fact can be in the document and in no claim at
+all. That is exactly how a second reader of `HTTPException(status_code=N)` got
+written while the endpoint panel was already printing those codes in a
+"Refuses with" column.
+
+Two extractors for one fact is worse than either alone: they can disagree and
+nothing says which is right. If the fact is already there, extend what
+produces it.
+
+The same rule applies to how you verify. **Never read an exit code through a
+pipe** — `python scripts/gate.py | tail -3; echo $?` reports `tail`'s status,
+which has caused commits on a failing gate here more than once. Redirect
+instead:
+
+```bash
+python scripts/gate.py > /tmp/gate.txt 2>&1; echo $?
+```
+
 ## Non-negotiables
 
 These are enforced by the model and by review, not by convention:
