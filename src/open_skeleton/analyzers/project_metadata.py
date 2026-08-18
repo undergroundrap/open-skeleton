@@ -19,6 +19,7 @@ from open_skeleton.models import (
     CoverageRecord,
     EdgeRecord,
     EvidenceRecord,
+    FileRecord,
     Snapshot,
     SymbolRecord,
     utc_now,
@@ -222,6 +223,56 @@ def _normalize_requirement(value: object) -> str | None:
     return match.group(1).casefold().replace("_", "-")
 
 
+def _declared_license(document: dict[str, Any], manifest: str) -> str | None:
+    """The licence identifier a manifest states, if it states one.
+
+    Under what terms a repository may be used is among the first questions
+    asked of it, and this engine answered only that a file named `LICENSE`
+    exists -- never what it says. Every ecosystem carries the identifier in
+    its manifest, so the answer was already being parsed and thrown away.
+
+    Returns the identifier as written. No attempt is made to normalise
+    `Apache-2.0` against `Apache License 2.0`: the value is quoted, not
+    interpreted, and a reader comparing two spellings is better served by
+    seeing both than by a guess about which was meant.
+    """
+
+    table: object
+    if manifest == "Cargo.toml":
+        # A Cargo workspace declares the licence once, under `[workspace.package]`,
+        # and every member writes `license.workspace = true` to inherit it. The
+        # inheritance marker is not an identifier and is not treated as one:
+        # resolving it needs the root manifest, which this file is not, so the
+        # claim is emitted where the value is actually written.
+        package = document.get("package")
+        table = package.get("license") if isinstance(package, dict) else None
+        if not isinstance(table, str):
+            workspace = document.get("workspace")
+            shared = workspace.get("package") if isinstance(workspace, dict) else None
+            table = shared.get("license") if isinstance(shared, dict) else None
+    elif manifest == "pyproject.toml":
+        project = document.get("project")
+        table = project.get("license") if isinstance(project, dict) else None
+    else:
+        # npm's legacy spelling is a separate key holding a list, not the same
+        # key holding a different type, so looking only at `license` finds
+        # nothing in a package that uses it.
+        table = document.get("license")
+        if table is None:
+            table = document.get("licenses")
+    if isinstance(table, str):
+        return table.strip() or None
+    # PEP 621 allowed a table with `text`; npm's legacy form is a list.
+    if isinstance(table, dict):
+        text = table.get("text")
+        return str(text).strip() or None if isinstance(text, str) else None
+    if isinstance(table, list) and table:
+        first = table[0]
+        if isinstance(first, dict) and isinstance(first.get("type"), str):
+            return str(first["type"]).strip() or None
+    return None
+
+
 def _declared_commands(document: dict[str, Any], manifest: str) -> list[tuple[str, str]]:
     """Commands a manifest installs, as ``(name, target)`` pairs.
 
@@ -353,6 +404,60 @@ def is_non_goal_heading(heading: str) -> bool:
     return any(marker in folded for marker in NON_GOAL_MARKERS)
 
 
+def _cargo_name(document: dict[str, Any]) -> str | None:
+    package = document.get("package")
+    if isinstance(package, dict) and isinstance(package.get("name"), str):
+        return str(package["name"])
+    return None
+
+
+def _cargo_dependencies(document: dict[str, Any]) -> dict[str, set[str]]:
+    """Collect Cargo runtime and development dependency names.
+
+    A Cargo dependency is a key whose value is either a version string or a
+    table. Both spellings name the same crate, so the key is what matters --
+    except when the table carries `package`, which renames the crate: under
+    `serde_json = { package = "sonic-rs" }` the crate fetched is `sonic-rs`
+    and reporting the alias would name a package that is never downloaded.
+
+    `dev-dependencies` and `build-dependencies` are grouped as optional
+    because neither is present in a consumer's build, which is the
+    distinction a reader of the inventory is drawing.
+
+    A dependency carrying `path` is a sibling crate in this same repository,
+    not something fetched from a registry, and it is reported separately:
+    counting a workspace's own crates as third-party supply chain would
+    inflate the number that a reader asking "what does this repository pull
+    in" is actually asking about.
+    """
+
+    runtime: set[str] = set()
+    optional: set[str] = set()
+    internal: set[str] = set()
+
+    def collect(table: object, into: set[str]) -> None:
+        if not isinstance(table, dict):
+            return
+        for name, value in table.items():
+            crate = str(name)
+            local = False
+            if isinstance(value, dict):
+                if isinstance(value.get("package"), str):
+                    crate = str(value["package"])
+                local = isinstance(value.get("path"), str)
+            normalized = crate.casefold().replace("_", "-")
+            if normalized:
+                (internal if local else into).add(normalized)
+
+    collect(document.get("dependencies"), runtime)
+    collect(document.get("dev-dependencies"), optional)
+    collect(document.get("build-dependencies"), optional)
+    workspace = document.get("workspace")
+    if isinstance(workspace, dict):
+        collect(workspace.get("dependencies"), runtime)
+    return {"runtime": runtime, "optional": optional, "internal": internal}
+
+
 def _checked_out_revision(root: Path) -> tuple[str, str] | None:
     """`(revision, ref)` for the commit checked out, or None outside a git tree.
 
@@ -469,7 +574,7 @@ class ProjectMetadataAnalyzer:
             for item in snapshot.files
             if item.language == "Markdown"
             or Path(item.path).name.casefold()
-            in {"package.json", "requirements.txt", "pyproject.toml"}
+            in {"package.json", "requirements.txt", "pyproject.toml", "cargo.toml"}
         ]
         analyzed_files = 0
         file_sources: dict[str, str] = {}
@@ -527,6 +632,52 @@ class ProjectMetadataAnalyzer:
             )
             evidence.append(record)
             return record
+
+        def declare_license(
+            document: dict[str, Any],
+            manifest: str,
+            file_record: FileRecord,
+            manifest_evidence: EvidenceRecord,
+        ) -> None:
+            """Emit the licence identifier a manifest states, if it states one.
+
+            Every ecosystem spells this differently and every reader of any
+            repository wants it, so the claim is emitted from each manifest
+            branch rather than from the one that happened to be written first.
+            """
+
+            licence = _declared_license(document, manifest)
+            if not licence:
+                return
+            licence_text = (
+                f"`{file_record.path}` declares the repository licence as "
+                f"`{licence}`. This is the identifier the manifest states; the terms "
+                "themselves are in whatever file it points at."
+            )
+            claims.append(
+                ClaimRecord(
+                    claim_id=stable_id(
+                        "claim",
+                        (
+                            snapshot.snapshot_id,
+                            "declared_license",
+                            licence_text,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    claim=licence_text,
+                    category="declared_license",
+                    status="verified",
+                    confidence=1.0,
+                    importance="high",
+                    produced_by=ANALYZER_VERSION,
+                    created_at=created_at,
+                    verified_at=created_at,
+                    supporting_evidence=(manifest_evidence.evidence_id,),
+                    invalidation_keys=(f"file:{file_record.path}",),
+                )
+            )
 
         package_names: set[str] = set()
         manifest_receipts: list[str] = []
@@ -613,6 +764,121 @@ class ProjectMetadataAnalyzer:
                 package_names.update(declared)
                 analyzed_files += 1
                 continue
+            if manifest_name == "cargo.toml":
+                try:
+                    crate = tomllib.loads(file_sources[file_record.path])
+                except tomllib.TOMLDecodeError as exc:
+                    failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+                    continue
+                declared_rust = _cargo_dependencies(crate)
+                manifest_evidence = receipt(
+                    file_record.path,
+                    1,
+                    max(1, file_record.line_count),
+                    "project_manifest",
+                    file_record.path,
+                )
+                manifest_receipts.append(manifest_evidence.evidence_id)
+                declare_license(crate, "Cargo.toml", file_record, manifest_evidence)
+                symbol_id = stable_id(
+                    "symbol",
+                    (
+                        snapshot.snapshot_id,
+                        file_record.path,
+                        "project_manifest",
+                        ANALYZER_VERSION,
+                    ),
+                )
+                symbols.append(
+                    SymbolRecord(
+                        symbol_id=symbol_id,
+                        snapshot_id=snapshot.snapshot_id,
+                        path=file_record.path,
+                        qualified_name=file_record.path,
+                        kind="project_manifest",
+                        start_line=1,
+                        end_line=max(1, file_record.line_count),
+                        language=file_record.language,
+                        analyzer=ANALYZER_VERSION,
+                        metadata={
+                            "project_name": _cargo_name(crate),
+                            "runtime_dependencies": len(declared_rust["runtime"]),
+                            "optional_dependencies": len(declared_rust["optional"]),
+                            "internal_dependencies": len(declared_rust["internal"]),
+                        },
+                    )
+                )
+                for dependency in sorted(
+                    {
+                        *declared_rust["runtime"],
+                        *declared_rust["optional"],
+                        *declared_rust["internal"],
+                    }
+                ):
+                    edges.append(
+                        EdgeRecord(
+                            edge_id=stable_id(
+                                "edge",
+                                (
+                                    snapshot.snapshot_id,
+                                    symbol_id,
+                                    "declares_dependency",
+                                    dependency,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            source_symbol_id=symbol_id,
+                            source_path=file_record.path,
+                            relationship="declares_dependency",
+                            target_ref=dependency,
+                            target_symbol_id=None,
+                            evidence_id=manifest_evidence.evidence_id,
+                            analyzer=ANALYZER_VERSION,
+                        )
+                    )
+                package_names.update(declared_rust["runtime"])
+                package_names.update(declared_rust["optional"])
+                package_names.update(declared_rust["internal"])
+                if any(declared_rust.values()):
+                    internal_note = (
+                        f" A further {len(declared_rust['internal'])} are declared by path "
+                        "and live in this repository rather than a registry."
+                        if declared_rust["internal"]
+                        else ""
+                    )
+                    inventory_text = (
+                        f"{file_record.path} declares "
+                        f"{len(declared_rust['runtime'])} runtime and "
+                        f"{len(declared_rust['optional'])} optional dependencies."
+                        f"{internal_note}"
+                    )
+                    claims.append(
+                        ClaimRecord(
+                            claim_id=stable_id(
+                                "claim",
+                                (
+                                    snapshot.snapshot_id,
+                                    "dependency_inventory",
+                                    inventory_text,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            claim=inventory_text,
+                            category="dependency_inventory",
+                            status="verified",
+                            confidence=1.0,
+                            importance="medium",
+                            produced_by=ANALYZER_VERSION,
+                            created_at=created_at,
+                            verified_at=created_at,
+                            supporting_evidence=(manifest_evidence.evidence_id,),
+                            invalidation_keys=(f"file:{file_record.path}",),
+                        )
+                    )
+                analyzed_files += 1
+                continue
             if manifest_name == "pyproject.toml":
                 try:
                     project = tomllib.loads(file_sources[file_record.path])
@@ -629,6 +895,7 @@ class ProjectMetadataAnalyzer:
                 )
                 manifest_receipts.append(manifest_evidence.evidence_id)
                 commands = _declared_commands(project, "pyproject.toml")
+                declare_license(project, "pyproject.toml", file_record, manifest_evidence)
                 if commands:
                     named = ", ".join(f"`{name}` (`{target}`)" for name, target in commands)
                     command_text = (

@@ -11,9 +11,12 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.project_metadata import (
     ProjectMetadataAnalyzer,
+    _cargo_dependencies,
+    _cargo_name,
     _checked_out_revision,
     _declared_commands,
     _declared_commitments,
+    _declared_license,
     is_declarative_document,
     is_non_goal_heading,
 )
@@ -225,6 +228,47 @@ class DeclaredCommandTests(TestCase):
         # an invented entry point in the document.
         document = {"project": {"scripts": {"ok": "pkg:main", "bad": {"nested": True}}}}
         self.assertEqual(self._commands(document, "pyproject.toml"), [("ok", "pkg:main")])
+
+
+class DeclaredLicenseTests(TestCase):
+    """Under what terms the repository may be used.
+
+    The engine probed for a file named `LICENSE` and reported that one exists,
+    never what it says -- while every ecosystem carries the identifier in its
+    manifest, which this analyzer already parsed.
+    """
+
+    def _licence(self, document: Mapping[str, Any], manifest: str) -> str | None:
+        return _declared_license(dict(document), manifest)
+
+    def test_each_ecosystem_declares_it_somewhere_different(self) -> None:
+        for document, manifest, expected in (
+            ({"project": {"license": "AGPL-3.0-only"}}, "pyproject.toml", "AGPL-3.0-only"),
+            ({"license": "Apache-2.0"}, "package.json", "Apache-2.0"),
+            ({"package": {"license": "MIT OR Apache-2.0"}}, "Cargo.toml", "MIT OR Apache-2.0"),
+        ):
+            self.assertEqual(self._licence(document, manifest), expected)
+
+    def test_the_pep621_table_form_is_read(self) -> None:
+        self.assertEqual(
+            self._licence({"project": {"license": {"text": "MIT"}}}, "pyproject.toml"), "MIT"
+        )
+
+    def test_the_legacy_npm_array_is_read(self) -> None:
+        # `licenses` is a separate key holding a list, not the same key with a
+        # different type, so looking only at `license` finds nothing.
+        self.assertEqual(self._licence({"licenses": [{"type": "BSD"}]}, "package.json"), "BSD")
+
+    def test_a_manifest_declaring_none_says_none(self) -> None:
+        self.assertIsNone(self._licence({"project": {"name": "x"}}, "pyproject.toml"))
+
+    def test_a_pointer_to_a_file_is_not_an_identifier(self) -> None:
+        # `{file = "LICENSE"}` says where the terms are, not what they are.
+        # Quoting the path as though it were an identifier would report a
+        # repository licensed under `LICENSE`.
+        self.assertIsNone(
+            self._licence({"project": {"license": {"file": "LICENSE"}}}, "pyproject.toml")
+        )
 
 
 class ThirdPartyOriginTests(TestCase):
@@ -454,3 +498,106 @@ class DeclaredNonGoalTests(TestCase):
         self.assertIn("declared_non_goal", found)
         self.assertIn("places 3 thing(s) outside this project", found["declared_non_goal"])
         self.assertIn("stated obligation(s)", found["declared_commitment"])
+
+
+class CargoManifestTests(TestCase):
+    """A Rust repository's manifest was not read at all.
+
+    `Cargo.toml` was never in the eligibility set, so a Rust repository
+    reported no dependencies, no package name and no licence -- which is a
+    statement about this reader rather than about the repository.
+    """
+
+    MANIFEST = """\
+[package]
+name = "sample-crate"
+license = "AGPL-3.0-only"
+
+[dependencies]
+serde = "1.0"
+tokio = { version = "1", features = ["full"] }
+sample-core = { path = "../sample-core" }
+
+[dev-dependencies]
+proptest = "1"
+
+[build-dependencies]
+cc = "1"
+"""
+
+    def _analyze(self, manifest: str) -> AnalysisResult:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Cargo.toml").write_text(manifest, encoding="utf-8")
+            return ProjectMetadataAnalyzer().analyze(scan_repository(root))
+
+    def test_registry_dependencies_become_edges(self) -> None:
+        result = self._analyze(self.MANIFEST)
+        declared = {
+            edge.target_ref for edge in result.edges if edge.relationship == "declares_dependency"
+        }
+        self.assertEqual(declared, {"serde", "tokio", "sample-core", "proptest", "cc"})
+
+    def test_a_path_dependency_is_counted_separately_from_the_supply_chain(self) -> None:
+        declared = _cargo_dependencies(
+            {
+                "dependencies": {
+                    "serde": "1.0",
+                    "sample-core": {"path": "../sample-core"},
+                }
+            }
+        )
+        self.assertEqual(declared["runtime"], {"serde"})
+        self.assertEqual(declared["internal"], {"sample-core"})
+
+    def test_inventory_reports_the_path_dependency_without_inflating_the_count(self) -> None:
+        result = self._analyze(self.MANIFEST)
+        claim = next(item for item in result.claims if item.category == "dependency_inventory")
+        self.assertIn("2 runtime", claim.claim)
+        self.assertIn("2 optional", claim.claim)
+        self.assertIn("A further 1 are declared by path", claim.claim)
+
+    def test_a_renamed_dependency_reports_the_crate_actually_fetched(self) -> None:
+        declared = _cargo_dependencies(
+            {"dependencies": {"json": {"version": "1", "package": "serde_json"}}}
+        )
+        self.assertEqual(declared["runtime"], {"serde-json"})
+
+    def test_a_workspace_root_declares_its_shared_dependencies(self) -> None:
+        declared = _cargo_dependencies({"workspace": {"dependencies": {"bevy": "0.14"}}})
+        self.assertEqual(declared["runtime"], {"bevy"})
+
+    def test_the_package_name_is_recorded_on_the_manifest_symbol(self) -> None:
+        self.assertEqual(_cargo_name({"package": {"name": "sample-crate"}}), "sample-crate")
+        self.assertIsNone(_cargo_name({"workspace": {"members": ["a"]}}))
+
+    def test_the_declared_licence_is_reported_for_rust_too(self) -> None:
+        result = self._analyze(self.MANIFEST)
+        claim = next(item for item in result.claims if item.category == "declared_license")
+        self.assertIn("`AGPL-3.0-only`", claim.claim)
+
+    def test_a_workspace_declares_the_licence_once_for_every_member(self) -> None:
+        self.assertEqual(
+            _declared_license(
+                {"workspace": {"package": {"license": "AGPL-3.0-only"}}}, "Cargo.toml"
+            ),
+            "AGPL-3.0-only",
+        )
+
+    def test_an_inheritance_marker_is_not_an_identifier(self) -> None:
+        # `license.workspace = true` says where to look, not what the terms are,
+        # and the root manifest is not this file.
+        self.assertIsNone(
+            _declared_license({"package": {"license": {"workspace": True}}}, "Cargo.toml")
+        )
+
+    def test_a_malformed_manifest_is_recorded_as_a_failure_not_a_guess(self) -> None:
+        result = self._analyze("[package\nname = broken")
+        self.assertEqual(
+            [edge for edge in result.edges if edge.relationship == "declares_dependency"], []
+        )
+        self.assertTrue(any(item.failures for item in result.coverage))
+
+    def test_a_workspace_root_with_no_dependencies_claims_nothing(self) -> None:
+        result = self._analyze('[workspace]\nmembers = ["crates/a"]\n')
+        self.assertFalse(any(item.category == "dependency_inventory" for item in result.claims))

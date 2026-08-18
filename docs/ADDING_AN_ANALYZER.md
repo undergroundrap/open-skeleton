@@ -26,7 +26,7 @@ analyzers = (
     PythonAstAnalyzer(),
     TypeScriptLexicalAnalyzer(),
     RustLexicalAnalyzer(),
-    YourAnalyzer(),          # <- here
+    YourAnalyzer(),  # <- here
     ProjectMetadataAnalyzer(),
 )
 ```

@@ -560,11 +560,24 @@
                 "*.cdx.json",
                 "bom.json"
               ]
+            },
+            {
+              "name": "Declared licence",
+              "kind": "claim_category",
+              "terms": [
+                "declared_license"
+              ]
             }
           ],
           "cross_references": [
             "stack.dependencies"
-          ]
+          ],
+          "findings": {
+            "categories": [
+              "declared_license"
+            ],
+            "limit": 20
+          }
         },
         {
           "id": "stack.imported-names",
