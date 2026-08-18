@@ -19,6 +19,8 @@ untrusted repository
 
 - `scanner.py`: traversal, decoding, hashing, roles, exclusions, progress events
 - `policy.py`: size, secret, binary, dependency, and build-output policy
+- `ignore.py`: the repository's own `.gitignore`, read so generated output is
+  identified by what the repository declares rather than by a list of names
 - `state.py`: stable, platform-local state paths outside target repositories
 - `analyzers/python_ast.py`: Python syntax and selected framework facts
 - `analyzers/typescript_lexical.py`: explicitly lexical JS/TS facts

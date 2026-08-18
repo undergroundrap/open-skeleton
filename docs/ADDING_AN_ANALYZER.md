@@ -82,6 +82,39 @@ instead:
 python scripts/gate.py > /tmp/gate.txt 2>&1; echo $?
 ```
 
+## Then measure whether the thing you want to detect is there
+
+The previous check asks whether the engine already says it. This one asks
+whether any repository does it. Write a throwaway script over the corpus,
+using the scanner's own census so you read the files an analyzer would, and
+count the hits before you write anything.
+
+```python
+for record in scan_repository(root).files:
+    if record.language != "TypeScript":
+        continue
+    hits += len(PATTERN.findall((root / record.path).read_text(encoding="utf-8")))
+```
+
+Three plausible readers were rejected this way in a single sitting, at a few
+minutes each:
+
+| Candidate | What the corpus said |
+|---|---|
+| Broken documentation links | 672 relative links, 0 broken |
+| README commands vs. declared scripts | 6 documented `npm run` targets, 0 missing — and every `make X` hit was English prose: "make no", "make the", "make a" |
+| TypeScript `@deprecated` / `process.exit` / `@ts-ignore` | 0 of each across the whole TS/JS census |
+
+None of them would have failed a test. Each would have passed a suite built
+from its own fixtures, added a category to the vocabulary, and found nothing —
+while looking like coverage. The `make` result is the sharpest: a pattern that
+is a keyword in one context and an ordinary verb in another produces confident
+false claims, and only real prose reveals it.
+
+A probe that comes back empty is a result, not a wasted afternoon. It says the
+signal is absent here, so anything built on it is fitted to a repository you
+have imagined rather than one you can read.
+
 ## Non-negotiables
 
 These are enforced by the model and by review, not by convention:
