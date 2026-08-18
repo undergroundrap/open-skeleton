@@ -28,10 +28,23 @@ EXCLUDED_DIRECTORIES = frozenset(
         ".next",
         ".nuxt",
         ".cache",
-        "coverage",
         "htmlcov",
-        "dist",
+    }
+)
+# Names that usually hold generated output and sometimes hold source. `build/`
+# is the clearest case: two repositories in this corpus keep a hand-written
+# `build/sites-vite-plugin.ts` there -- build *tooling*, not build output --
+# and a fixed list deleted it from the census for the name of its parent.
+#
+# So these are not decided by name. A repository states which of its
+# directories are generated, in its own `.gitignore`, and that statement is
+# read instead. The list below applies only to a repository that states
+# nothing at all, where there is no evidence to prefer over a guess.
+GENERATED_DIRECTORY_NAMES = frozenset(
+    {
         "build",
+        "coverage",
+        "dist",
         "target",
         "vendor",
     }
@@ -184,10 +197,14 @@ MANIFEST_NAMES = frozenset(
 class ScanPolicy:
     max_file_bytes: int = 2_000_000
 
-    def directory_exclusion(self, name: str) -> str | None:
+    def directory_exclusion(
+        self, name: str, *, repository_declares_ignores: bool = False
+    ) -> str | None:
         folded = name.casefold()
         if folded in EXCLUDED_DIRECTORIES or folded.endswith(EXCLUDED_DIRECTORY_SUFFIXES):
             return "excluded-directory"
+        if not repository_declares_ignores and folded in GENERATED_DIRECTORY_NAMES:
+            return "generated-directory-name"
         return None
 
     def file_exclusion(self, path: Path, size_bytes: int) -> str | None:

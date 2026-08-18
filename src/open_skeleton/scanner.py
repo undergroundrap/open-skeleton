@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from open_skeleton.ignore import IgnoreRules
 from open_skeleton.models import ExclusionRecord, FileRecord, ScanEvent, Snapshot, utc_now
 from open_skeleton.policy import POLICY_VERSION, ScanPolicy, classify_language, classify_role
 
@@ -106,7 +107,14 @@ def scan_repository(
     def exclude(relative_path: str, reason: str) -> None:
         exclusions.append(ExclusionRecord(path=relative_path, reason=reason))
 
-    def visit(directory: Path) -> None:
+    # A repository that names its own generated directories is believed about
+    # them; one that names none leaves nothing to read, and only there does the
+    # fixed list of usually-generated names apply.
+    declares_ignores = IgnoreRules().extended(approved_root, "").declared
+
+    def visit(directory: Path, rules: IgnoreRules) -> None:
+        base = directory.relative_to(approved_root).as_posix()
+        rules = rules.extended(directory, "" if base == "." else base)
         try:
             with os.scandir(directory) as iterator:
                 entries = sorted(iterator, key=lambda item: item.name.casefold())
@@ -123,11 +131,16 @@ def scan_repository(
                     exclude(relative, "symlink-not-followed")
                     continue
                 if entry.is_dir(follow_symlinks=False):
-                    reason = active_policy.directory_exclusion(entry.name)
+                    reason = active_policy.directory_exclusion(
+                        entry.name, repository_declares_ignores=declares_ignores
+                    )
+                    if reason is None:
+                        pattern = rules.excluded_by(relative, is_dir=True)
+                        reason = f"gitignored:{pattern}" if pattern else None
                     if reason:
                         exclude(f"{relative}/", reason)
                     else:
-                        visit(candidate)
+                        visit(candidate, rules)
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     exclude(relative, "non-regular-file")
@@ -135,6 +148,9 @@ def scan_repository(
 
                 stat = entry.stat(follow_symlinks=False)
                 reason = active_policy.file_exclusion(candidate, stat.st_size)
+                if reason is None:
+                    pattern = rules.excluded_by(relative, is_dir=False)
+                    reason = f"gitignored:{pattern}" if pattern else None
                 if reason:
                     exclude(relative, reason)
                     continue
@@ -168,7 +184,7 @@ def scan_repository(
             except OSError as exc:
                 exclude(relative, f"metadata-read-error:{exc.__class__.__name__}")
 
-    visit(approved_root)
+    visit(approved_root, IgnoreRules())
     files.sort(key=lambda item: item.path)
     exclusions.sort(key=lambda item: (item.path, item.reason))
     snapshot_id = _snapshot_id(files)
