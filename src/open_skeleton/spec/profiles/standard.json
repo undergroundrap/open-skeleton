@@ -1011,7 +1011,7 @@
               "name": "Integration failure behavior",
               "kind": "sourced_claim_category",
               "terms": [
-                "ai_failure_behavior"
+                "absorbed_failure"
               ]
             },
             {
@@ -1031,7 +1031,7 @@
           ],
           "findings": {
             "categories": [
-              "ai_failure_behavior",
+              "absorbed_failure",
               "caught_exception",
               "error_surface",
               "exception_type",
@@ -2475,7 +2475,7 @@
           ],
           "constraints": {
             "categories": [
-              "ai_failure_behavior",
+              "absorbed_failure",
               "http_framework_behavior"
             ],
             "limit": 6

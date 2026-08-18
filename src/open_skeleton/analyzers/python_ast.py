@@ -1875,13 +1875,16 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             for candidate in ast.walk(statement)
             if isinstance(candidate, ast.Call)
         }
-        has_ai_call = any(
-            "ai_client" in name.casefold()
-            or name.casefold().endswith(("generate_content", "generate_json", "stream_content"))
-            for name in call_names
-        )
+        # Any call reached through an import, rather than three method names
+        # from the repository this was written against. `ai_client` and
+        # `generate_content` are that repository's own spellings, so a handler
+        # wrapping `openai`, `requests` or `redis` and swallowing the failure
+        # was invisible everywhere else. A call to a local helper is excluded
+        # because `try: helper()` returning None is ordinary control flow, not
+        # a boundary whose failure disappears.
+        absorbed = sorted(name for name in call_names if name in self.external_calls)
         fallback_labels: set[str] = set()
-        if has_ai_call:
+        if absorbed:
             for handler in node.handlers:
                 for candidate in ast.walk(handler):
                     if not isinstance(candidate, ast.Return):
@@ -1905,12 +1908,13 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 evidence_kind="ai_failure_fallback",
             )
             rendered = ", ".join(sorted(fallback_labels))
+            named = ", ".join(f"`{item}`" for item in absorbed[:4])
             self._claim(
                 text=(
-                    f"{self.current_qualified_name} has an exception handler around AI-client "
-                    f"calls whose explicit fallback value is {rendered}."
+                    f"{self.current_qualified_name} catches around {named} and returns "
+                    f"{rendered} on failure, so a caller cannot tell the call failed."
                 ),
-                category="ai_failure_behavior",
+                category="absorbed_failure",
                 status="verified",
                 confidence=1.0,
                 importance="high",

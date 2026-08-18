@@ -289,9 +289,11 @@ def scale(player):
             root = Path(temporary)
             (root / "app.py").write_text(
                 """\
-async def describe(ai_client):
+import openai
+
+async def describe():
     try:
-        return {"description": await ai_client.generate_content("prompt")}
+        return {"description": await openai.generate("prompt")}
     except Exception:
         return {"description": None, "summary": ""}
 """,
@@ -299,11 +301,59 @@ async def describe(ai_client):
             )
 
             result = analyze_snapshot(scan_repository(root))
-            claim = next(item for item in result.claims if item.category == "ai_failure_behavior")
+            claim = next(item for item in result.claims if item.category == "absorbed_failure")
 
             self.assertEqual(claim.status, "verified")
             self.assertIn("None", claim.claim)
             self.assertIn("empty string", claim.claim)
+            self.assertIn("`openai.generate`", claim.claim)
+
+
+class AbsorbedFailureTests(TestCase):
+    """A failure swallowed into a silent value, whatever was called.
+
+    This required the name `ai_client` or a method called `generate_content`
+    -- spellings from the repository it was written against -- so a handler
+    wrapping `requests` or `redis` and returning None was invisible everywhere
+    else. The generalization benchmark reported the category for one
+    repository out of eight, which is how it was found.
+    """
+
+    def _absorbed(self, source: str) -> list[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "m.py").write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            return [item.claim for item in result.claims if item.category == "absorbed_failure"]
+
+    def test_any_imported_call_counts(self) -> None:
+        for module, call in (("requests", "requests.get"), ("redis", "redis.get")):
+            source = (
+                f"import {module}\n\n"
+                f"def read():\n    try:\n        return {call}('k')\n"
+                "    except Exception:\n        return None\n"
+            )
+            found = self._absorbed(source)
+            self.assertTrue(found, f"{call} should be reported")
+            self.assertIn(f"`{call}`", found[0])
+
+    def test_a_local_helper_is_ordinary_control_flow(self) -> None:
+        # `try: helper()` returning None is how programs are written. Only a
+        # call that crosses a boundary makes the silence worth reporting.
+        source = (
+            "def helper():\n    return 1\n\n"
+            "def read():\n    try:\n        return helper()\n"
+            "    except Exception:\n        return None\n"
+        )
+        self.assertEqual(self._absorbed(source), [])
+
+    def test_a_handler_that_reraises_absorbs_nothing(self) -> None:
+        source = (
+            "import requests\n\n"
+            "def read():\n    try:\n        return requests.get('k')\n"
+            "    except Exception:\n        raise\n"
+        )
+        self.assertEqual(self._absorbed(source), [])
 
 
 class ControlFlowExtractionTests(TestCase):
