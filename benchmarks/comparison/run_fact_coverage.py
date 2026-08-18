@@ -29,6 +29,7 @@ import argparse
 import collections
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -182,6 +183,41 @@ def _coverage(expected: set[Any], haystack: str) -> tuple[int, list[Any]]:
     return hits, missing
 
 
+def _per_artifact(
+    candidates: list[Path],
+    symbols: set[str] | list[str],
+    quantities: set[tuple[str, str]] | list[tuple[str, str]],
+    total: int,
+    pct: Callable[[int, int], str],
+) -> list[str]:
+    """What each artifact of one run contributes on its own.
+
+    A reader deciding whether to trust a single number needs to know which
+    document it came from. The readable specification and the queryable index
+    answer different questions, and a fact reachable only from the second is
+    still extracted -- it is simply not prose.
+    """
+
+    if len(candidates) < 2:
+        return []
+    rows = [
+        "## Coverage by artifact\n\n",
+        (
+            "Each artifact measured alone. They overlap, so these do not sum to "
+            "the total above; the point is which document carries a fact, not "
+            "how many documents do.\n\n"
+        ),
+        "| Artifact | Facts carried | Share of baseline |\n",
+        "|---|---:|---:|\n",
+    ]
+    for path in candidates:
+        text = path.read_text(encoding="utf-8").casefold()
+        carried = _coverage(symbols, text)[0] + _coverage(quantities, text)[0]
+        rows.append(f"| `{path.name}` | {carried:,} | {pct(carried, total)} |\n")
+    rows.append("\n")
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
@@ -227,11 +263,24 @@ def main() -> int:
         return f"{part / whole:.1%}" if whole else "n/a"
 
     measured = ", ".join(f"`{path.name}`" for path in args.candidate)
+    # A run produces a readable document and a queryable index, and a fact in
+    # the second is extracted whether or not the first mentions it. Measuring
+    # one artifact and calling the remainder "not extracted" reported 74.0%
+    # where the run actually carried 93.3%, so what the sentence claims now
+    # depends on what was actually measured.
+    complete_run = len(args.candidate) > 1
+    shortfall = (
+        "What is missing is value the run did not produce."
+        if complete_run
+        else "What is missing is absent from this artifact, which is not the "
+        "same as absent from the run: pass every file the run produces to "
+        "measure extraction rather than presentation."
+    )
     lines = [
         "# Fact coverage\n\n",
         (
             "Every distinct fact the baseline asserts, checked against "
-            f"{args.candidate_label}. What is missing is value not extracted.\n\n"
+            f"{args.candidate_label}. {shortfall}\n\n"
             f"Measured against {measured}.\n\n"
         ),
         f"| Fact family | Baseline asserts | {args.candidate_label} carries | Coverage |\n",
@@ -315,6 +364,7 @@ def main() -> int:
             lines.append(f"\n_…and {len(quantity_missing) - args.sample:,} more._\n")
         lines.append("\n")
 
+    lines.extend(_per_artifact(args.candidate, symbols, quantities, total, pct))
     lines.append(
         "## Method and its limits\n\n"
         "Facts are extracted from the baseline's own code spans, so this measures "
@@ -323,7 +373,7 @@ def main() -> int:
         "baseline assertion that is wrong still counts against the candidate.\n\n"
         "A hit means the candidate names the same symbol, or the same symbol and "
         "number. It does not check that the surrounding statement agrees. This is "
-        "a coverage measure, not an agreement measure, and it is an upper bound.\n"
+        "a coverage measure, not an agreement measure, and it is an upper bound.\n",
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
