@@ -55,6 +55,18 @@ def _inspect_file(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), line_count
 
 
+def dropped_file_count(exclusions: list[ExclusionRecord]) -> int:
+    """Files the census dropped, counting what excluded directories held.
+
+    `len(exclusions)` counts rows, and a row for a directory is one row
+    whatever it contained. Reporting rows as though they were files is how a
+    scan of a Unity project claimed 16 exclusions while 2,449 files went
+    unread.
+    """
+
+    return sum(max(1, item.contained_files) for item in exclusions)
+
+
 def _snapshot_id(files: list[FileRecord]) -> str:
     digest = hashlib.sha256()
     digest.update(POLICY_VERSION.encode("utf-8"))
@@ -104,8 +116,36 @@ def scan_repository(
 
     emit("starting", "Validated repository root")
 
-    def exclude(relative_path: str, reason: str) -> None:
-        exclusions.append(ExclusionRecord(path=relative_path, reason=reason))
+    def contained_file_count(directory: Path) -> int:
+        """How many files an excluded directory holds, at any depth.
+
+        Counted rather than estimated, and counted without stat or read: the
+        alternative is a census that reports one excluded entry where a build
+        cache took thousands of files with it.
+        """
+
+        total = 0
+        stack = [directory]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as iterator:
+                    for entry in iterator:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                            elif entry.is_file(follow_symlinks=False):
+                                total += 1
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+        return total
+
+    def exclude(relative_path: str, reason: str, contained: int = 0) -> None:
+        exclusions.append(
+            ExclusionRecord(path=relative_path, reason=reason, contained_files=contained)
+        )
 
     # A repository that names its own generated directories is believed about
     # them; one that names none leaves nothing to read, and only there does the
@@ -138,7 +178,7 @@ def scan_repository(
                         pattern = rules.excluded_by(relative, is_dir=True)
                         reason = f"gitignored:{pattern}" if pattern else None
                     if reason:
-                        exclude(f"{relative}/", reason)
+                        exclude(f"{relative}/", reason, contained_file_count(candidate))
                     else:
                         visit(candidate, rules)
                     continue
@@ -191,7 +231,8 @@ def scan_repository(
     duration_ms = round((time.perf_counter() - started) * 1000)
     emit(
         "complete",
-        f"Inventory complete: {len(files)} included, {len(exclusions)} excluded",
+        f"Inventory complete: {len(files)} included, "
+        f"{len(exclusions)} excluded ({dropped_file_count(exclusions)} files)",
         processed_files=len(files),
     )
 

@@ -33,6 +33,14 @@ class FileRecord:
 class ExclusionRecord:
     path: str
     reason: str
+    # How many files an excluded *directory* took with it. One row saying
+    # `gitignored:[Ll]ibrary/` stood for 2,449 files in a real Unity project
+    # while the census reported "16 excluded entries", which understated the
+    # drop by two orders of magnitude in a document whose stated principle is
+    # that a census which silently drops files overstates its own coverage.
+    #
+    # Zero for a single excluded file, where the row already is the count.
+    contained_files: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

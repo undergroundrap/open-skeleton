@@ -427,9 +427,31 @@ class PanelTests(TestCase):
                 ),
             ),
         )
-        self.assertEqual(panel.rows, (("binary", "2"),))
+        self.assertEqual(panel.rows, (("binary", "2", "2"),))
         assert panel.note is not None
         self.assertIn("never read", panel.note)
+
+    def test_an_excluded_directory_reports_what_it_took_with_it(self) -> None:
+        """One row for a build cache is one row, and thousands of files.
+
+        Reporting rows where files were meant understated a real Unity
+        project's census by two orders of magnitude.
+        """
+
+        panel = build_panel(
+            "exclusions",
+            PanelContext(
+                files=self.FILES,
+                exclusions=(
+                    {"path": "Library/", "reason": "gitignored:Library/", "contained_files": 3103},
+                    {"path": "x.png", "reason": "binary"},
+                ),
+            ),
+        )
+        self.assertEqual(
+            panel.rows,
+            (("gitignored:Library/", "1", "3,103"), ("binary", "1", "1")),
+        )
 
     def test_composition_section_renders_panels_in_the_document(self) -> None:
         with TemporaryDirectory() as temporary:

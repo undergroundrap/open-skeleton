@@ -7,8 +7,9 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import MagicMock, Mock, patch
 
+from open_skeleton.models import Snapshot
 from open_skeleton.policy import ScanPolicy
-from open_skeleton.scanner import scan_repository
+from open_skeleton.scanner import dropped_file_count, scan_repository
 from tests.helpers import create_sample_repository
 
 
@@ -169,3 +170,41 @@ class GeneratedDirectoryTests(TestCase):
         # `egg-info-utils` is a normal package name, not build output.
         found = self._paths("egg-info-utils/helper.py")
         self.assertEqual(found, {"egg-info-utils/helper.py"})
+
+
+class ExcludedFileCountTests(TestCase):
+    """An excluded directory must say how much it took with it.
+
+    A census that counts rows where it means files overstates its own
+    coverage, which is the one thing the exclusions panel exists to prevent.
+    """
+
+    def _snapshot(self) -> Snapshot:
+        root = Path(self.temporary.name)
+        (root / ".gitignore").write_text("cache/\n", encoding="utf-8")
+        nested = root / "cache" / "deep"
+        nested.mkdir(parents=True)
+        for index in range(3):
+            (root / "cache" / f"a{index}.txt").write_text("x\n", encoding="utf-8")
+        (nested / "b.txt").write_text("x\n", encoding="utf-8")
+        (root / "main.py").write_text("x = 1\n", encoding="utf-8")
+        return scan_repository(root)
+
+    def setUp(self) -> None:
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+
+    def test_the_directory_row_counts_files_at_every_depth(self) -> None:
+        snapshot = self._snapshot()
+        row = next(item for item in snapshot.exclusions if item.path == "cache/")
+        self.assertEqual(row.contained_files, 4)
+
+    def test_a_single_excluded_file_counts_as_itself(self) -> None:
+        snapshot = self._snapshot()
+        rows = [item for item in snapshot.exclusions if item.path != "cache/"]
+        self.assertTrue(all(item.contained_files == 0 for item in rows))
+        self.assertEqual(dropped_file_count(list(snapshot.exclusions)), 4 + len(rows))
+
+    def test_the_total_is_not_the_number_of_rows(self) -> None:
+        snapshot = self._snapshot()
+        self.assertGreater(dropped_file_count(list(snapshot.exclusions)), len(snapshot.exclusions))

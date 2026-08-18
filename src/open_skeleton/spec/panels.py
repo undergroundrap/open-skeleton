@@ -150,21 +150,40 @@ def _largest_files(files: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _dropped(item: dict[str, Any]) -> int:
+    """Files one exclusion row accounts for.
+
+    A row for a directory is still one row however much it held, so a census
+    that reported row counts as file counts understated itself by two orders
+    of magnitude: sixteen rows against 3,548 unread files in a Unity project
+    whose build cache was a single row.
+    """
+
+    return max(1, int(item.get("contained_files") or 0))
+
+
 def _exclusions(exclusions: tuple[dict[str, Any], ...]) -> Panel:
-    counts = Counter(str(item["reason"]) for item in exclusions)
+    rows_by_reason: dict[str, list[int]] = {}
+    for item in exclusions:
+        rows_by_reason.setdefault(str(item["reason"]), []).append(_dropped(item))
     rows = tuple(
-        (reason, f"{count:,}")
-        for reason, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        (reason, f"{len(counts):,}", f"{sum(counts):,}")
+        for reason, counts in sorted(
+            rows_by_reason.items(), key=lambda pair: (-sum(pair[1]), pair[0])
+        )
     )
     return Panel(
         name="exclusions",
         title="Excluded entries by reason",
-        columns=("Exclusion reason", "Entries"),
-        alignments=("left", "right"),
+        columns=("Exclusion reason", "Entries", "Files"),
+        alignments=("left", "right", "right"),
         rows=rows,
         note=(
-            "Excluded content was never read into the analysis. Coverage percentages "
-            "elsewhere in this document are relative to included files only."
+            "An entry is one path the scanner refused; a directory is one entry "
+            "however many files it held, so the file count is the one that says "
+            "how much went unread. Excluded content was never read into the "
+            "analysis, and coverage percentages elsewhere in this document are "
+            "relative to included files only."
         ),
     )
 
@@ -183,6 +202,7 @@ def _snapshot_totals(
         ("Distinct languages", f"{len(languages):,}"),
         ("Distinct roles", f"{len(roles):,}"),
         ("Excluded entries", f"{len(exclusions):,}"),
+        ("Excluded files", f"{sum(_dropped(item) for item in exclusions):,}"),
         ("Scan duration", f"{int(snapshot.get('duration_ms', 0)):,} ms"),
         ("Policy version", str(snapshot.get("policy_version", "unknown"))),
     )

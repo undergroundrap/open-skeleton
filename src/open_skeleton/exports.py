@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from open_skeleton.models import AnalysisResult, Snapshot
+from open_skeleton.scanner import dropped_file_count
 
 
 def _atomic_write(path: Path, chunks: Iterable[str]) -> None:
@@ -82,6 +83,7 @@ def export_markdown(snapshot: Snapshot, path: Path) -> None:
         yield f"- Policy: `{snapshot.policy_version}`\n"
         yield f"- Included files: {len(snapshot.files):,}\n"
         yield f"- Excluded entries: {len(snapshot.exclusions):,}\n"
+        yield f"- Excluded files: {dropped_file_count(list(snapshot.exclusions)):,}\n"
         yield f"- Included bytes: {snapshot.total_bytes:,}\n"
         yield f"- Included lines: {snapshot.total_lines:,}\n"
         yield f"- Scan duration: {snapshot.duration_ms:,} ms\n\n"

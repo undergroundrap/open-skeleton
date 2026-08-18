@@ -51,6 +51,10 @@ class EvidenceLedger:
         # unknown yield, which is not the same as a yield of zero. Backfilling a
         # default would make a migrated ledger state a falsehood about itself.
         ("analysis_coverage", "claimed_files", "INTEGER"),
+        # Zero is the right default here, unlike the yield above: a ledger
+        # written before this column existed recorded one row per excluded
+        # entry, and zero is what that row already meant.
+        ("exclusions", "contained_files", "INTEGER NOT NULL DEFAULT 0"),
     )
 
     def _apply_additive_migrations(self, connection: sqlite3.Connection) -> None:
@@ -106,6 +110,7 @@ class EvidenceLedger:
                     snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
                     path TEXT NOT NULL,
                     reason TEXT NOT NULL,
+                    contained_files INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (snapshot_id, path, reason)
                 );
 
@@ -358,8 +363,12 @@ class EvidenceLedger:
                 "DELETE FROM exclusions WHERE snapshot_id = ?", (snapshot.snapshot_id,)
             )
             connection.executemany(
-                "INSERT INTO exclusions(snapshot_id, path, reason) VALUES (?, ?, ?)",
-                ((snapshot.snapshot_id, item.path, item.reason) for item in snapshot.exclusions),
+                "INSERT INTO exclusions(snapshot_id, path, reason, contained_files) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    (snapshot.snapshot_id, item.path, item.reason, item.contained_files)
+                    for item in snapshot.exclusions
+                ),
             )
 
             connection.execute("DELETE FROM events WHERE snapshot_id = ?", (snapshot.snapshot_id,))
@@ -925,7 +934,8 @@ class EvidenceLedger:
 
         with self._session() as connection:
             rows = connection.execute(
-                "SELECT path, reason FROM exclusions WHERE snapshot_id = ? ORDER BY path",
+                "SELECT path, reason, contained_files FROM exclusions "
+                "WHERE snapshot_id = ? ORDER BY path",
                 (snapshot_id,),
             ).fetchall()
         return [dict(row) for row in rows]
