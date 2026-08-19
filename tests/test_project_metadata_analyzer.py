@@ -16,6 +16,7 @@ from open_skeleton.analyzers.project_metadata import (
     _checked_out_revision,
     _declared_commands,
     _declared_commitments,
+    _declared_design_tokens,
     _declared_license,
     is_declarative_document,
     is_non_goal_heading,
@@ -638,3 +639,62 @@ class IndexedTextFileTests(TestCase):
         # The set is a decision about which files name things, not a licence
         # to index every byte in the repository.
         self.assertEqual(self._names("notes.rst", "anything_at_all\n"), set())
+
+
+class DesignTokenTests(TestCase):
+    """What a web interface is actually built from.
+
+    Custom properties are declared in every stylesheet in this corpus without
+    exception, and no reader touched them: a stylesheet reached only the name
+    index, which records that `--bg` occurs somewhere and not that it is
+    defined here or what it holds.
+    """
+
+    def test_a_declaration_is_read_with_its_value_and_line(self) -> None:
+        tokens = _declared_design_tokens(":root {\n  --bg: #0c1013;\n}\n")
+        self.assertEqual(tokens["--bg"]["value"], "#0c1013")
+        self.assertEqual(tokens["--bg"]["line"], 2)
+
+    def test_a_var_reference_is_not_a_declaration(self) -> None:
+        # The difference between what a stylesheet defines and what it merely
+        # mentions is the whole point of the anchor in the pattern.
+        tokens = _declared_design_tokens(".a { color: var(--brand); }\n")
+        self.assertEqual(tokens, {})
+
+    def test_a_declaration_whose_value_reads_another_token_is_still_one(self) -> None:
+        tokens = _declared_design_tokens(":root { --event: var(--lime); }\n")
+        self.assertEqual(tokens["--event"]["value"], "var(--lime)")
+
+    def test_several_declarations_on_one_line_are_all_found(self) -> None:
+        tokens = _declared_design_tokens(":root { --a: 1px; --b: 2px; }\n")
+        self.assertEqual(sorted(tokens), ["--a", "--b"])
+
+    def test_the_first_declaration_wins_so_the_line_is_where_it_is_defined(self) -> None:
+        tokens = _declared_design_tokens(":root { --c: red; }\n.dark { --c: blue; }\n")
+        self.assertEqual(tokens["--c"]["line"], 1)
+
+    def test_a_stylesheet_with_no_tokens_declares_none(self) -> None:
+        self.assertEqual(_declared_design_tokens("body { margin: 0; }\n"), {})
+
+    def test_the_claim_names_the_tokens_and_they_become_searchable(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "styles.css").write_text(
+                ":root {\n  --bg: #000;\n  --fg: #fff;\n}\n", encoding="utf-8"
+            )
+            result = ProjectMetadataAnalyzer().analyze(scan_repository(root))
+            claim = next(item for item in result.claims if item.category == "design_tokens")
+            self.assertIn("`--bg`", claim.claim)
+            self.assertEqual(claim.status, "verified")
+            self.assertTrue(claim.supporting_evidence)
+            index: dict[str, int] = {}
+            for symbol in result.symbols:
+                index.update(symbol.metadata.get("name_index", {}))
+            self.assertIn("--fg", index)
+
+    def test_a_token_set_outside_the_stylesheet_is_not_called_undeclared(self) -> None:
+        # `--font-geist-sans` is declared by a Next.js font loader and
+        # `--map-x` by a React inline style object. Both are invisible to a
+        # stylesheet reader, so nothing is asserted about what is missing.
+        tokens = _declared_design_tokens(".a { left: var(--map-x); }\n")
+        self.assertEqual(tokens, {})

@@ -432,6 +432,27 @@
             "min_importance": "low",
             "limit": 60
           }
+        },
+        {
+          "id": "surface.design-tokens",
+          "number": "2.13",
+          "title": "Design Tokens",
+          "concern": "Named values the interface is built from.",
+          "probes": [
+            {
+              "name": "Declared design tokens",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "design_tokens"
+              ]
+            }
+          ],
+          "findings": {
+            "categories": [
+              "design_tokens"
+            ],
+            "limit": 20
+          }
         }
       ]
     },

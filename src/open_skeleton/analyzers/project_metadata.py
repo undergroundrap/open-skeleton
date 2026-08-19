@@ -123,6 +123,46 @@ def _documented_facts(source: str) -> dict[str, dict[str, Any]]:
     return found
 
 
+# A custom property is declared at the start of a declaration block or after a
+# semicolon. Requiring one of those anchors keeps `var(--x)` uses out of the
+# declaration set, which is the whole difference between what a stylesheet
+# defines and what it merely mentions.
+CSS_CUSTOM_PROPERTY = re.compile(r"(?:^|[;{])\s*(--[\w-]+)\s*:\s*([^;{}]{0,80})", re.M)
+
+
+def _declared_design_tokens(source: str) -> dict[str, dict[str, Any]]:
+    """Custom properties a stylesheet declares, with value and line.
+
+    Design tokens are what a web interface is actually built from -- every
+    colour, spacing step and font stack behind a name -- and changing one
+    changes every rule that reads it. They are declared in every stylesheet in
+    this corpus without exception, and no reader touched them: a stylesheet
+    reached only the name index, which records that `--bg` occurs somewhere
+    and not that it is defined here or what it is set to.
+
+    Only declarations are collected, never `var(--x)` uses. Whether a token is
+    used, or declared elsewhere, is deliberately not asserted: a token can be
+    set by a framework font loader or by a React inline style object, both of
+    which are invisible to a stylesheet reader, and calling those undeclared
+    would be a confident falsehood about working code.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    line = 1
+    position = 0
+    for match in CSS_CUSTOM_PROPERTY.finditer(source):
+        # The line of the name, not of the match: the pattern begins at the
+        # `{` or `;` anchoring the declaration, and that is usually on the
+        # line above the token it introduces.
+        line += source.count("\n", position, match.start(1))
+        position = match.start(1)
+        name = match.group(1)
+        value = " ".join(match.group(2).split())
+        if name not in found:
+            found[name] = {"value": value, "line": line}
+    return found
+
+
 def _strip_json_comments(source: str) -> str:
     """Remove the comments a tsconfig is allowed to carry but JSON is not.
 
@@ -1468,6 +1508,49 @@ class ProjectMetadataAnalyzer:
             if source is None:
                 continue
             names = _text_name_index(source)
+            if suffix in {".css", ".scss"}:
+                tokens = _declared_design_tokens(source)
+                if tokens:
+                    token_evidence = receipt(
+                        file_record.path,
+                        min(int(entry["line"]) for entry in tokens.values()),
+                        max(int(entry["line"]) for entry in tokens.values()),
+                        "design_tokens",
+                        file_record.path,
+                    )
+                    named = ", ".join(f"`{name}`" for name in sorted(tokens)[:10])
+                    more = f" and {len(tokens) - 10:,} more" if len(tokens) > 10 else ""
+                    token_text = (
+                        f"`{file_record.path}` declares {len(tokens):,} design token(s): "
+                        f"{named}{more}. These are the named values the interface is built "
+                        "from; changing one changes every rule that reads it."
+                    )
+                    claims.append(
+                        ClaimRecord(
+                            claim_id=stable_id(
+                                "claim",
+                                (
+                                    snapshot.snapshot_id,
+                                    "design_tokens",
+                                    token_text,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            claim=token_text,
+                            category="design_tokens",
+                            status="verified",
+                            confidence=1.0,
+                            importance="medium",
+                            produced_by=ANALYZER_VERSION,
+                            created_at=created_at,
+                            verified_at=created_at,
+                            supporting_evidence=(token_evidence.evidence_id,),
+                            invalidation_keys=(f"file:{file_record.path}",),
+                        )
+                    )
+                    for name, entry in tokens.items():
+                        names.setdefault(name, int(entry["line"]))
             if not names:
                 continue
             symbols.append(
