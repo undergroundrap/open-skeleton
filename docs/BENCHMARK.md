@@ -117,6 +117,34 @@ code, so that content is a deliberate loss rather than a gap to close, and
 the measure must keep saying so. `tests/test_structure_diff.py` holds it to
 exactly that.
 
+## Reading the corpus spread
+
+The generalization benchmark runs the whole pipeline over every repository
+available locally and reports the ratio between the highest and lowest claim
+yield per file. That ratio is the number that describes the engine rather than
+any one codebase: a reader fitted to one repository produces a spike there and
+a flat line everywhere else, and no pinned fixture will ever notice.
+
+Two changes moved it, and they moved it for the same reason.
+
+| Change | Spread |
+|---|---:|
+| Before reading `.gitignore` | 150x |
+| After: a Unity project stopped being measured through its build cache | 47x |
+| After adding a PowerShell reader | **18x** |
+
+Neither was a new idea about analysis. Both were places where the engine
+measured a repository through something that was not its code -- first 2,449
+generated files counted as source, then twenty-one PowerShell files counted as
+eligible and read by nothing. The lesson the number keeps teaching is that
+coverage gaps distort the corpus far more than analyzer depth does.
+
+The remaining spread is dominated by repositories whose content this engine
+genuinely does not read: 16 C# files and 58 asset files in a Unity project,
+and a documentation repository that is 14 Markdown files out of 18. Those are
+honest low yields rather than blind spots, which is why the number is reported
+rather than targeted.
+
 ## Limits
 
 This is a useful regression fixture, not evidence of universal superiority. It was authored and adjudicated with repository-author knowledge, not audited by an external laboratory. More languages, architectures, repository sizes, and independent reviewers are required before broad claims.

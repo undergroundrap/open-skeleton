@@ -24,7 +24,11 @@ untrusted repository
 - `state.py`: stable, platform-local state paths outside target repositories
 - `analyzers/python_ast.py`: Python syntax and selected framework facts
 - `analyzers/typescript_lexical.py`: explicitly lexical JS/TS facts
-- `analyzers/project_metadata.py`: manifests and documentation claims
+- `analyzers/powershell_lexical.py`: parameters, functions and throws, read
+  after comments and string bodies are blanked so the reader is not fooled by
+  its own input
+- `analyzers/project_metadata.py`: manifests, documentation, stylesheets and
+  HTML asset graphs
 - `analyzers/hum_semantic_index.py`: versioned Hum-native graph adapter
 - `analysis.py`: deterministic orchestration and cross-adapter conflicts
 - `ledger.py`: SQLite persistence, search, evidence verification, diffs, invalidation
