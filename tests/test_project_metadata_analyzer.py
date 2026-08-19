@@ -18,6 +18,7 @@ from open_skeleton.analyzers.project_metadata import (
     _declared_commitments,
     _declared_design_tokens,
     _declared_license,
+    _referenced_assets,
     is_declarative_document,
     is_non_goal_heading,
 )
@@ -698,3 +699,67 @@ class DesignTokenTests(TestCase):
         # stylesheet reader, so nothing is asserted about what is missing.
         tokens = _declared_design_tokens(".a { left: var(--map-x); }\n")
         self.assertEqual(tokens, {})
+
+
+class ReferencedAssetTests(TestCase):
+    """For an application with no bundler, the document is the module graph.
+
+    It names every script and the order they execute in, and nothing else in
+    such a repository states that order. This engine read the document only
+    for its names: that `style.css` was mentioned somewhere, not that it is
+    loaded here and first.
+    """
+
+    DOCUMENT = """\
+<!doctype html>
+<html>
+<head>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="favicon.png" />
+</head>
+<body>
+  <script src="src/math.js"></script>
+  <script src="src/render.js"></script>
+  <script src="https://cdn.example.com/lib.js"></script>
+  <script>console.log("inline");</script>
+</body>
+</html>
+"""
+
+    def test_scripts_are_reported_in_document_order(self) -> None:
+        assets = _referenced_assets(self.DOCUMENT)
+        scripts = [reference for kind, reference, _ in assets if kind == "script"]
+        self.assertEqual(scripts, ["src/math.js", "src/render.js"])
+
+    def test_a_stylesheet_link_is_read_and_other_links_are_not(self) -> None:
+        # `rel="icon"` is not a stylesheet, and treating every link as one
+        # would put a favicon in the module graph.
+        assets = _referenced_assets(self.DOCUMENT)
+        sheets = [reference for kind, reference, _ in assets if kind == "stylesheet"]
+        self.assertEqual(sheets, ["style.css"])
+
+    def test_a_third_party_script_is_not_a_local_module(self) -> None:
+        assets = _referenced_assets(self.DOCUMENT)
+        self.assertFalse([item for item in assets if "cdn.example.com" in item[1]])
+
+    def test_an_inline_script_declares_no_reference(self) -> None:
+        self.assertEqual(_referenced_assets("<script>var x = 1;</script>"), [])
+
+    def test_a_query_string_is_not_part_of_the_path(self) -> None:
+        assets = _referenced_assets('<script src="app.js?v=3"></script>')
+        self.assertEqual(assets[0][1], "app.js")
+
+    def test_the_line_reported_is_where_the_reference_sits(self) -> None:
+        assets = _referenced_assets('<html>\n<body>\n<script src="a.js"></script>\n')
+        self.assertEqual(assets[0][2], 3)
+
+    def test_the_claim_and_edges_reach_the_pipeline(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "index.html").write_text(self.DOCUMENT, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            claim = next(item for item in result.claims if "module graph" in item.claim)
+            self.assertIn("2 script(s)", claim.claim)
+            self.assertIn("`src/math.js`", claim.claim)
+            loads = {edge.target_ref for edge in result.edges if edge.relationship == "loads"}
+            self.assertEqual(loads, {"style.css", "src/math.js", "src/render.js"})

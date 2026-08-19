@@ -24,6 +24,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import describes_the_product
 
 ANALYZER_NAME = "project-metadata"
 ANALYZER_VERSION = "project-metadata/v1"
@@ -160,6 +161,43 @@ def _declared_design_tokens(source: str) -> dict[str, dict[str, Any]]:
         value = " ".join(match.group(2).split())
         if name not in found:
             found[name] = {"value": value, "line": line}
+    return found
+
+
+HTML_SCRIPT = re.compile(r"<script\b[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+HTML_STYLESHEET = re.compile(
+    r"<link\b(?=[^>]*\brel\s*=\s*[\"']stylesheet[\"'])[^>]*\bhref\s*=\s*[\"']([^\"']+)[\"']",
+    re.IGNORECASE,
+)
+# A scheme or a protocol-relative prefix means a third party serves it, which
+# the egress reader already reports. Only same-repository files are a module
+# graph.
+ABSOLUTE_REFERENCE = re.compile(r"^(?:[a-zA-Z][\w+.-]*:|//)")
+
+
+def _referenced_assets(source: str) -> list[tuple[str, str, int]]:
+    """Scripts and stylesheets a document loads, in the order it lists them.
+
+    For an application with no bundler, the HTML document *is* the module
+    graph: it names every script, and the order it names them in is the order
+    they execute. Nothing else in such a repository states that order, and
+    this engine read the document only for its names -- recording that
+    `style.css` is mentioned somewhere, not that it is loaded here and first.
+
+    A reference with a scheme is left out. Those are served by somebody else
+    and are already reported as third-party origins; treating them as local
+    modules would put a CDN in the module graph.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    for kind, pattern in (("script", HTML_SCRIPT), ("stylesheet", HTML_STYLESHEET)):
+        for match in pattern.finditer(source):
+            reference = match.group(1).strip()
+            if not reference or ABSOLUTE_REFERENCE.match(reference):
+                continue
+            line = source.count("\n", 0, match.start()) + 1
+            found.append((kind, reference.split("?")[0].split("#")[0], line))
+    found.sort(key=lambda item: item[2])
     return found
 
 
@@ -1508,6 +1546,93 @@ class ProjectMetadataAnalyzer:
             if source is None:
                 continue
             names = _text_name_index(source)
+            if suffix in {".html", ".htm"} and describes_the_product(file_record.role):
+                assets = _referenced_assets(source)
+                if assets:
+                    asset_evidence = receipt(
+                        file_record.path,
+                        assets[0][2],
+                        assets[-1][2],
+                        "referenced_assets",
+                        file_record.path,
+                    )
+                    scripts = [item for item in assets if item[0] == "script"]
+                    sheets = [item for item in assets if item[0] == "stylesheet"]
+                    ordered = ", ".join(f"`{reference}`" for _, reference, _ in scripts[:8])
+                    more = f" and {len(scripts) - 8:,} more" if len(scripts) > 8 else ""
+                    asset_text = (
+                        f"`{file_record.path}` loads {len(scripts):,} script(s) and "
+                        f"{len(sheets):,} stylesheet(s) from this repository"
+                        + (f", in order: {ordered}{more}" if scripts else "")
+                        + ". For an application with no bundler this document is the "
+                        "module graph, and nothing else states the order."
+                    )
+                    claims.append(
+                        ClaimRecord(
+                            claim_id=stable_id(
+                                "claim",
+                                (
+                                    snapshot.snapshot_id,
+                                    "application_entry",
+                                    asset_text,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            claim=asset_text,
+                            category="application_entry",
+                            status="verified",
+                            confidence=1.0,
+                            importance="high",
+                            produced_by=ANALYZER_VERSION,
+                            created_at=created_at,
+                            verified_at=created_at,
+                            supporting_evidence=(asset_evidence.evidence_id,),
+                            invalidation_keys=(f"file:{file_record.path}",),
+                        )
+                    )
+                    document_symbol = stable_id(
+                        "symbol",
+                        (snapshot.snapshot_id, file_record.path, "document", ANALYZER_VERSION),
+                    )
+                    symbols.append(
+                        SymbolRecord(
+                            symbol_id=document_symbol,
+                            snapshot_id=snapshot.snapshot_id,
+                            path=file_record.path,
+                            qualified_name=file_record.path,
+                            kind="document",
+                            start_line=1,
+                            end_line=max(1, file_record.line_count),
+                            language=file_record.language,
+                            analyzer=ANALYZER_VERSION,
+                            metadata={"loads": [reference for _, reference, _ in assets]},
+                        )
+                    )
+                    for _, reference, asset_line in assets:
+                        edges.append(
+                            EdgeRecord(
+                                edge_id=stable_id(
+                                    "edge",
+                                    (
+                                        snapshot.snapshot_id,
+                                        document_symbol,
+                                        "loads",
+                                        reference,
+                                        ANALYZER_VERSION,
+                                    ),
+                                ),
+                                snapshot_id=snapshot.snapshot_id,
+                                source_symbol_id=document_symbol,
+                                source_path=file_record.path,
+                                relationship="loads",
+                                target_ref=reference,
+                                target_symbol_id=None,
+                                evidence_id=asset_evidence.evidence_id,
+                                analyzer=ANALYZER_VERSION,
+                            )
+                        )
+                        names.setdefault(reference, asset_line)
             if suffix in {".css", ".scss"}:
                 tokens = _declared_design_tokens(source)
                 if tokens:
