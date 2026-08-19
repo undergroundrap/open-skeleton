@@ -21,6 +21,7 @@ from open_skeleton.analyzers.project_metadata import (
     _referenced_assets,
     is_declarative_document,
     is_non_goal_heading,
+    license_family,
 )
 from open_skeleton.models import AnalysisResult
 from open_skeleton.scanner import scan_repository
@@ -763,3 +764,81 @@ class ReferencedAssetTests(TestCase):
             self.assertIn("`src/math.js`", claim.claim)
             loads = {edge.target_ref for edge in result.edges if edge.relationship == "loads"}
             self.assertEqual(loads, {"style.css", "src/math.js", "src/render.js"})
+
+
+class LicenseFileTests(TestCase):
+    """Five of twelve repositories state their terms only in a LICENSE file.
+
+    The engine probed for the file's existence and reported that it exists,
+    never what it says, so those five had no licence fact at all.
+    """
+
+    AGPL = (
+        "                    GNU AFFERO GENERAL PUBLIC LICENSE\n"
+        "                       Version 3, 19 November 2007\n\n"
+        "  Copyright (C) 2007 Free Software Foundation, Inc.\n"
+    )
+    APACHE = (
+        "                                 Apache License\n"
+        "                           Version 2.0, January 2004\n"
+    )
+
+    def _claims(self, files: dict[str, str]) -> list[Any]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_text(body, encoding="utf-8")
+            result = ProjectMetadataAnalyzer().analyze(scan_repository(root))
+            return [item for item in result.claims if item.category == "declared_license"]
+
+    def test_a_licence_file_alone_still_states_the_terms(self) -> None:
+        claims = self._claims({"LICENSE": self.AGPL})
+        self.assertEqual(len(claims), 1)
+        self.assertIn("AGPL 3", claims[0].claim)
+        self.assertIn("no manifest in this repository declares a licence", claims[0].claim)
+        self.assertEqual(claims[0].status, "verified")
+
+    def test_a_spelling_difference_is_not_a_conflict(self) -> None:
+        # `AGPL-3.0-only` and "GNU AFFERO GENERAL PUBLIC LICENSE" are the same
+        # licence written two ways. Comparing the text rather than the family
+        # would report a conflict in five repositories that all agree.
+        claims = self._claims(
+            {
+                "LICENSE": self.AGPL,
+                "pyproject.toml": '[project]\nname = "x"\nlicense = "AGPL-3.0-only"\n',
+            }
+        )
+        stated = next(item for item in claims if "licence text" in item.claim)
+        self.assertEqual(stated.status, "verified")
+        self.assertIn("agrees with the manifest", stated.claim)
+
+    def test_a_different_family_is_a_conflict(self) -> None:
+        claims = self._claims(
+            {
+                "LICENSE": self.APACHE,
+                "pyproject.toml": '[project]\nname = "x"\nlicense = "AGPL-3.0-only"\n',
+            }
+        )
+        stated = next(item for item in claims if "licence text" in item.claim)
+        self.assertEqual(stated.status, "conflict")
+        self.assertTrue(stated.contradicting_evidence)
+        self.assertIn("One of the two is wrong", stated.claim)
+
+    def test_an_unrecognised_licence_is_not_guessed_at(self) -> None:
+        self.assertEqual(self._claims({"LICENSE": "Do whatever you like.\n"}), [])
+
+    def test_the_conventional_spellings_of_the_filename_are_read(self) -> None:
+        for name in ("LICENSE", "LICENCE", "LICENSE.md", "COPYING", "UNLICENSE"):
+            with self.subTest(name=name):
+                self.assertEqual(len(self._claims({name: self.AGPL})), 1)
+
+    def test_families_are_recognised_from_both_directions(self) -> None:
+        self.assertEqual(license_family("AGPL-3.0-only"), "AGPL")
+        self.assertEqual(license_family("GNU AFFERO GENERAL PUBLIC LICENSE"), "AGPL")
+        self.assertEqual(license_family("Apache-2.0"), "Apache")
+        self.assertIsNone(license_family("something-bespoke"))
+
+    def test_the_affero_heading_is_not_read_as_plain_gpl(self) -> None:
+        # The Affero and Lesser headings both contain the GPL one.
+        self.assertEqual(license_family("GNU AFFERO GENERAL PUBLIC LICENSE"), "AGPL")
+        self.assertEqual(license_family("GNU LESSER GENERAL PUBLIC LICENSE"), "LGPL")

@@ -301,6 +301,62 @@ def _normalize_requirement(value: object) -> str | None:
     return match.group(1).casefold().replace("_", "-")
 
 
+LICENSE_FILE_NAME = re.compile(r"^(?:LICEN[CS]E|COPYING|UNLICENSE)(?:\.[\w-]+)?$", re.IGNORECASE)
+# The heading every well-known licence text opens with. Order matters: the
+# Affero and Lesser headings both contain the GPL one.
+LICENSE_HEADINGS = (
+    ("GNU AFFERO GENERAL PUBLIC LICENSE", "AGPL"),
+    ("GNU LESSER GENERAL PUBLIC LICENSE", "LGPL"),
+    ("GNU GENERAL PUBLIC LICENSE", "GPL"),
+    ("APACHE LICENSE", "Apache"),
+    ("MOZILLA PUBLIC LICENSE", "MPL"),
+    ("BSD 3-CLAUSE", "BSD-3-Clause"),
+    ("BSD 2-CLAUSE", "BSD-2-Clause"),
+    ("MIT LICENSE", "MIT"),
+    ("THE UNLICENSE", "Unlicense"),
+    ("CREATIVE COMMONS", "CC"),
+)
+LICENSE_VERSION = re.compile(r"Version\s+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# Only the opening of the file is read. Every licence names itself in its
+# heading, and the body is thousands of words of terms this engine has no
+# business interpreting.
+LICENSE_HEAD_LINES = 12
+
+
+def license_family(text: str) -> str | None:
+    """The licence family a spelling belongs to, or None if unrecognised.
+
+    `AGPL-3.0-only` in a manifest and "GNU AFFERO GENERAL PUBLIC LICENSE" in a
+    file are the same licence written two ways. Comparing the spellings would
+    have reported a conflict in five of the repositories here, all of which
+    agree, so only the family is ever compared and the spelling is quoted
+    rather than interpreted.
+    """
+
+    upper = text.upper()
+    for needle, family in LICENSE_HEADINGS:
+        if needle in upper:
+            return family
+    # Manifest identifiers are SPDX-shaped: the family is the leading token.
+    token = re.split(r"[-\s_]", text.strip(), maxsplit=1)[0].upper()
+    for _, family in LICENSE_HEADINGS:
+        if token == family.upper():
+            return family
+    return None
+
+
+def _license_from_text(source: str) -> tuple[str, str | None] | None:
+    """`(name, family)` a licence file states in its own heading."""
+
+    head = "\n".join(source.splitlines()[:LICENSE_HEAD_LINES])
+    family = license_family(head)
+    if family is None:
+        return None
+    version = LICENSE_VERSION.search(head)
+    name = f"{family} {version.group(1)}" if version else family
+    return name, family
+
+
 def _declared_license(document: dict[str, Any], manifest: str) -> str | None:
     """The licence identifier a manifest states, if it states one.
 
@@ -711,6 +767,8 @@ class ProjectMetadataAnalyzer:
             evidence.append(record)
             return record
 
+        declared_families: dict[str, str] = {}
+
         def declare_license(
             document: dict[str, Any],
             manifest: str,
@@ -727,6 +785,9 @@ class ProjectMetadataAnalyzer:
             licence = _declared_license(document, manifest)
             if not licence:
                 return
+            family = license_family(licence)
+            if family is not None:
+                declared_families.setdefault(family, f"{file_record.path}: {licence}")
             licence_text = (
                 f"`{file_record.path}` declares the repository licence as "
                 f"`{licence}`. This is the identifier the manifest states; the terms "
@@ -1513,6 +1574,67 @@ class ProjectMetadataAnalyzer:
                     verified_at=created_at,
                     supporting_evidence=(ci_census.evidence_id,),
                     invalidation_keys=("snapshot:file-set",),
+                )
+            )
+
+        for file_record in snapshot.files:
+            if not LICENSE_FILE_NAME.match(Path(file_record.path).name):
+                continue
+            source = file_sources.get(file_record.path)
+            if source is None:
+                continue
+            stated = _license_from_text(source)
+            if stated is None:
+                continue
+            name, family = stated
+            licence_evidence = receipt(
+                file_record.path, 1, LICENSE_HEAD_LINES, "license_text", file_record.path
+            )
+            agrees = family is not None and family in declared_families
+            conflicting = sorted(declared_families) if declared_families and not agrees else []
+            if conflicting:
+                # Families, never spellings. `AGPL-3.0-only` and "GNU AFFERO
+                # GENERAL PUBLIC LICENSE" are the same licence written two
+                # ways, and comparing the text would have reported a conflict
+                # in five repositories here, every one of which agrees.
+                others = ", ".join(f"`{declared_families[item]}`" for item in conflicting)
+                text = (
+                    f"`{file_record.path}` contains the {name} licence text, while the "
+                    f"manifest declares a different licence family: {others}. One of the "
+                    "two is wrong about what this repository may be used for."
+                )
+                status = "conflict"
+                importance = "high"
+            else:
+                text = (
+                    f"`{file_record.path}` contains the {name} licence text. This is what "
+                    "the file itself states"
+                    + (
+                        ", which agrees with the manifest."
+                        if agrees
+                        else "; no manifest in this repository declares a licence."
+                    )
+                )
+                status = "verified"
+                importance = "high" if not agrees else "medium"
+            claims.append(
+                ClaimRecord(
+                    claim_id=stable_id(
+                        "claim",
+                        (snapshot.snapshot_id, "declared_license", text, ANALYZER_VERSION),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    claim=text,
+                    category="declared_license",
+                    status=status,
+                    confidence=1.0,
+                    importance=importance,
+                    produced_by=ANALYZER_VERSION,
+                    created_at=created_at,
+                    verified_at=created_at if status == "verified" else None,
+                    supporting_evidence=(licence_evidence.evidence_id,),
+                    contradicting_evidence=tuple(manifest_receipts) if conflicting else (),
+                    invalidation_keys=(f"file:{file_record.path}",),
                 )
             )
 
