@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import TestCase
 
+from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.typescript_lexical import (
     TypeScriptLexicalAnalyzer,
     _call_sites,
@@ -20,6 +21,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _object_keys,
     _parameter_names,
     _references,
+    _throw_messages,
     _throw_sites,
     _tokens,
     _tunables,
@@ -656,3 +658,53 @@ class CallSiteTests(TestCase):
     def test_each_call_carries_the_line_it_sits_on(self) -> None:
         found = dict(_call_sites(_tokens("a();\n\nb();\n")))
         self.assertEqual(found, {"a": 1, "b": 3})
+
+
+class ThrownMessageTests(TestCase):
+    """A thrown type says a call can fail; the message says how.
+
+    The type was recorded and the message beside it discarded, which is the
+    same omission the Python reader had until it was fixed there.
+    """
+
+    def _messages(self, source: str) -> dict[str, str]:
+        return _throw_messages(_tokens(source))
+
+    def test_a_literal_message_is_quoted_as_written(self) -> None:
+        self.assertEqual(
+            self._messages('throw new Error("Missing vault");'),
+            {"Error": "Missing vault"},
+        )
+
+    def test_a_template_literal_that_interpolates_is_not_quoted(self) -> None:
+        # The tokenizer strips the delimiters, so the backtick is gone by the
+        # time the message is read and `${` is what identifies one. A first
+        # attempt tested for the backtick and let `Unknown: ${id}` through.
+        self.assertEqual(self._messages("throw new Error(`Unknown: ${id}`);"), {})
+
+    def test_a_template_literal_without_interpolation_is_still_text(self) -> None:
+        self.assertEqual(
+            self._messages("throw new Error(`plain enough`);"),
+            {"Error": "plain enough"},
+        )
+
+    def test_a_message_built_from_a_variable_is_not_quoted(self) -> None:
+        self.assertEqual(self._messages("throw new Error(problem);"), {})
+
+    def test_rethrowing_a_value_carries_no_message(self) -> None:
+        self.assertEqual(self._messages("throw error;"), {})
+
+    def test_the_first_literal_per_type_is_the_one_kept(self) -> None:
+        messages = self._messages('throw new Error("first");\nthrow new Error("second");')
+        self.assertEqual(messages, {"Error": "first"})
+
+    def test_the_message_reaches_the_failure_surface_claim(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "vault.ts").write_text(
+                'export function open() {\n  throw new Error("Missing vault");\n}\n',
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+            claim = next(item for item in result.claims if item.category == "failure_surface")
+            self.assertIn('Error ("Missing vault")', claim.claim)

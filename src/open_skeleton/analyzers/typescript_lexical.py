@@ -588,6 +588,22 @@ def _environment_reads(tokens: list[Token]) -> dict[str, int]:
     return found
 
 
+MAX_THROW_MESSAGE_CHARS = 60
+
+
+def _quote_message(text: str) -> str:
+    """A thrown message, quoted as written and short enough to read inline.
+
+    Quoted rather than paraphrased: the value of the string is that somebody
+    can search for it, and a rewritten message finds nothing.
+    """
+
+    folded = " ".join(text.split())
+    if len(folded) <= MAX_THROW_MESSAGE_CHARS:
+        return f'"{folded}"'
+    return f'"{folded[: MAX_THROW_MESSAGE_CHARS - 1]}…"'
+
+
 def _throw_sites(tokens: list[Token]) -> dict[str, int]:
     """Exception types this module throws, with the line each first appears.
 
@@ -606,6 +622,52 @@ def _throw_sites(tokens: list[Token]) -> dict[str, int]:
             scan += 1
         if scan < total and tokens[scan].kind == "identifier":
             found.setdefault(tokens[scan].value, token.line)
+    return found
+
+
+def _throw_messages(tokens: list[Token]) -> dict[str, str]:
+    """The literal text a throw gives its caller, keyed by exception type.
+
+    `throws 3 distinct type(s): Error` says a call can fail. `Error` with
+    "config root must be absolute" says how, and it is the string a developer
+    searches for when it appears in a console. The type was recorded and the
+    message beside it discarded -- the same omission the Python reader had.
+
+    Only a literal is read. A template literal or a variable has no fixed
+    text, and a message quoted wrongly is worse than one omitted, because a
+    reader will search for the words this document gave them. The first
+    literal message per type is kept: a document naming one real message is
+    more use than one naming none, and the type already carries the count.
+    """
+
+    found: dict[str, str] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "throw":
+            continue
+        scan = index + 1
+        if scan < total and tokens[scan].value == "new":
+            scan += 1
+        if scan >= total or tokens[scan].kind != "identifier":
+            continue
+        thrown = tokens[scan].value
+        if thrown in found:
+            continue
+        opener = scan + 1
+        if opener >= total or tokens[opener].value != "(":
+            continue
+        argument = opener + 1
+        if argument >= total or tokens[argument].kind != "string":
+            continue
+        # A template literal interpolates, so the text in the source is not the
+        # text a reader will ever see. The tokenizer strips the delimiters, so
+        # the backtick is gone by here and `${` is what identifies one.
+        raw = tokens[argument].value
+        if "${" in raw:
+            continue
+        message = raw.strip().strip("\"'`").strip()
+        if message:
+            found[thrown] = message
     return found
 
 
@@ -1554,6 +1616,7 @@ class TypeScriptLexicalAnalyzer:
             file_state = _module_state(file_tokens, file_declarations)
             file_env = _environment_reads(file_tokens)
             file_throws = _throw_sites(file_tokens)
+            file_throw_messages = _throw_messages(file_tokens)
             file_object_keys = _object_keys(
                 file_tokens,
                 frozenset(item.name.rsplit(".", 1)[-1] for item in file_declarations),
@@ -1957,7 +2020,14 @@ class TypeScriptLexicalAnalyzer:
                 )
 
             if file_throws:
-                thrown = ", ".join(sorted(file_throws))
+                thrown = ", ".join(
+                    (
+                        f"{name} ({_quote_message(file_throw_messages[name])})"
+                        if name in file_throw_messages
+                        else name
+                    )
+                    for name in sorted(file_throws)
+                )
                 throw_receipt = add_evidence(
                     file_record.path,
                     min(file_throws.values()),
