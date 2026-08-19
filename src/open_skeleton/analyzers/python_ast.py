@@ -862,6 +862,48 @@ def _reference_literals(tree: ast.Module) -> set[int]:
     return found
 
 
+def _declared_cli_flags(tree: ast.Module) -> tuple[dict[str, int], dict[str, int]]:
+    """Options and positional arguments an argparse parser declares.
+
+    A `__main__` guard says a module can be started. It does not say what a
+    person types after the module name, and that is the whole interface: this
+    engine's own specification of itself named none of its 106 flags, so the
+    document could not answer "how do I run this" about the tool that wrote it.
+
+    Only `add_argument` with a string literal first argument is read. A flag
+    assembled at run time has no fixed spelling to report, and a guess about a
+    command line is worse than an omission, because somebody will type what
+    the document says.
+
+    Click and Typer declare the same thing through decorators and are not read
+    here. Neither appears in any repository available to check against, and a
+    reader written against an imagined codebase is the failure this project
+    measures itself on.
+
+    Each name is returned with the line that declares it, so a flag can join
+    the concordance on the same terms as every other name a file carries.
+    """
+
+    options: dict[str, int] = {}
+    positionals: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if not isinstance(function, ast.Attribute) or function.attr != "add_argument":
+            continue
+        line = getattr(node, "lineno", 1)
+        for argument in node.args:
+            if not isinstance(argument, ast.Constant) or not isinstance(argument.value, str):
+                continue
+            name = argument.value.strip()
+            if not name:
+                continue
+            target = options if name.startswith("-") else positionals
+            target[name] = min(target.get(name, line), line)
+    return options, positionals
+
+
 def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Numeric literals written inside a function body.
 
@@ -1278,12 +1320,20 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.imported_names = _imported_names(tree)
         self.string_constants = _string_constants(tree)
         self.embedded_literals = _embedded_literals(tree)
+        cli_options, cli_positionals = _declared_cli_flags(tree)
+        self.cli_options = sorted(cli_options)
+        self.cli_positionals = sorted(cli_positionals)
         self.defined_exceptions = _defined_exceptions(tree)
         self.caught_families = _caught_families(tree)
         self.caught_family_evidence: dict[str, list[str]] = {}
         self.signatures = _signatures(tree)
         self.external_calls = _external_calls(tree, local_modules)
         self.name_index = _name_index(tree)
+        # `--output-dir` is not a Python identifier, so the generic walk skips
+        # it, and a reader searching for a flag found nothing. It is still a
+        # name a person types and looks up.
+        for flag, line in (*cli_options.items(), *cli_positionals.items()):
+            self.name_index[flag] = min(self.name_index.get(flag, line), line)
         module_symbol = self._symbol(
             qualified_name=self.module,
             kind="module",
@@ -2218,6 +2268,15 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["external_calls"] = self.external_calls
         if self.name_index:
             payload["name_index"] = self.name_index
+        if self.cli_options or self.cli_positionals:
+            # The readable claim names a bounded set so the sentence stays a
+            # sentence. A command line is not partially useful, though -- a
+            # reader wants the flag they are looking for, not the first twelve
+            # alphabetically -- so the complete list travels here.
+            payload["command_line"] = {
+                "options": self.cli_options,
+                "positionals": self.cli_positionals,
+            }
         if not payload:
             return
         for index, symbol in enumerate(self.symbols):
@@ -2227,6 +2286,41 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
     def finalize(self) -> None:
         self._attach_module_metadata()
+        if (self.cli_options or self.cli_positionals) and describes_the_product(
+            getattr(self.file_record, "role", None)
+        ):
+            parts: list[str] = []
+            if self.cli_options:
+                named = ", ".join(f"`{flag}`" for flag in self.cli_options[:12])
+                more = (
+                    f" and {len(self.cli_options) - 12:,} more"
+                    if len(self.cli_options) > 12
+                    else ""
+                )
+                parts.append(f"{len(self.cli_options):,} option(s): {named}{more}")
+            if self.cli_positionals:
+                named = ", ".join(f"`{name}`" for name in self.cli_positionals[:8])
+                parts.append(f"{len(self.cli_positionals):,} positional argument(s): {named}")
+            self._claim(
+                text=(
+                    f"{self.path} declares a command-line interface -- "
+                    f"{'; '.join(parts)}. These are the words a user types; a "
+                    "`__main__` guard says only that the module can be started."
+                ),
+                category="command_line_interface",
+                status="verified",
+                confidence=1.0,
+                importance="high",
+                supporting=(
+                    self._evidence(
+                        start_line=1,
+                        end_line=max(1, getattr(self.file_record, "line_count", 1)),
+                        symbol=self.module,
+                        evidence_kind="command_line_interface",
+                    ).evidence_id,
+                ),
+                invalidation_keys=(f"file:{self.path}",),
+            )
         for name, base, line in self.defined_exceptions:
             qualified = f"{self.module}.{name}"
             self._claim(

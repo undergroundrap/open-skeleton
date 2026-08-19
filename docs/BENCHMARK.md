@@ -99,7 +99,7 @@ The report now asks both questions and prints both answers.
 | Question | Sections | Share |
 |---|---:|---:|
 | Baseline heading matched by a candidate heading | 181 of 640 | 28.3% |
-| Baseline section's distinctive terms present in the candidate | 338 of 496 | 68.1% |
+| Baseline section's distinctive terms present in the candidate | 342 of 496 | 69.0% |
 
 A term most baseline sections already use cannot identify a subject, so only
 terms rare across the baseline count. A further 144 sections carry fewer than

@@ -14,6 +14,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.python_ast import (
     PythonAstAnalyzer,
     _caught_families,
+    _declared_cli_flags,
     _defined_exceptions,
     _embedded_literals,
     _external_calls,
@@ -1405,3 +1406,97 @@ class DottedNameIndexTests(TestCase):
     def test_the_line_recorded_is_the_first_occurrence(self) -> None:
         index = self._index("a = 1\nvalue = mob.loot_table\nagain = mob.loot_table\n")
         self.assertEqual(index["mob.loot_table"], 2)
+
+
+class DeclaredCommandLineTests(TestCase):
+    """A `__main__` guard says a module can start, not what a user types.
+
+    This engine's own specification of itself named none of its 106 flags,
+    so the document could not answer "how do I run this" about the tool that
+    produced it.
+    """
+
+    def _flags(self, source: str) -> tuple[list[str], list[str]]:
+        options, positionals = _declared_cli_flags(ast.parse(source))
+        return sorted(options), sorted(positionals)
+
+    def _lines(self, source: str) -> dict[str, int]:
+        options, positionals = _declared_cli_flags(ast.parse(source))
+        return {**options, **positionals}
+
+    SOURCE = """\
+import argparse
+
+def build():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("repository")
+    return parser
+"""
+
+    def test_options_are_reported(self) -> None:
+        options, _ = self._flags(self.SOURCE)
+        self.assertEqual(options, ["--output-dir", "--verbose", "-v"])
+
+    def test_positionals_are_reported_separately(self) -> None:
+        _, positionals = self._flags(self.SOURCE)
+        self.assertEqual(positionals, ["repository"])
+
+    def test_a_flag_assembled_at_run_time_is_not_guessed(self) -> None:
+        # Somebody will type what the document says, so a command line that
+        # has no fixed spelling is omitted rather than approximated.
+        options, positionals = self._flags(
+            "parser.add_argument(f'--{name}')\nparser.add_argument(prefix + 'x')\n"
+        )
+        self.assertEqual(options, [])
+        self.assertEqual(positionals, [])
+
+    def test_a_module_with_no_parser_declares_nothing(self) -> None:
+        self.assertEqual(self._flags("x = 1\n"), ([], []))
+
+    def test_the_same_flag_declared_twice_is_reported_once(self) -> None:
+        options, _ = self._flags("a.add_argument('--root')\nb.add_argument('--root')\n")
+        self.assertEqual(options, ["--root"])
+
+    def test_the_claim_names_the_flags_and_reaches_the_pipeline(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tool.py").write_text(self.SOURCE, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            claim = next(
+                item for item in result.claims if item.category == "command_line_interface"
+            )
+            self.assertIn("`--output-dir`", claim.claim)
+            self.assertIn("`repository`", claim.claim)
+            self.assertEqual(claim.status, "verified")
+            self.assertTrue(claim.supporting_evidence)
+
+    def test_a_flag_is_recorded_with_the_line_that_declares_it(self) -> None:
+        lines = self._lines("import argparse\nparser.add_argument('--root')\n")
+        self.assertEqual(lines["--root"], 2)
+
+    def test_a_flag_joins_the_searchable_concordance(self) -> None:
+        # `--output-dir` is not a Python identifier, so the generic name walk
+        # skips it and a reader searching for a flag found nothing.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tool.py").write_text(self.SOURCE, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            index: dict[str, int] = {}
+            for symbol in result.symbols:
+                index.update(symbol.metadata.get("name_index", {}))
+            self.assertIn("--output-dir", index)
+            self.assertIn("repository", index)
+
+    def test_a_test_helper_is_not_the_product_command_line(self) -> None:
+        # The same rule the rest of the engine uses: a suite's own argument
+        # parsing is not the interface the product ships.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_tool.py").write_text(self.SOURCE, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            self.assertFalse(
+                [item for item in result.claims if item.category == "command_line_interface"]
+            )
