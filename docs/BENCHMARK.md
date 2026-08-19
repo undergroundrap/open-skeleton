@@ -58,15 +58,15 @@ loop variable beside a public function to a human buries the surface that
 matters under the noise that does not.
 
 Measured against `spec.md` alone, coverage of facts present in the repository
-is 74.0%. Measured against everything the same run produced, it is 95.4%. The
-21-point difference is not extraction; it is presentation. The report now says
+is 74.0%. Measured against everything the same run produced, it is 95.9%. That
+22-point difference is not extraction; it is presentation. The report now says
 which it measured, and only calls a shortfall "value the run did not produce"
 when every artifact was passed.
 
 | Repository | Present-in-repo facts | Carried | Coverage |
 |---|---:|---:|---:|
-| Reference web app (Next.js + FastAPI) | 4,244 | 4,048 | 95.4% |
-| This repository | 4,295 | 4,053 | 94.4% |
+| Reference web app (Next.js + FastAPI) | 4,244 | 4,068 | 95.9% |
+| This repository | 4,297 | 4,096 | 95.3% |
 
 Two repositories of different shape, language mix and size land within a point
 of each other, which is the result that says something about the engine rather
@@ -74,7 +74,7 @@ than about either codebase.
 
 The remaining category is separate and deliberately not chased. Of facts the
 baseline asserts are *absent* from the repository -- technologies it checked
-for and did not find -- a run carries 41.3%. Matching the rest means
+for and did not find -- a run carries 45.0%. Matching the rest means
 reproducing a vendor checklist rather than reading a codebase, so the two rows
 are reported separately and only the first is treated as a target.
 

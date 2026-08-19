@@ -1442,8 +1442,27 @@ class ProjectMetadataAnalyzer:
         # names its keyframes and assets, a lock file names every transitive
         # dependency, a README names whatever it documents.
         for file_record in snapshot.files:
+            name = Path(file_record.path).name.casefold()
             suffix = Path(file_record.path).suffix.casefold()
-            if suffix not in {".css", ".scss", ".json", ".md", ".txt", ".toml", ".html"}:
+            # `.webmanifest` is a web app's own description of itself -- name,
+            # start URL, theme -- and was Unknown to every reader here. A
+            # `.gitignore` names the directories a project generates, which is
+            # now load-bearing: the scanner decides the census from it, so the
+            # patterns it used should be searchable rather than only inferable
+            # from the exclusion rows.
+            indexed_name = name in {".gitignore", ".dockerignore", ".npmrc", ".editorconfig"}
+            if not indexed_name and suffix not in {
+                ".css",
+                ".scss",
+                ".json",
+                ".md",
+                ".txt",
+                ".toml",
+                ".html",
+                ".webmanifest",
+                ".yaml",
+                ".yml",
+            }:
                 continue
             source = file_sources.get(file_record.path)
             if source is None:

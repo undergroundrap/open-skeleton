@@ -21,6 +21,7 @@ from open_skeleton.analyzers.python_ast import (
     _model_fields,
     _module_name,
     _module_names,
+    _name_index,
     _package_directories,
     _payload_shapes,
     _signatures,
@@ -1365,3 +1366,42 @@ class ClientRouteReconciliationTests(TestCase):
 
     def test_a_route_nobody_requests_is_not_joined(self) -> None:
         self.assertEqual(self._claims({"api.py": self.SERVER}), [])
+
+
+class DottedNameIndexTests(TestCase):
+    """A field name without its owner is half a fact.
+
+    `loot_table` does not say what carries it, and `mob.loot_table` is what
+    somebody searching an unfamiliar domain model actually types.
+    """
+
+    def _index(self, source: str) -> dict[str, int]:
+        return _name_index(ast.parse(source))
+
+    def test_an_attribute_records_its_receiver(self) -> None:
+        index = self._index("value = mob.loot_table\n")
+        self.assertIn("mob.loot_table", index)
+
+    def test_the_bare_attribute_is_still_recorded(self) -> None:
+        # Someone who knows only the field name must still find the file.
+        index = self._index("value = mob.loot_table\n")
+        self.assertIn("loot_table", index)
+
+    def test_a_chain_is_spelled_out_in_full(self) -> None:
+        index = self._index("value = player.stats.level\n")
+        self.assertIn("player.stats.level", index)
+
+    def test_a_call_receiver_has_no_written_form_and_is_not_invented(self) -> None:
+        index = self._index("value = get_player().hp\n")
+        self.assertIn("hp", index)
+        self.assertFalse([name for name in index if name.endswith(".hp") and "(" in name])
+        self.assertNotIn("get_player.hp", index)
+
+    def test_a_subscript_receiver_is_left_alone_too(self) -> None:
+        index = self._index("value = items[0].name\n")
+        self.assertIn("name", index)
+        self.assertNotIn("items.name", index)
+
+    def test_the_line_recorded_is_the_first_occurrence(self) -> None:
+        index = self._index("a = 1\nvalue = mob.loot_table\nagain = mob.loot_table\n")
+        self.assertEqual(index["mob.loot_table"], 2)

@@ -601,3 +601,40 @@ cc = "1"
     def test_a_workspace_root_with_no_dependencies_claims_nothing(self) -> None:
         result = self._analyze('[workspace]\nmembers = ["crates/a"]\n')
         self.assertFalse(any(item.category == "dependency_inventory" for item in result.claims))
+
+
+class IndexedTextFileTests(TestCase):
+    """Files no language analyzer reads still name things.
+
+    A web app describes itself in `.webmanifest` -- name, start URL, theme --
+    and that file was Unknown to every reader here. A `.gitignore` names the
+    directories a project generates, which the scanner now uses to decide the
+    census, so those patterns should be searchable rather than only inferable
+    from an exclusion row.
+    """
+
+    def _names(self, filename: str, body: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / filename).write_text(body, encoding="utf-8")
+            result = ProjectMetadataAnalyzer().analyze(scan_repository(root))
+            indexed = [item for item in result.symbols if item.kind == "text_names"]
+            return {name for item in indexed for name in item.metadata["name_index"]}
+
+    def test_a_web_manifest_is_indexed(self) -> None:
+        names = self._names(
+            "manifest.webmanifest",
+            '{"short_name": "Mud", "start_url": "/", "theme_color": "#000"}',
+        )
+        self.assertIn("short_name", names)
+        self.assertIn("start_url", names)
+
+    def test_a_gitignore_is_indexed(self) -> None:
+        names = self._names(".gitignore", "__pycache__\npoetry.lock\nyarn.lock\n")
+        self.assertIn("poetry.lock", names)
+        self.assertIn("yarn.lock", names)
+
+    def test_a_file_no_reader_claims_is_still_not_indexed(self) -> None:
+        # The set is a decision about which files name things, not a licence
+        # to index every byte in the repository.
+        self.assertEqual(self._names("notes.rst", "anything_at_all\n"), set())

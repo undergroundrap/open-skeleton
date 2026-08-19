@@ -524,6 +524,26 @@ def _data_containers(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+def _dotted_name(node: ast.Attribute) -> str | None:
+    """`mob.loot_table` for an attribute chain rooted in a plain name.
+
+    Only chains whose base is a `Name` are spelled out. `get_player().hp` and
+    `items[0].name` have no stable written form -- the receiver is an
+    expression, not something a reader can search for -- so they are left to
+    the bare-attribute entry rather than invented.
+    """
+
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    return ".".join(reversed(parts))
+
+
 def _name_index(tree: ast.Module) -> dict[str, int]:
     """Every name this module binds or reaches for, with the line it first appears.
 
@@ -554,6 +574,14 @@ def _name_index(tree: ast.Module) -> dict[str, int]:
             record(node.arg, line)
         elif isinstance(node, ast.Attribute):
             record(node.attr, line)
+            # `loot_table` does not say what carries it, and `mob.loot_table`
+            # is the form somebody searching for it actually types. Recording
+            # only the final component discarded the half that identifies the
+            # owner, which is most of the value for a reader navigating an
+            # unfamiliar domain model.
+            dotted = _dotted_name(node)
+            if dotted:
+                record(dotted, line)
         elif isinstance(node, ast.keyword) and node.arg:
             record(node.arg, line)
         elif isinstance(node, ast.ExceptHandler) and node.name:
