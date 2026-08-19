@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -210,6 +211,9 @@ class SpecDocument:
     # the rendered document, so without this there is nothing to compare
     # and a truncated graph is undetectable after the fact.
     source_counts: dict[str, int] = field(default_factory=dict)
+    # Languages the census holds that no analyzer produced any record for.
+    # Distinct from a parse failure: nothing here was ever attempted.
+    unread_languages: tuple[tuple[str, int], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -657,6 +661,7 @@ def build_spec(
         dossiers=dossiers,
         substitutes=substitutes,
         roles=roles,
+        unread_languages=_languages_no_analyzer_read(files, symbols, evidence_by_id.values()),
         name_index={
             str(item["path"]): dict(item["metadata"]["name_index"])
             for item in symbols
@@ -734,6 +739,42 @@ def _absent_artifacts(results: Iterable[ProbeResult]) -> str:
         f"None of {listed} appears anywhere in this snapshot, so the concern is "
         "absent from what a reader would look for as well as from what the "
         "analyzers report."
+    )
+
+
+def _languages_no_analyzer_read(
+    files: Iterable[dict[str, Any]],
+    symbols: Iterable[dict[str, Any]],
+    evidence: Iterable[dict[str, Any]],
+) -> tuple[tuple[str, int], ...]:
+    """Languages present in the census that no analyzer produced a record for.
+
+    `_unread_files` counts files an analyzer declared eligible and then failed
+    to parse. A language with no analyzer at all never appears in a coverage
+    record, so it was invisible -- and the document went on to say "every
+    eligible file parsed, so these absences are bounded by what the analyzers
+    can express, not by anything left unread". For a repository holding a
+    shell script that sentence was false, and it is the exact confusion this
+    document exists to prevent: an absence resting on an unread file reads
+    identically to an absence that was checked.
+
+    Touched is defined by output rather than by declared eligibility, because
+    an analyzer's own account of what it was willing to read cannot show that
+    nothing was willing to read a language.
+    """
+
+    touched = {str(item["path"]) for item in symbols}
+    touched.update(str(item["path"]) for item in evidence if item.get("path"))
+    unread: Counter[str] = Counter()
+    for item in files:
+        if str(item["path"]) not in touched:
+            unread[str(item["language"])] += 1
+    covered = {str(item["language"]) for item in files if str(item["path"]) in touched}
+    return tuple(
+        sorted(
+            ((language, count) for language, count in unread.items() if language not in covered),
+            key=lambda pair: (-pair[1], pair[0]),
+        )
     )
 
 
@@ -1033,6 +1074,17 @@ def _executive_summary(document: SpecDocument) -> list[str]:
             grounding = (
                 " Every eligible file parsed, so these absences are bounded by what the "
                 "analyzers can express, not by anything left unread."
+            )
+        if document.unread_languages:
+            named = ", ".join(
+                f"{language} ({count:,})" for language, count in document.unread_languages[:4]
+            )
+            beyond = len(document.unread_languages) - 4
+            if beyond > 0:
+                named += f", plus {beyond:,} other language(s)"
+            grounding += (
+                f" Separately, no analyzer read any file written in {named}, so an "
+                "absence that would have been evidenced there could not have been found."
             )
         lines.append(
             f"{ABSENCE_HEADING}\n\n"

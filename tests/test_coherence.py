@@ -24,7 +24,11 @@ from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, every_claim, load_profile, render_spec_markdown
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.coherence import check_coherence, check_conservation
-from open_skeleton.spec.render import ABSENCE_HEADING, CLAIM_PAGE
+from open_skeleton.spec.render import (
+    ABSENCE_HEADING,
+    CLAIM_PAGE,
+    _languages_no_analyzer_read,
+)
 from tests.helpers import create_sample_repository
 
 
@@ -321,3 +325,62 @@ class EnumerationRobustnessTests(TestCase):
     def test_a_declared_remainder_clears_the_finding(self) -> None:
         markdown = "Covers 40 of 60 concerns: `alpha`, `beta`, `gamma` and 37 more."
         self.assertNotIn("enumeration-truncated-silently", self._checks(markdown))
+
+
+class UnreadLanguageTests(TestCase):
+    """An absence resting on an unread file is not an absence.
+
+    `_unread_files` counts files an analyzer declared eligible and failed to
+    parse. A language with no analyzer at all never appears in a coverage
+    record, so the document said "every eligible file parsed ... not by
+    anything left unread" about a repository holding a shell script nothing
+    had opened.
+    """
+
+    FILES = (
+        {"path": "app.py", "language": "Python"},
+        {"path": "install.sh", "language": "Shell"},
+        {"path": "run.bat", "language": "Batch"},
+    )
+
+    def test_a_language_no_analyzer_touched_is_named(self) -> None:
+        found = dict(_languages_no_analyzer_read(self.FILES, [{"path": "app.py"}], []))
+        self.assertEqual(found, {"Shell": 1, "Batch": 1})
+
+    def test_a_language_reached_only_through_evidence_counts_as_read(self) -> None:
+        # An analyzer may cite a file without emitting a symbol for it.
+        found = dict(
+            _languages_no_analyzer_read(self.FILES, [{"path": "app.py"}], [{"path": "install.sh"}])
+        )
+        self.assertEqual(found, {"Batch": 1})
+
+    def test_a_language_partly_read_is_not_reported_as_unread(self) -> None:
+        # The claim is that *nothing* read the language. One unparsed file of a
+        # covered language is a parse failure, which `_unread_files` reports.
+        files = (
+            {"path": "a.py", "language": "Python"},
+            {"path": "b.py", "language": "Python"},
+        )
+        self.assertEqual(_languages_no_analyzer_read(files, [{"path": "a.py"}], []), ())
+
+    def test_nothing_is_reported_when_everything_was_read(self) -> None:
+        self.assertEqual(
+            _languages_no_analyzer_read(
+                self.FILES,
+                [{"path": item["path"]} for item in self.FILES],
+                [],
+            ),
+            (),
+        )
+
+    def test_the_document_says_so_where_it_discusses_absence(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            (root / "install.sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+            document = _document(root, workspace / "state")
+            self.assertIn("Shell", dict(document.unread_languages))
+            markdown = render_spec_markdown(document)
+            self.assertIn("no analyzer read any file written in", markdown)
