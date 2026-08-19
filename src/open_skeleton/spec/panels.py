@@ -223,6 +223,24 @@ def _truncate(items: tuple[str, ...]) -> str:
     return f"{shown} +{remaining:,} more" if remaining > 0 else shown
 
 
+MAX_MESSAGE_CHARS = 60
+
+
+def _truncate_message(text: str) -> str:
+    """A refusal message, kept short enough to sit in a table cell.
+
+    Quoted rather than paraphrased: the value of the string is that somebody
+    can search for it, and a rewritten message finds nothing. Newlines are
+    folded because a cell cannot hold them, and an elision is marked so a
+    reader knows to expect more than what is shown.
+    """
+
+    folded = " ".join(text.split())
+    if len(folded) <= MAX_MESSAGE_CHARS:
+        return f'"{folded}"'
+    return f'"{folded[: MAX_MESSAGE_CHARS - 1]}…"'
+
+
 def _capability_catalog(capabilities: tuple[Capability, ...]) -> Panel:
     rows = tuple(
         (
@@ -928,9 +946,15 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
             continue
         flow = metadata.get("control_flow") or []
         guards = sum(1 for event in flow if event.get("kind") == "guard")
+        # "HTTP 404" says a request was refused; the message says why, and it
+        # is the string an operator greps for when the log line arrives.
         refusals = sorted(
             {
-                str(event.get("label", ""))
+                (
+                    f"{event['label']} — {_truncate_message(str(event['message']))}"
+                    if event.get("message")
+                    else str(event.get("label", ""))
+                )
                 for event in flow
                 if event.get("kind") == "raise" and str(event.get("label", "")).startswith("HTTP")
             }

@@ -16,7 +16,13 @@ from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, verify_spec
 from open_skeleton.spec.capabilities import Capability
-from open_skeleton.spec.panels import PanelContext, build_panel, short_form
+from open_skeleton.spec.panels import (
+    MAX_MESSAGE_CHARS,
+    PanelContext,
+    _truncate_message,
+    build_panel,
+    short_form,
+)
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, run_probe
 from open_skeleton.spec.profile import ProfileError, SpecProbe, parse_profile
 from open_skeleton.spec.render import (
@@ -2176,3 +2182,22 @@ class TracingBlindSpotTests(TestCase):
     def test_a_traced_capability_suppresses_the_sentence(self) -> None:
         markdown = render_spec_markdown(self._document(exercised=True, tests=True))
         self.assertNotIn("does declare tests and none of them", markdown)
+
+
+class RefusalMessageRenderingTests(TestCase):
+    """The message must survive into the cell a person reads.
+
+    It is quoted rather than paraphrased: the value of the string is that
+    somebody can search for it, and a rewritten message finds nothing.
+    """
+
+    def test_a_short_message_is_quoted_whole(self) -> None:
+        self.assertEqual(_truncate_message("Player not found"), '"Player not found"')
+
+    def test_newlines_are_folded_so_a_cell_can_hold_it(self) -> None:
+        self.assertEqual(_truncate_message("first\n  second"), '"first second"')
+
+    def test_a_long_message_is_elided_and_says_so(self) -> None:
+        rendered = _truncate_message("x" * 200)
+        self.assertTrue(rendered.endswith('…"'))
+        self.assertLessEqual(len(rendered), MAX_MESSAGE_CHARS + 2)

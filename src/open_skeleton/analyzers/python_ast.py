@@ -310,6 +310,35 @@ def _raise_summary(node: ast.Raise) -> str | None:
     return name or "raise"
 
 
+def _raise_message(node: ast.Raise) -> str | None:
+    """The literal text a raise gives the caller, when it gives one.
+
+    "HTTP 404" says a request was refused. "Player not found" says why, and
+    it is the string an operator greps for when the log line arrives. The
+    status code was recorded and the message thrown away.
+
+    Only a literal is read. An f-string or a variable has no fixed text, and a
+    message quoted wrongly is worse than a message omitted, because a reader
+    will search for the words this document gave them.
+    """
+
+    exception = node.exc
+    if not isinstance(exception, ast.Call):
+        return None
+    for keyword in exception.keywords:
+        if (
+            keyword.arg == "detail"
+            and isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+        ):
+            return keyword.value.value.strip() or None
+    if exception.args:
+        first = exception.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value.strip() or None
+    return None
+
+
 def _control_flow(node: ast.AST) -> list[dict[str, Any]]:
     """Ordered guards, raises, and returns directly inside one function body.
 
@@ -343,14 +372,16 @@ def _control_flow(node: ast.AST) -> list[dict[str, Any]]:
             if isinstance(statement, ast.Raise):
                 summary = _raise_summary(statement)
                 if summary:
-                    events.append(
-                        {
-                            "kind": "raise",
-                            "line": statement.lineno,
-                            "label": summary,
-                            "depth": depth,
-                        }
-                    )
+                    event: dict[str, Any] = {
+                        "kind": "raise",
+                        "line": statement.lineno,
+                        "label": summary,
+                        "depth": depth,
+                    }
+                    message = _raise_message(statement)
+                    if message:
+                        event["message"] = message
+                    events.append(event)
                 continue
             if isinstance(statement, ast.Return):
                 events.append(

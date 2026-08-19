@@ -14,6 +14,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.python_ast import (
     PythonAstAnalyzer,
     _caught_families,
+    _control_flow,
     _declared_cli_flags,
     _defined_exceptions,
     _embedded_literals,
@@ -25,6 +26,7 @@ from open_skeleton.analyzers.python_ast import (
     _name_index,
     _package_directories,
     _payload_shapes,
+    _raise_message,
     _signatures,
     _string_constants,
 )
@@ -1500,3 +1502,50 @@ def build():
             self.assertFalse(
                 [item for item in result.claims if item.category == "command_line_interface"]
             )
+
+
+class RefusalMessageTests(TestCase):
+    """A status code says a request was refused; the message says why.
+
+    "Player not found" is the string an operator greps for when the log line
+    arrives, and it was read and discarded while the status was kept.
+    """
+
+    def _message(self, source: str) -> str | None:
+        tree = ast.parse(source)
+        raises = [node for node in ast.walk(tree) if isinstance(node, ast.Raise)]
+        self.assertEqual(len(raises), 1)
+        result: str | None = _raise_message(raises[0])
+        return result
+
+    def test_an_http_detail_keyword_is_read(self) -> None:
+        self.assertEqual(
+            self._message('raise HTTPException(status_code=404, detail="Player not found")'),
+            "Player not found",
+        )
+
+    def test_a_positional_message_is_read(self) -> None:
+        self.assertEqual(
+            self._message('raise ValueError("level must be 1-100")'), "level must be 1-100"
+        )
+
+    def test_an_interpolated_message_has_no_fixed_text_and_is_not_quoted(self) -> None:
+        # A reader will search for the words this document gives them, so a
+        # message that cannot be quoted exactly is omitted.
+        self.assertIsNone(self._message('raise ValueError(f"bad {value}")'))
+
+    def test_a_message_built_from_a_variable_is_not_quoted(self) -> None:
+        self.assertIsNone(self._message("raise ValueError(problem)"))
+
+    def test_a_bare_reraise_carries_no_message(self) -> None:
+        self.assertIsNone(self._message("try:\n    pass\nexcept ValueError:\n    raise"))
+
+    def test_the_message_travels_with_the_status_in_control_flow(self) -> None:
+        tree = ast.parse(
+            'def handler():\n    raise HTTPException(status_code=404, detail="Player not found")\n'
+        )
+        function = tree.body[0]
+        events = _control_flow(function)
+        raised = [event for event in events if event["kind"] == "raise"]
+        self.assertEqual(raised[0]["label"], "HTTP 404")
+        self.assertEqual(raised[0]["message"], "Player not found")
