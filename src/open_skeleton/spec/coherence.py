@@ -40,12 +40,17 @@ ABSENCE_VERDICTS = frozenset({"absent", "not_applicable"})
 
 # "21 of 48" and "34 of 60 probed concerns returned no matches" both introduce
 # a list, so the count and the list may not be adjacent.
-_ENUMERATION = re.compile(r"(?P<shown>[\d,]+) of (?P<total>[\d,]+)\b")
+# Each side must begin with a digit. `[\d,]+` also matches a bare comma, so
+# an ordinary sentence -- "throws in 7 place(s), of 2 distinct type(s)" --
+# captured "," as the count and crashed the whole document on `int("")`. The
+# checker that exists to keep a document honest must not be the thing that
+# stops it being written.
+_ENUMERATION = re.compile(r"(?P<shown>\d[\d,]*) of (?P<total>\d[\d,]*)\b")
 # Three or more quoted or numbered items is what distinguishes a list from a
 # sentence that happens to mention a ratio.
 MIN_ENUMERATED_ITEMS = 3
-_REMAINDER = re.compile(r"and (?P<count>[\d,]+) more")
-_SUMMARY_ROW = re.compile(r"^\|\s*(?P<verdict>[a-z_]+)\s*\|\s*(?P<count>[\d,]+)\s*\|$")
+_REMAINDER = re.compile(r"and (?P<count>\d[\d,]*) more")
+_SUMMARY_ROW = re.compile(r"^\|\s*(?P<verdict>[a-z_]+)\s*\|\s*(?P<count>\d[\d,]*)\s*\|$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +65,17 @@ class Incoherence:
 
 
 def _number(text: str) -> int:
-    return int(text.replace(",", ""))
+    """A digit group as an integer, tolerating anything that is not one.
+
+    Every caller passes a regex capture that now has to begin with a digit,
+    so the fallback should be unreachable. It exists because the failure it
+    replaces was total: a checker whose job is to keep a document honest
+    crashed the entire document on `int("")`, and the repository it happened
+    to be reading produced no specification at all until it was fixed.
+    """
+
+    digits = text.replace(",", "").strip()
+    return int(digits) if digits.isdigit() else 0
 
 
 def _verdict_contradictions(document: SpecDocument) -> list[Incoherence]:

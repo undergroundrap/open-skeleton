@@ -283,3 +283,41 @@ class PagingTests(TestCase):
         found, calls = self._read(0)
         self.assertEqual(found, [])
         self.assertEqual(calls, 1)
+
+
+class EnumerationRobustnessTests(TestCase):
+    """The checker that keeps a document honest must not prevent one existing.
+
+    `[\\d,]+` also matches a bare comma, so an ordinary claim sentence --
+    "throws in 7 place(s), of 2 distinct type(s)" -- captured "," as a count
+    and crashed on `int("")`. A whole repository produced no specification at
+    all until this was fixed, and nothing in the suite noticed because no
+    analyzer had written that phrasing before.
+    """
+
+    def _sample(self) -> Any:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            return _document(root, workspace / "state")
+
+    def _checks(self, markdown: str) -> set[str]:
+        return {item.check for item in check_coherence(self._sample(), markdown)}
+
+    def test_a_comma_before_of_is_not_a_count(self) -> None:
+        markdown = (
+            "Assets/Creature.cs throws in 7 place(s), of 2 distinct type(s): "
+            "`ArgumentNullException`, `InvalidOperationException`, `IOException`."
+        )
+        self.assertNotIn("enumeration-truncated-silently", self._checks(markdown))
+
+    def test_a_stated_count_larger_than_its_list_is_still_reported(self) -> None:
+        # The fix must not buy robustness by disabling the check.
+        markdown = "Covers 40 of 60 concerns: `alpha`, `beta`, `gamma`."
+        self.assertIn("enumeration-truncated-silently", self._checks(markdown))
+
+    def test_a_declared_remainder_clears_the_finding(self) -> None:
+        markdown = "Covers 40 of 60 concerns: `alpha`, `beta`, `gamma` and 37 more."
+        self.assertNotIn("enumeration-truncated-silently", self._checks(markdown))
