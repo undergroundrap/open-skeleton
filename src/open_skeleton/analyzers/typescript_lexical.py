@@ -604,6 +604,91 @@ def _quote_message(text: str) -> str:
     return f'"{folded[: MAX_THROW_MESSAGE_CHARS - 1]}…"'
 
 
+@dataclass(frozen=True, slots=True)
+class CatchHandler:
+    """One `catch` block, and the only two things about it worth asserting."""
+
+    line: int
+    binding: str | None
+    rethrows: bool
+    empty: bool
+
+
+def _catch_handlers(tokens: list[Token]) -> list[CatchHandler]:
+    """Every `catch` block, with what can be said about it without a parser.
+
+    Python reports which exception families a program absorbs. JavaScript
+    cannot be asked that -- `catch (e)` names no type -- so what remains is
+    how many handlers exist, which of them pass the failure on, and which
+    have no body at all.
+
+    A first version also tried to call a handler "silent" when it neither
+    rethrew nor logged. That was wrong in the way that matters: real interface
+    code answers a failure with `setError("...")`, showing the user a message,
+    which is a stronger report than a console line. The rule labelled nine
+    such handlers in one file as continuing silently, and the claim accused
+    working code of swallowing errors.
+
+    Whether a handler responds adequately needs to know what its calls do,
+    which needs a parser and a notion of what counts as a response. An empty
+    body needs neither -- there is nothing there -- so that is the only
+    absorption this reader asserts.
+    """
+
+    found: list[CatchHandler] = []
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "catch":
+            continue
+        scan = index + 1
+        binding: str | None = None
+        if scan < total and tokens[scan].value == "(":
+            depth = 1
+            cursor = scan + 1
+            while cursor < total and depth:
+                if tokens[cursor].value == "(":
+                    depth += 1
+                elif tokens[cursor].value == ")":
+                    depth -= 1
+                    if not depth:
+                        break
+                elif binding is None and tokens[cursor].kind == "identifier":
+                    binding = tokens[cursor].value
+                cursor += 1
+            scan = cursor + 1
+        if scan >= total or tokens[scan].value != "{":
+            continue
+        depth = 1
+        cursor = scan + 1
+        body: list[Token] = []
+        while cursor < total and depth:
+            value = tokens[cursor].value
+            if value == "{":
+                depth += 1
+            elif value == "}":
+                depth -= 1
+                if not depth:
+                    break
+            body.append(tokens[cursor])
+            cursor += 1
+
+        found.append(
+            CatchHandler(
+                line=token.line,
+                binding=binding,
+                # A `throw` inside a nested function in the body belongs to a
+                # later call, not to this handler. Separating those needs a
+                # parser, and the shallower reading errs towards calling a
+                # handler loud, which is the direction that invents nothing.
+                rethrows="throw" in {item.value for item in body},
+                # Comments are dropped by the tokenizer, so a body of only
+                # comments reads as empty here -- which is the same decision.
+                empty=not body,
+            )
+        )
+    return found
+
+
 def _throw_sites(tokens: list[Token]) -> dict[str, int]:
     """Exception types this module throws, with the line each first appears.
 
@@ -1616,6 +1701,7 @@ class TypeScriptLexicalAnalyzer:
             file_state = _module_state(file_tokens, file_declarations)
             file_env = _environment_reads(file_tokens)
             file_throws = _throw_sites(file_tokens)
+            file_catches = _catch_handlers(file_tokens)
             file_throw_messages = _throw_messages(file_tokens)
             file_object_keys = _object_keys(
                 file_tokens,
@@ -2044,6 +2130,40 @@ class TypeScriptLexicalAnalyzer:
                     "failure_surface",
                     "medium",
                     [throw_receipt.evidence_id],
+                    file_record.path,
+                )
+            if file_catches:
+                rethrowing = [item for item in file_catches if item.rethrows]
+                empty = [item for item in file_catches if item.empty]
+                catch_receipt = add_evidence(
+                    file_record.path,
+                    file_catches[0].line,
+                    file_catches[-1].line,
+                    module,
+                    "caught_exception",
+                    file_record.sha256,
+                )
+                # "Empty body" is checkable and would be wrong: every one of
+                # these in the corpus holds an explanatory comment. What is
+                # true either way is that no statement runs, so the failure is
+                # discarded -- a note about why does not change the behaviour.
+                absorbed = (
+                    f" {len(empty):,} of them run no statement at all, discarding the "
+                    "failure so execution continues as though the call had succeeded; "
+                    "a comment explaining why does not change that."
+                    if empty
+                    else ""
+                )
+                add_claim(
+                    (
+                        f"{module} catches failure in {len(file_catches):,} place(s), "
+                        f"{len(rethrowing):,} of which rethrow. What a program catches "
+                        "is where it decided a fault is survivable."
+                        f"{absorbed}"
+                    ),
+                    "caught_exception",
+                    "high" if empty else "medium",
+                    [catch_receipt.evidence_id],
                     file_record.path,
                 )
             if localhost_evidence:

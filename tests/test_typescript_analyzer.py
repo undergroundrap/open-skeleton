@@ -9,8 +9,10 @@ from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.typescript_lexical import (
+    CatchHandler,
     TypeScriptLexicalAnalyzer,
     _call_sites,
+    _catch_handlers,
     _declarations,
     _environment_reads,
     _exported_names,
@@ -708,3 +710,71 @@ class ThrownMessageTests(TestCase):
             result = analyze_snapshot(scan_repository(root))
             claim = next(item for item in result.claims if item.category == "failure_surface")
             self.assertIn('Error ("Missing vault")', claim.claim)
+
+
+class CatchHandlerTests(TestCase):
+    """What a catch block can be said to do, without a parser.
+
+    A first version called a handler "silent" when it neither rethrew nor
+    logged. Real interface code answers a failure with `setError("...")`,
+    showing the user a message -- a stronger report than a console line -- and
+    the rule labelled nine such handlers in one file as continuing silently.
+    The claim accused working code of swallowing errors, so the judgement was
+    dropped and only what is checkable is asserted.
+    """
+
+    def _handlers(self, source: str) -> list[CatchHandler]:
+        return _catch_handlers(_tokens(source))
+
+    def test_a_handler_is_found_with_its_binding(self) -> None:
+        handlers = self._handlers("try { a(); } catch (problem) { b(); }")
+        self.assertEqual(len(handlers), 1)
+        self.assertEqual(handlers[0].binding, "problem")
+
+    def test_an_optional_binding_may_be_absent(self) -> None:
+        handlers = self._handlers("try { a(); } catch { b(); }")
+        self.assertEqual(len(handlers), 1)
+        self.assertIsNone(handlers[0].binding)
+
+    def test_a_rethrow_is_recorded(self) -> None:
+        self.assertTrue(self._handlers("try { a(); } catch (e) { throw e; }")[0].rethrows)
+
+    def test_a_body_that_runs_no_statement_is_recorded_as_such(self) -> None:
+        self.assertTrue(self._handlers("try { a(); } catch { }")[0].empty)
+
+    def test_a_comment_only_body_still_runs_no_statement(self) -> None:
+        # The tokenizer drops comments, and a note about why the failure is
+        # discarded does not change that it is discarded.
+        handlers = self._handlers("try { a(); } catch (e) { /* defaults are fine */ }")
+        self.assertTrue(handlers[0].empty)
+
+    def test_a_handler_that_reports_through_the_interface_is_not_called_empty(self) -> None:
+        # This is the case the first version got wrong.
+        handlers = self._handlers('try { a(); } catch { setError("could not save"); }')
+        self.assertFalse(handlers[0].empty)
+        self.assertFalse(handlers[0].rethrows)
+
+    def test_nested_braces_do_not_end_the_body_early(self) -> None:
+        handlers = self._handlers("try { a(); } catch (e) { if (x) { throw e; } }")
+        self.assertTrue(handlers[0].rethrows)
+        self.assertFalse(handlers[0].empty)
+
+    def test_the_claim_counts_handlers_and_names_the_discarded_ones(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "app.ts").write_text(
+                "export function go() {\n"
+                "  try { a(); } catch { }\n"
+                "  try { b(); } catch (e) { throw e; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+            claim = next(
+                item
+                for item in result.claims
+                if item.category == "caught_exception" and item.produced_by.startswith("typescript")
+            )
+            self.assertIn("2 place(s)", claim.claim)
+            self.assertIn("1 of which rethrow", claim.claim)
+            self.assertIn("run no statement at all", claim.claim)
