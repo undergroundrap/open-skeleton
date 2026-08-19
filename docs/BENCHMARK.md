@@ -82,6 +82,41 @@ are reported separately and only the first is treated as a target.
 python benchmarks/comparison/run_fact_coverage.py --baseline <tech_spec.md> --candidate <out>/spec.md <out>/spec.json <out>/spec.index.json --repo <repository> --output-dir <dir>
 ```
 
+## Structural coverage, and the same measurement mistake twice
+
+The structure diff pairs a baseline section with a candidate section by the
+words in their titles. That answers whether two documents *label* a subject
+the same way, which is not what a reader means by "does it cover this".
+
+A baseline section headed "Endpoint Catalog and Response Conventions" shares
+no title word with this engine's "HTTP Interface", and was scored an untreated
+subject across 1,333 lines of endpoint tables. This is the same error as
+measuring fact coverage against one artifact: comparing labels rather than
+content, and reading the difference as a gap.
+
+The report now asks both questions and prints both answers.
+
+| Question | Sections | Share |
+|---|---:|---:|
+| Baseline heading matched by a candidate heading | 181 of 640 | 28.3% |
+| Baseline section's distinctive terms present in the candidate | 338 of 496 | 68.1% |
+
+A term most baseline sections already use cannot identify a subject, so only
+terms rare across the baseline count. A further 144 sections carry fewer than
+three distinctive names and are argued almost entirely in prose; they are
+reported and not scored, because a subject with nothing nameable in it is not
+evidence in either direction and counting it as a miss would repeat the
+title-matching error pointing the other way.
+
+The second measure discriminates rather than flattering. Held against
+sections whose status is known independently, it returns *covered* for the
+endpoint catalog and for repository file inventories, and *absent* for Alert
+Threshold Matrices, Runbooks and Log Aggregation -- which is correct, and
+permanent. Nothing static can evidence an alert threshold that exists in no
+code, so that content is a deliberate loss rather than a gap to close, and
+the measure must keep saying so. `tests/test_structure_diff.py` holds it to
+exactly that.
+
 ## Limits
 
 This is a useful regression fixture, not evidence of universal superiority. It was authored and adjudicated with repository-author knowledge, not audited by an external laboratory. More languages, architectures, repository sizes, and independent reviewers are required before broad claims.
