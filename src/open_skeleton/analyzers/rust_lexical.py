@@ -993,6 +993,89 @@ def _attribute_spans(tokens: list[Token]) -> list[tuple[int, int]]:
     return spans
 
 
+def _declared_clap_flags(tokens: list[Token]) -> dict[str, int]:
+    """Long options a clap derive declares, with the line that declares each.
+
+    A command line is the whole interface of a tool, and this reader knew
+    Python's and not Rust's, so `command_line_interface` fired for exactly one
+    repository -- which is the shape of an analyzer written against one
+    codebase rather than a property of the world.
+
+    Two forms appear. `#[arg(long = "name")]` states the flag, and it is
+    quoted as written. Bare `#[arg(long)]` does not: clap derives the flag
+    from the field beneath it, lowercasing and replacing `_` with `-`, so
+    `github_repo` becomes `--github-repo`.
+
+    That derivation is only safe while the default naming holds. `rename_all`
+    changes it for the whole container, and a flag printed under the wrong
+    rule is one nobody can type -- worse than an omission, because somebody
+    will type what the document says. Where the file mentions `rename_all` at
+    all, bare `long` is left unread and only explicit names are reported.
+    """
+
+    renamed = any(token.value == "rename_all" for token in tokens)
+    spans = _attribute_spans(tokens)
+    found: dict[str, int] = {}
+
+    for start, end in spans:
+        span = tokens[start:end]
+        if not ({"arg", "clap"} & {token.value for token in span}):
+            continue
+        for offset, token in enumerate(span):
+            if token.value != "long":
+                continue
+            line = token.line
+            following = span[offset + 1 : offset + 3]
+            if following and following[0].value == "=":
+                literal = following[1] if len(following) > 1 else None
+                if literal is not None and literal.kind == "string":
+                    name = literal.value.strip('"').strip()
+                    if name:
+                        flag = f"--{name}"
+                        found[flag] = min(found.get(flag, line), line)
+                continue
+            if renamed:
+                # The container renames its fields; deriving would be a guess.
+                continue
+            field = _field_after(tokens, end, spans)
+            if field:
+                flag = f"--{field.replace('_', '-').lower()}"
+                found[flag] = min(found.get(flag, line), line)
+    return found
+
+
+def _field_after(tokens: list[Token], end: int, spans: list[tuple[int, int]]) -> str | None:
+    """The struct field name an attribute sits above, if the next item is one.
+
+    Attributes stack, so the search steps over any further `#[...]` before
+    looking. It stops at the first item that is not a field: an attribute
+    above a function or a type is not describing one, and reading it anyway is
+    how a reader starts naming things that do not exist.
+    """
+
+    by_start = {span[0]: span[1] for span in spans}
+    index = end
+    total = len(tokens)
+    while index < total:
+        token = tokens[index]
+        if token.value == "#":
+            following = by_start.get(index)
+            if following is None:
+                return None
+            index = following
+            continue
+        if token.value == "pub":
+            index += 1
+            continue
+        if token.kind == "identifier":
+            nxt = index + 1
+            if nxt < total and tokens[nxt].value == ":":
+                return str(token.value)
+            return None
+        return None
+    return None
+
+
 def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
     """Names invoked as calls, as `(callee, line)`.
 
@@ -1284,6 +1367,11 @@ class RustLexicalAnalyzer:
             module = module_names[file_record.path]
             tokens = tokenize(source)
             file_names = _name_index(tokens)
+            file_flags = _declared_clap_flags(tokens)
+            # `--github-repo` is not a Rust identifier, so the name walk skips
+            # it and a reader searching for a flag finds nothing.
+            for flag, flag_line in file_flags.items():
+                file_names[flag] = min(file_names.get(flag, flag_line), flag_line)
             file_statics = _mutable_statics(tokens)
             file_impls = _impl_methods(tokens)
             file_errors = _error_surface(tokens)
@@ -1296,6 +1384,36 @@ class RustLexicalAnalyzer:
             declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
             file_constants = _constants(tokens)
             file_structs = _struct_fields(tokens)
+            if file_flags and describes_the_product(file_record.role):
+                first_flag_line = min(file_flags.values())
+                flag_excerpt = (
+                    lines[first_flag_line - 1] if 0 < first_flag_line <= len(lines) else ""
+                )
+                named = ", ".join(f"`{flag}`" for flag in sorted(file_flags)[:12])
+                more = f" and {len(file_flags) - 12:,} more" if len(file_flags) > 12 else ""
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=(
+                            f"{file_record.path} declares a command-line interface -- "
+                            f"{len(file_flags):,} option(s): {named}{more}. These are the "
+                            "words a user types; a `fn main` says only that the crate can "
+                            "be started."
+                        ),
+                        category="command_line_interface",
+                        supporting=(
+                            receipt(
+                                file_record.path,
+                                first_flag_line,
+                                "command_line_interface",
+                                module,
+                                flag_excerpt,
+                            ).evidence_id,
+                        ),
+                        path=file_record.path,
+                    )
+                )
             module_symbol_id = stable_id(
                 "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
             )

@@ -11,6 +11,7 @@ from open_skeleton.analyzers.rust_lexical import (
     RustLexicalAnalyzer,
     _call_sites,
     _constants,
+    _declared_clap_flags,
     _declared_items,
     _error_surface,
     _impl_methods,
@@ -805,3 +806,77 @@ class TestRoleErrorSurfaceTests(TestCase):
 
     def test_an_integration_test_does_not(self) -> None:
         self.assertNotIn("error_surface", self._categories("tests/compat.rs"))
+
+
+class ClapCommandLineTests(TestCase):
+    """A command line is a tool's whole interface, in any language.
+
+    Reading Python's and not Rust's made `command_line_interface` fire for
+    exactly one repository, which is the shape of an analyzer written against
+    one codebase rather than a property of the world.
+    """
+
+    def _flags(self, source: str) -> dict[str, int]:
+        return _declared_clap_flags(tokenize(source))
+
+    DERIVED = """\
+#[derive(Parser)]
+pub struct Cli {
+    /// Repository root.
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+
+    #[arg(long)]
+    pub github_repo: String,
+
+    #[arg(long = "listen-port")]
+    pub port: u16,
+}
+"""
+
+    def test_a_bare_long_derives_the_flag_from_its_field(self) -> None:
+        flags = self._flags(self.DERIVED)
+        self.assertIn("--repo", flags)
+
+    def test_an_underscore_becomes_a_hyphen_the_way_clap_does_it(self) -> None:
+        self.assertIn("--github-repo", self._flags(self.DERIVED))
+
+    def test_an_explicit_name_is_quoted_as_written(self) -> None:
+        flags = self._flags(self.DERIVED)
+        self.assertIn("--listen-port", flags)
+        self.assertNotIn("--port", flags)
+
+    def test_rename_all_stops_the_derivation_rather_than_guessing(self) -> None:
+        # A flag printed under the wrong naming rule is one nobody can type,
+        # which is worse than an omission.
+        source = self.DERIVED.replace(
+            "#[derive(Parser)]", '#[derive(Parser)]\n#[command(rename_all = "snake_case")]'
+        )
+        flags = self._flags(source)
+        self.assertNotIn("--github-repo", flags)
+        self.assertIn("--listen-port", flags)
+
+    def test_an_attribute_above_a_function_names_no_field(self) -> None:
+        self.assertEqual(self._flags("#[arg(long)]\npub fn run() {}\n"), {})
+
+    def test_a_crate_without_clap_declares_nothing(self) -> None:
+        self.assertEqual(self._flags("pub fn main() {}\n"), {})
+
+    def test_the_flag_is_recorded_with_its_line(self) -> None:
+        flags = self._flags(self.DERIVED)
+        self.assertEqual(flags["--repo"], 4)
+
+    def test_the_claim_reaches_the_pipeline_and_the_concordance(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "src").mkdir()
+            (root / "src" / "config.rs").write_text(self.DERIVED, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            claim = next(
+                item for item in result.claims if item.category == "command_line_interface"
+            )
+            self.assertIn("`--github-repo`", claim.claim)
+            index: dict[str, int] = {}
+            for symbol in result.symbols:
+                index.update(symbol.metadata.get("name_index", {}))
+            self.assertIn("--github-repo", index)
