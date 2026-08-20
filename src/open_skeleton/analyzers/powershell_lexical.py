@@ -13,9 +13,14 @@ than about the repository.
 The three facts worth recovering are the ones every other language analyzer
 here already reports. A script's `param()` block is its command line, exactly
 as `add_argument` is Python's and `#[arg(long)]` is Rust's, so it produces the
-same `command_line_interface` claim rather than a new category. A `function`
-is public surface. A `throw` is what can come out of a call that is not a
-value.
+same `command_line_interface` claim rather than a new category. A `throw` is
+what can come out of a call that is not a value.
+
+Functions are public surface only where the file publishes them -- a `.psm1`,
+or anything calling `Export-ModuleMember`. A `.ps1` is run rather than
+imported, and its functions are the steps it runs. Every function is indexed
+and searchable either way; what changes is whether the document calls it a
+contract.
 
 This is lexical, and says so. PowerShell's grammar is large -- a full parse
 would have to handle expandable strings, subexpressions, splatting and
@@ -224,6 +229,31 @@ def throw_sites(source: str, clean: str) -> list[tuple[int, str | None]]:
     return found
 
 
+EXPORT_MEMBER = re.compile(r"(?i)\bExport-ModuleMember\b")
+
+
+def publishes_a_module(path: str, clean: str) -> bool:
+    """Whether this file offers its functions to anything else.
+
+    A `.psm1` is a module: another script imports it and calls what it
+    exports. A `.ps1` is a script: it is run, and its functions are the steps
+    it runs, not a surface anybody is meant to reach.
+
+    Reporting the second as public API was true and misleading, which is the
+    pair this engine's own audit exists to catch. It flagged
+    `tools/test_workorder_status_boundary.ps1` -- a test harness -- as
+    publishing thirty functions, on the strength of dot-sourcing being
+    possible. Nothing dot-sources it. Across this corpus the claim was wrong
+    every time it fired: twenty `.ps1` files, no `.psm1`, and no
+    `Export-ModuleMember` anywhere.
+
+    A script that calls `Export-ModuleMember` is deliberately offering a
+    surface and counts as a module whatever it is named.
+    """
+
+    return path.casefold().endswith(".psm1") or bool(EXPORT_MEMBER.search(clean))
+
+
 def _excerpt(lines: list[str], line: int, fallback: str) -> str:
     """The source line a receipt hashes, or the path when the line is gone."""
 
@@ -390,7 +420,7 @@ class PowerShellLexicalAnalyzer:
                     file_record.path,
                 )
 
-            if functions:
+            if functions and publishes_a_module(file_record.path, clean):
                 first_line = min(functions.values())
                 named = ", ".join(f"`{name}`" for name in sorted(functions)[:MAX_NAMED])
                 more = (
@@ -400,9 +430,9 @@ class PowerShellLexicalAnalyzer:
                 )
                 claim(
                     (
-                        f"{file_record.path} defines {len(functions):,} function(s): "
-                        f"{named}{more}. PowerShell dot-sourcing makes every one of them "
-                        "callable by any script that loads this file."
+                        f"{file_record.path} publishes {len(functions):,} function(s): "
+                        f"{named}{more}. This file is a module, so those names are what "
+                        "another script imports and calls."
                     ),
                     "public_api",
                     "medium",

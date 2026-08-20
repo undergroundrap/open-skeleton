@@ -1437,7 +1437,12 @@ class RustLexicalAnalyzer:
                 )
             )
 
-            if file_public:
+            # A `pub` item in a test file is public to the suite, not to a
+            # consumer of the crate, and reporting it as the crate's surface
+            # says a caller can depend on something no caller can reach. The
+            # `fn main` claim above already applies this rule; this one did
+            # not, and the engine's own audit flagged the result.
+            if file_public and describes_the_product(file_record.role):
                 names = sorted({name for _, name, _ in file_public})
                 shown = ", ".join(names[:12])
                 remainder = len(names) - min(len(names), 12)

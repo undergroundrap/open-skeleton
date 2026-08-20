@@ -23,6 +23,7 @@ from open_skeleton.analyzers.powershell_lexical import (
     _blank_noise,
     declared_functions,
     parameter_blocks,
+    publishes_a_module,
     throw_sites,
 )
 from open_skeleton.scanner import scan_repository
@@ -119,11 +120,26 @@ class PowerShellPipelineTests(TestCase):
             result = analyze_snapshot(scan_repository(root))
             return {item.category: item.claim for item in result.claims}
 
-    def test_the_three_facts_reach_the_pipeline(self) -> None:
+    def test_the_facts_a_script_states_reach_the_pipeline(self) -> None:
         found = self._analyze("build.ps1", SCRIPT)
         self.assertIn("`-EvidenceTier`", found["command_line_interface"])
-        self.assertIn("`Invoke-Gate`", found["public_api"])
         self.assertIn("throws in 2 place(s)", found["failure_surface"])
+
+    def test_a_script_does_not_publish_a_public_surface(self) -> None:
+        # The engine's own audit flagged this: a test harness was reported as
+        # publishing thirty functions because dot-sourcing is possible.
+        # Nothing dot-sources it, and across this corpus the claim was wrong
+        # every time it fired -- twenty `.ps1` files and no module anywhere.
+        self.assertNotIn("public_api", self._analyze("build.ps1", SCRIPT))
+
+    def test_a_module_does_publish_one(self) -> None:
+        found = self._analyze("Tools.psm1", SCRIPT)
+        self.assertIn("`Invoke-Gate`", found["public_api"])
+        self.assertIn("This file is a module", found["public_api"])
+
+    def test_an_explicit_export_makes_a_script_a_module(self) -> None:
+        body = SCRIPT + "\nExport-ModuleMember -Function Invoke-Gate\n"
+        self.assertIn("public_api", self._analyze("build.ps1", body))
 
     def test_the_command_line_claim_matches_the_other_languages(self) -> None:
         # The same category Python's argparse and Rust's clap produce, so a
@@ -135,6 +151,11 @@ class PowerShellPipelineTests(TestCase):
         found = self._analyze("tests/helper.ps1", SCRIPT)
         self.assertNotIn("command_line_interface", found)
         self.assertNotIn("public_api", found)
+
+    def test_module_detection_reads_the_suffix_and_the_export(self) -> None:
+        self.assertTrue(publishes_a_module("Tools.psm1", ""))
+        self.assertFalse(publishes_a_module("build.ps1", "function Go {}"))
+        self.assertTrue(publishes_a_module("build.ps1", "Export-ModuleMember -Function Go"))
 
     def test_coverage_counts_every_eligible_file(self) -> None:
         with TemporaryDirectory() as temporary:

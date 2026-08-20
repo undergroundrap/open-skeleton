@@ -880,3 +880,30 @@ pub struct Cli {
             for symbol in result.symbols:
                 index.update(symbol.metadata.get("name_index", {}))
             self.assertIn("--github-repo", index)
+
+
+class PublicSurfaceRoleTests(TestCase):
+    """A `pub` item in a test file is public to the suite, not to a consumer.
+
+    The engine's own audit flagged `test_skeletons` as declaring the crate's
+    public surface. Reporting it says a caller can depend on something no
+    caller can reach, and the `fn main` claim beside it already applied this
+    rule.
+    """
+
+    SOURCE = "pub fn program_to_test_skeletons() {}\n"
+
+    def _categories(self, path: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(self.SOURCE, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+            return {item.category for item in result.claims}
+
+    def test_a_library_file_declares_public_surface(self) -> None:
+        self.assertIn("public_api", self._categories("src/lib.rs"))
+
+    def test_a_test_file_does_not(self) -> None:
+        self.assertNotIn("public_api", self._categories("tests/skeletons.rs"))
