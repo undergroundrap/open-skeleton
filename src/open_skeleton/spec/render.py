@@ -1075,16 +1075,22 @@ def _executive_summary(document: SpecDocument) -> list[str]:
                 " Every eligible file parsed, so these absences are bounded by what the "
                 "analyzers can express, not by anything left unread."
             )
-        if document.unread_languages:
-            named = ", ".join(
-                f"{language} ({count:,})" for language, count in document.unread_languages[:4]
-            )
-            beyond = len(document.unread_languages) - 4
+        # A language an analyzer declared eligible and then did not parse is
+        # already named above. Repeating it here said the same thing twice in
+        # different words, which reads as two separate shortfalls.
+        uncovered = [
+            (language, count)
+            for language, count in document.unread_languages
+            if language not in set(missed_languages)
+        ]
+        if uncovered:
+            named = ", ".join(f"{language} ({count:,})" for language, count in uncovered[:4])
+            beyond = len(uncovered) - MAX_UNREAD_LANGUAGES
             if beyond > 0:
                 named += f", plus {beyond:,} other language(s)"
             grounding += (
-                f" Separately, no analyzer read any file written in {named}, so an "
-                "absence that would have been evidenced there could not have been found."
+                f" Separately, no analyzer is equipped to read {named}, so an absence "
+                "that would have been evidenced there could not have been found."
             )
         lines.append(
             f"{ABSENCE_HEADING}\n\n"

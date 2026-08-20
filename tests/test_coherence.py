@@ -373,6 +373,26 @@ class UnreadLanguageTests(TestCase):
             (),
         )
 
+    def test_an_eligible_but_unparsed_language_is_not_reported_twice(self) -> None:
+        """Two shortfalls with one cause read as two causes.
+
+        A language an analyzer declares eligible and then does not parse is
+        already named by the existing check. Naming it again as unread said
+        the same thing twice in different words.
+        """
+
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            (root / "example.hum").write_text("let x = 1\n", encoding="utf-8")
+            markdown = render_spec_markdown(_document(root, workspace / "state"))
+            self.assertIn("eligible file(s)", markdown)
+            equipped = markdown.split("no analyzer is equipped to read", 1)
+            if len(equipped) > 1:
+                self.assertNotIn("Hum", equipped[1].split(".", 1)[0])
+
     def test_the_document_says_so_where_it_discusses_absence(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -383,4 +403,4 @@ class UnreadLanguageTests(TestCase):
             document = _document(root, workspace / "state")
             self.assertIn("Shell", dict(document.unread_languages))
             markdown = render_spec_markdown(document)
-            self.assertIn("no analyzer read any file written in", markdown)
+            self.assertIn("no analyzer is equipped to read", markdown)
