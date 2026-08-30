@@ -411,6 +411,15 @@ class ExportSurfaceTests(TestCase):
     `export` is more explicit than the `__all__` list it corresponds to.
     """
 
+    def _claim_categories(self, path: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("export function run() {}\n", encoding="utf-8")
+            result = TypeScriptLexicalAnalyzer().analyze(scan_repository(root))
+        return {claim.category for claim in result.claims}
+
     def test_an_exported_function_is_public_and_a_helper_is_not(self) -> None:
         found = _exported_names(_tokens("export function addDays(d, n) {}\nfunction helper() {}\n"))
         self.assertEqual(found, ["addDays"])
@@ -439,6 +448,14 @@ class ExportSurfaceTests(TestCase):
     def test_types_and_constants_count_as_surface(self) -> None:
         found = _exported_names(_tokens("export const X = 1;\nexport interface Opts {}\n"))
         self.assertEqual(found, ["X", "Opts"])
+
+    def test_an_exported_product_module_publishes_a_contract(self) -> None:
+        self.assertIn("public_api", self._claim_categories("src/api.ts"))
+
+    def test_a_test_or_example_export_is_not_the_product_contract(self) -> None:
+        for path in ("tests/api.test.ts", "examples/api.ts"):
+            with self.subTest(path=path):
+                self.assertNotIn("public_api", self._claim_categories(path))
 
 
 class ExportAndTunableEdgeTests(TestCase):

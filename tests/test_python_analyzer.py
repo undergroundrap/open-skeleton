@@ -1054,10 +1054,12 @@ class LibrarySurfaceTests(TestCase):
     Python that any repository may contain.
     """
 
-    def _categories(self, source: str) -> dict[str, str]:
+    def _categories(self, source: str, path: str = "sample.py") -> dict[str, str]:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "sample.py").write_text(source, encoding="utf-8")
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source, encoding="utf-8")
             result = analyze_snapshot(scan_repository(root))
         return {claim.category: claim.claim for claim in result.claims}
 
@@ -1074,6 +1076,10 @@ class LibrarySurfaceTests(TestCase):
     def test_a_computed_all_is_not_reported_as_a_surface(self) -> None:
         # `__all__ = [*base.__all__, "extra"]` has no literal membership.
         self.assertNotIn("public_api", self._categories("__all__ = [*base.__all__]\n"))
+
+    def test_an_all_declaration_in_a_test_is_not_the_product_surface(self) -> None:
+        found = self._categories('__all__ = ["fixture"]\n', "tests/test_fixture.py")
+        self.assertNotIn("public_api", found)
 
     def test_a_deprecation_warning_is_recorded(self) -> None:
         source = "import warnings\n\n\ndef old():\n    warnings.warn('x', DeprecationWarning)\n"

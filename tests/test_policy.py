@@ -5,7 +5,13 @@
 from pathlib import Path
 from unittest import TestCase
 
-from open_skeleton.policy import ScanPolicy, classify_language, classify_role
+from open_skeleton.policy import (
+    ScanPolicy,
+    classify_language,
+    classify_role,
+    describes_the_product,
+    exercises_the_product,
+)
 
 
 class ScanPolicyTests(TestCase):
@@ -67,6 +73,13 @@ class TestRoleConventionTests(TestCase):
             "demo/walkthrough.ts",
         ):
             self.assertEqual(classify_role(Path(path)), "harness", path)
+
+    def test_product_and_exercising_roles_are_not_logical_inverses(self) -> None:
+        self.assertTrue(describes_the_product("source"))
+        self.assertTrue(exercises_the_product("test"))
+        self.assertTrue(exercises_the_product("harness"))
+        self.assertFalse(exercises_the_product("manifest"))
+        self.assertFalse(describes_the_product("manifest"))
 
     def test_a_hand_run_script_stays_source(self) -> None:
         # Deliberate. A script under `scripts/` is frequently the real quality

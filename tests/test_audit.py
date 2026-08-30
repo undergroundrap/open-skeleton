@@ -172,7 +172,14 @@ class OutboundHttpFramingTests(TestCase):
         self.assertIn("test-only-evidence", self._checks("storage", "harness"))
         self.assertIn("test-only-evidence", self._checks("http_client_inventory", "harness"))
 
-    def test_a_role_that_is_neither_is_still_not_the_product(self) -> None:
-        # The predicate asks what the product is rather than listing what it
-        # is not, so a role added later needs no edit here.
-        self.assertIn("test-only-evidence", self._checks("storage", "documentation"))
+    def test_a_manifest_is_not_misnamed_as_a_suite_or_harness(self) -> None:
+        # `pyproject.toml` is not source code, but its console-script table is
+        # exactly where a Python package publishes the commands it installs.
+        # Calling that test-only evidence makes the audit itself misleading.
+        self.assertNotIn("test-only-evidence", self._checks("application_entry", "manifest"))
+
+    def test_an_unclassified_role_is_not_misnamed_as_test_evidence(self) -> None:
+        # Unknown provenance may deserve a different audit finding. It does
+        # not justify the specific statement that a suite or harness emitted
+        # the claim.
+        self.assertNotIn("test-only-evidence", self._checks("storage", "documentation"))

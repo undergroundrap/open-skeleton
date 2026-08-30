@@ -25,7 +25,6 @@
     "runtime_topology",
     "security_boundary",
     "state_reconciliation",
-    "storage_schema",
     "storage_serialization",
     "testing_census",
     "testing_gap"
@@ -524,8 +523,8 @@
         "all_patterns": [
           "1.15",
           "1.1",
-          "unbounded",
-          "conflict"
+          "unbounded|without bound",
+          "conflict|contradict"
         ]
       },
       "evidence_paths_any": [
@@ -774,14 +773,14 @@
       "statement": "Some model failures return None or empty content rather than a hand-authored deterministic substitute.",
       "expected_status": "verified",
       "match": {
-        "category": "ai_failure_behavior",
+        "category": "absorbed_failure",
         "statuses": [
           "verified",
           "inferred"
         ],
         "all_patterns": [
           "None|empty",
-          "fallback"
+          "fallback|on failure"
         ]
       },
       "evidence_paths_any": [

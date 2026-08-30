@@ -9,10 +9,26 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from open_skeleton.benchmark import run_benchmark
+from open_skeleton.benchmark import _claim_matches, _load_gold, run_benchmark
+from open_skeleton.models import ClaimRecord
 
 
 class BenchmarkTests(TestCase):
+    def _claim(self, text: str, category: str, status: str) -> ClaimRecord:
+        return ClaimRecord(
+            claim_id="claim",
+            snapshot_id="snapshot",
+            claim=text,
+            category=category,
+            status=status,
+            confidence=1.0,
+            importance="high",
+            produced_by="test",
+            created_at="now",
+            supporting_evidence=("evidence",),
+            contradicting_evidence=("contradiction",) if status == "conflict" else (),
+        )
+
     def test_scores_receipted_claims_and_writes_reproducible_artifacts(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -69,3 +85,44 @@ class BenchmarkTests(TestCase):
 
             with self.assertRaisesRegex(ValueError, "Unsupported benchmark schema"):
                 run_benchmark(repository, gold, workspace / "output")
+
+    def test_pinned_matchers_follow_generalized_claim_categories(self) -> None:
+        # Both facts remained in the output while their category or wording
+        # became more general. A stale matcher reported them as regressions
+        # even though the current claims and receipts carried the exact value.
+        gold = _load_gold(
+            Path(__file__).parents[1] / "benchmarks" / "single-player-ai-mud" / "gold.json"
+        )
+        specifications = {item["id"]: item for item in gold["claims"]}
+
+        mathematical = self._claim(
+            (
+                "Exponential bases 1.15 and 1.1 are both raised to `ascensions`, so "
+                "their ratio is (1.15/1.1)^N and grows without bound. Source comments "
+                "contradict those formulas."
+            ),
+            "mathematical_conflict",
+            "conflict",
+        )
+        absorbed = self._claim(
+            (
+                "backend.main.summarize_chat catches around `ai_client.generate_content` "
+                "and returns empty string on failure, so a caller cannot tell it failed."
+            ),
+            "absorbed_failure",
+            "verified",
+        )
+
+        self.assertTrue(
+            _claim_matches(mathematical, specifications["unbounded-relative-scaling-conflict"])
+        )
+        self.assertTrue(_claim_matches(absorbed, specifications["partial-ai-fallbacks"]))
+
+    def test_precision_scope_contains_only_exhaustively_adjudicated_categories(self) -> None:
+        # The gold set names two table-creation facts. The SQL reader now also
+        # emits three correct schema-detail claims, so treating every unmatched
+        # storage_schema claim as incorrect makes added truth lower precision.
+        gold = _load_gold(
+            Path(__file__).parents[1] / "benchmarks" / "single-player-ai-mud" / "gold.json"
+        )
+        self.assertNotIn("storage_schema", gold["precision_scope_categories"])

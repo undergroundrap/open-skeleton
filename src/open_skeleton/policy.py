@@ -306,6 +306,12 @@ def classify_role(path: Path) -> str:
 # describes it. Used where a claim asserts a property *of the product*, so
 # that a fact true of a benchmark is not filed as a fact about the program.
 PRODUCT_ROLES = frozenset({"source"})
+# Roles whose code exists to exercise or demonstrate the system rather than
+# form part of the system itself. This is deliberately not the inverse of
+# `PRODUCT_ROLES`: a manifest or workflow is neither product source nor a test
+# harness, and calling one "test-only evidence" is as misleading as calling a
+# benchmark the application.
+EXERCISING_ROLES = frozenset({"test", "harness"})
 
 
 def describes_the_product(role: str | None) -> bool:
@@ -319,3 +325,9 @@ def describes_the_product(role: str | None) -> bool:
     """
 
     return str(role or "") in PRODUCT_ROLES
+
+
+def exercises_the_product(role: str | None) -> bool:
+    """Whether a file runs against or demonstrates the system under review."""
+
+    return str(role or "") in EXERCISING_ROLES

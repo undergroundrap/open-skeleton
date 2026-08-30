@@ -1736,7 +1736,11 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         value = node.value
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         names = [name for target in targets for name in _assigned_names(target)]
-        if "__all__" in names and isinstance(value, (ast.List, ast.Tuple)):
+        if (
+            "__all__" in names
+            and isinstance(value, (ast.List, ast.Tuple))
+            and describes_the_product(getattr(self.file_record, "role", None))
+        ):
             exported = tuple(
                 item.value
                 for item in value.elts

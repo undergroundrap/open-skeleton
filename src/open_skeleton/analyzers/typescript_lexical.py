@@ -24,6 +24,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import describes_the_product
 
 ANALYZER_NAME = "typescript-lexical"
 ANALYZER_VERSION = "typescript-lexical/v1"
@@ -1982,7 +1983,11 @@ class TypeScriptLexicalAnalyzer:
                     )
                     test_evidence.append(receipt.evidence_id)
 
-            if file_exports:
+            # An export in a test or example is public to that harness, not a
+            # contract the analyzed product publishes. Symbols and import
+            # edges remain available for test tracing; only the product-
+            # surface claim is withheld.
+            if file_exports and describes_the_product(file_record.role):
                 surface = add_evidence(
                     file_record.path, 1, 1, module, "public_api", file_record.sha256
                 )

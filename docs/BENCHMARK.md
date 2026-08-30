@@ -22,6 +22,16 @@ The gold set contains 33 source-grounded material claims covering API/client cou
 
 Baseline `hit`, `partial`, `incorrect`, and `miss` outcomes are manual source/artifact adjudications. Baseline precision is limited to statements mapped into the gold set; the million-character artifact has not been exhaustively sentence-labeled.
 
+A category belongs in the scoped-precision denominator only while the gold set
+adjudicates every claim that category emits for the pinned fixture. This is a
+scope rule, not a correctness shortcut. The SQL reader later added column,
+nullability, key and schema-summary claims beside the two table-creation facts
+the gold set names. Those additional claims are source-correct but unadjudicated,
+so `storage_schema` is excluded from scoped precision until the full category is
+independently labeled; its two existing gold facts still count toward recall and
+evidence correctness. Treating unreviewed claims as incorrect would make an
+analyzer lose "precision" merely by adding a true, receipted fact.
+
 ## Reproduce
 
 ```powershell

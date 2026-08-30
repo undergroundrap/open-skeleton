@@ -936,20 +936,25 @@ class JavaLexicalAnalyzer:
                             analyzer=ANALYZER_VERSION,
                         )
                     )
-                    claims.append(
-                        self._claim(
-                            snapshot,
-                            created_at,
-                            text=(
-                                f"{qualified} declares {supertype} as a supertype, so it "
-                                "satisfies that contract wherever the supertype is expected."
-                            ),
-                            category="trait_implementation",
-                            supporting=(supporting,),
-                            path=path,
+                    if describes_the_product(file_record.role):
+                        claims.append(
+                            self._claim(
+                                snapshot,
+                                created_at,
+                                text=(
+                                    f"{qualified} declares {supertype} as a supertype, so it "
+                                    "satisfies that contract wherever the supertype is expected."
+                                ),
+                                category="trait_implementation",
+                                supporting=(supporting,),
+                                path=path,
+                            )
                         )
-                    )
-                if "public" in item.modifiers and item.kind in PUBLIC_KINDS:
+                if (
+                    describes_the_product(file_record.role)
+                    and "public" in item.modifiers
+                    and item.kind in PUBLIC_KINDS
+                ):
                     simple = item.name.rsplit(".", 1)[-1]
                     # An enum's constants and a record's components are its
                     # public surface, and both are declared outside the member

@@ -1782,6 +1782,8 @@ class RustLexicalAnalyzer:
                 )
 
             for owner, trait_name, trait_line in file_traits:
+                if not describes_the_product(file_record.role):
+                    continue
                 trait_receipt = receipt(
                     file_record.path,
                     trait_line,

@@ -283,6 +283,30 @@ class JavaClaimTests(TestCase):
         self.assertEqual(coverage.failed_files, 0)
 
 
+class JavaContractRoleTests(TestCase):
+    SOURCE = "public class Service implements Runnable { public void run() {} }\n"
+
+    def _categories(self, path: str) -> set[str]:
+        result = _analyze({path: self.SOURCE})
+        return {
+            claim.category
+            for claim in result.claims
+            if claim.produced_by.startswith("java-lexical")
+        }
+
+    def test_product_source_publishes_its_surface_and_contracts(self) -> None:
+        found = self._categories("src/Service.java")
+        self.assertIn("public_api", found)
+        self.assertIn("trait_implementation", found)
+
+    def test_test_and_example_types_are_not_product_contracts(self) -> None:
+        for path in ("tests/ServiceTest.java", "examples/Service.java"):
+            with self.subTest(path=path):
+                found = self._categories(path)
+                self.assertNotIn("public_api", found)
+                self.assertNotIn("trait_implementation", found)
+
+
 class SymbolIdentityTests(TestCase):
     """A name that repeats in one file is more than one symbol.
 

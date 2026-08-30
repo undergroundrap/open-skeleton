@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from open_skeleton.policy import describes_the_product
+from open_skeleton.policy import exercises_the_product
 
 # Claims that are a statement about the repository rather than about any file
 # in it. Their receipts are census receipts by construction, so the
@@ -211,8 +211,7 @@ def audit_claims(
             not_the_product = [
                 claim
                 for claim, paths in sourced
-                if paths
-                and not any(describes_the_product(role_by_path.get(path)) for path in paths)
+                if paths and all(exercises_the_product(role_by_path.get(path)) for path in paths)
             ]
             if not_the_product:
                 findings.append(

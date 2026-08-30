@@ -410,6 +410,14 @@ class RustErrorAndTraitTests(TestCase):
     def test_an_inherent_impl_declares_no_contract(self) -> None:
         self.assertEqual(_trait_implementations(tokenize("impl Machine { fn a() {} }\n")), [])
 
+    def test_a_product_trait_implementation_publishes_a_contract(self) -> None:
+        result = _analyze("impl Display for Machine {}\n", "lib.rs")
+        self.assertIsNotNone(_claim(result, "trait_implementation"))
+
+    def test_a_test_trait_implementation_is_not_the_product_contract(self) -> None:
+        result = _analyze("impl Display for Fixture {}\n", "test_contract.rs")
+        self.assertIsNone(_claim(result, "trait_implementation"))
+
     def test_a_macro_template_is_not_a_type(self) -> None:
         # `impl fmt::Display for $name` inside macro_rules declares nothing
         # about a type called `name`. Reporting one is a fabricated fact.
