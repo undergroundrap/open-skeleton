@@ -1,0 +1,53 @@
+{
+  "schema_version": "open-skeleton.comparison-baselines.v1",
+  "baselines": [
+    {
+      "id": "external-single-player-ai-mud-2026-08-04",
+      "provider": "External platform",
+      "label": "a user-supplied external technical-specification export",
+      "redistributed": false,
+      "artifact": {
+        "canonical_filename": "tech_spec.md",
+        "media_type": "text/markdown",
+        "bytes": 1272676,
+        "sha256": "e70f4315c0c19b669bbf8d9ed9bbf8ae46e10216caf07308d0f3afe6fdeca138"
+      },
+      "repository": {
+        "name": "SINGLE-PLAYER-AI-MUD",
+        "url": "https://github.com/undergroundrap/SINGLE-PLAYER-AI-MUD",
+        "commit": "93ebd51cb4083d2307564c265394358e53c4f5ca",
+        "revision_certainty": "author-recorded",
+        "revision_basis": "The application exercise and independently adjudicated gold fixture record this submitted revision."
+      },
+      "generation": {
+        "artifact_timestamp": "2026-08-04T04:32:14-04:00",
+        "total_time_ms": 20820000,
+        "timing_basis": "Approximate wall time recorded by the repository author from submission to export availability."
+      }
+    },
+    {
+      "id": "external-open-skeleton-2026-08-07",
+      "provider": "External platform",
+      "label": "a user-supplied external technical-specification export",
+      "redistributed": false,
+      "artifact": {
+        "canonical_filename": "tech_spec.md",
+        "media_type": "text/markdown",
+        "bytes": 1453502,
+        "sha256": "0c5d75f04335fae018216390f7a26be6e0613d5cd9c755caa9375710b21242ea"
+      },
+      "repository": {
+        "name": "open-skeleton",
+        "url": "https://github.com/undergroundrap/open-skeleton",
+        "commit": "6e52e76104885fce6b827de80d469d9d87bb4181",
+        "revision_certainty": "timestamp-inferred",
+        "revision_basis": "The local Markdown artifact is timestamped 2026-08-07T11:05:25-04:00; this was the local HEAD from 2026-08-07T04:11:52-04:00 until the next commit at 2026-08-07T12:13:43-04:00, but the artifact does not embed a commit id."
+      },
+      "generation": {
+        "artifact_timestamp": "2026-08-07T11:05:25-04:00",
+        "total_time_ms": null,
+        "timing_basis": "No reliable wall-time observation was found, so no speed ratio is claimed for this run."
+      }
+    }
+  ]
+}

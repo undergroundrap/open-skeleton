@@ -61,7 +61,8 @@ All notable changes will be documented here. This project follows Semantic Versi
 - lexical state value domains for JavaScript and TypeScript, bringing the
   diagram inventory to 83
 - `benchmarks/comparison/run_comparison.py`, which counts both documents on
-  disk rather than asserting a comparison
+  disk rather than asserting a comparison, and an exact two-entry external
+  baseline inventory that rejects the wrong artifact, revision, or dirty fixture
 - `benchmarks/comparison/run_fact_coverage.py`, which enumerates every fact a
   baseline asserts and reports which are missing by name; `--repo` separates
   facts about the analyzed code from names asserted absent from it, since

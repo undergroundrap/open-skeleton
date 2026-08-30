@@ -240,40 +240,42 @@ Provider invocation is explicit and may incur third-party cost or network activi
 
 ## Reproducible AI-MUD benchmark
 
-The included gold set pins `SINGLE-PLAYER-AI-MUD` commit `93ebd51cb4083d2307564c265394358e53c4f5ca` and 33 material claims. On the August 4, 2026 local run:
+The included gold set pins `SINGLE-PLAYER-AI-MUD` commit `93ebd51cb4083d2307564c265394358e53c4f5ca` and 34 material claims. On the August 30, 2026 local run:
 
 | System | Material recall | Scoped precision | Evidence correctness | Conflict detection |
 |---|---:|---:|---:|---:|
 | Open Skeleton | 100.0% | 100.0% | 100.0% | 100.0% |
-| Supplied commercial baseline | 89.4% | 89.4% | 95.5% | 75.0% |
+| Registered external baseline | 89.7% | 89.7% | 95.6% | 75.0% |
 
-Open Skeleton completed in about 2.7 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. The generated specification is 90 sections and roughly 58,100 words, against approximately 180,800 words for the baseline.
+Open Skeleton completed end to end in about 3.3 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. That is 0.0161% of the recorded external wall time, a baseline/candidate elapsed-time ratio of about 6,222x. The generated specification is 90 sections and roughly 50,800 words, against approximately 180,800 words for the baseline. The external timing is an author-recorded historical observation, not a same-machine rerun.
 
 **These numbers describe one author-reviewed fixture, not universal product superiority**, and the comparison is deliberately narrow. It measures whether the material findings of a long-form specification can be reproduced deterministically and cited verifiably. It does not measure breadth: the baseline artifact also contains a requirements catalog, process and state-machine diagrams, architectural decision records, and user-interface analysis that Open Skeleton does not attempt. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
 ## Head-to-head comparison
 
-`benchmarks/comparison/run_comparison.py` measures this engine against a supplied
-baseline specification of the same repository. Every figure is counted from the
-two documents on disk; the baseline artifact is not redistributed here, so supply
-your own export to reproduce it.
+`benchmarks/comparison/run_comparison.py` measures this engine against one of the
+two registered external specifications. It verifies the private export's public
+SHA-256 receipt, repository revision, and clean fixture before generating our
+candidate. The baseline artifacts are not redistributed here, so supply the
+matching export to reproduce a comparison.
 
 ```powershell
 python benchmarks\comparison\run_comparison.py `
   --repository C:\path\to\fixture `
   --baseline C:\path\to\baseline\tech_spec.md `
+  --baseline-id external-single-player-ai-mud-2026-08-04 `
   --output-dir comparison-output
 ```
 
-On `SINGLE-PLAYER-AI-MUD`, against a commercial platform's export of the same
-commit:
+On `SINGLE-PLAYER-AI-MUD`, against the registered external export of the same
+author-recorded commit:
 
 | Measure | Open Skeleton | Baseline |
 |---|---:|---:|
-| Generation time | ~2.7 s | 5 h 47 m |
+| Generation time | ~3.3 s | 5 h 47 m |
 | Diagrams | 83 | 82 |
-| References carrying a line number | 437 | 375 |
-| Citations verified against source hashes | 753 | 0 |
+| References carrying a line number | 549 | 375 |
+| Citations verified against source hashes | 860 | 0 |
 | Citation integrity | 100% | not reported |
 
 The two documents do not attempt the same scope: the baseline carries a
@@ -291,6 +293,7 @@ whether this engine's output carries it.
 ```powershell
 python benchmarks\comparison\run_fact_coverage.py `
   --baseline C:\path\to\baseline\tech_spec.md `
+  --baseline-id external-single-player-ai-mud-2026-08-04 `
   --candidate spec-output\spec.md spec-output\spec.json spec-output\spec.index.json `
   --repo C:\path\to\fixture `
   --output-dir coverage-output
@@ -298,9 +301,9 @@ python benchmarks\comparison\run_fact_coverage.py `
 
 | Fact origin | Baseline asserts | Open Skeleton carries | Coverage |
 |---|---:|---:|---:|
-| Present in the repository | 4,192 | 3,585 | 85.5% |
-| Asserted absent from it | 630 | 247 | 39.2% |
-| **All facts asserted** | **4,822** | **3,832** | **79.5%** |
+| Present in the repository | 4,192 | 4,064 | 96.9% |
+| Asserted absent from it | 630 | 273 | 43.3% |
+| **All facts asserted** | **4,822** | **4,337** | **89.9%** |
 
 A baseline names two different kinds of thing. Some are facts about the code:
 a symbol, a path, a value that exists. Others are technologies it checked for

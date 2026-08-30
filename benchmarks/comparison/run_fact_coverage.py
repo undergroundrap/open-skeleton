@@ -20,7 +20,8 @@ verifiable against source:
 * **pairings** — an identifier asserted together with a second identifier
 
     python benchmarks/comparison/run_fact_coverage.py \\
-        --baseline <tech_spec.md> --candidate <spec.md> --output-dir <dir>
+        --baseline <tech_spec.md> --baseline-id <registered baseline id> \\
+        --candidate <spec.md> --repo <repository> --output-dir <dir>
 """
 
 from __future__ import annotations
@@ -32,6 +33,14 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from run_comparison import (
+    DEFAULT_BASELINE_INVENTORY,
+    _load_baseline_record,
+    _sha256,
+    _verify_baseline_artifact,
+    _verify_repository,
+)
 
 CODE_SPAN = re.compile(r"`([^`\n]{2,80})`")
 IDENTIFIER = re.compile(r"^[A-Za-z_][\w.]*(?:\(\))?$")
@@ -221,6 +230,13 @@ def _per_artifact(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
+    parser.add_argument("--baseline-id", required=True)
+    parser.add_argument(
+        "--baseline-inventory",
+        type=Path,
+        default=DEFAULT_BASELINE_INVENTORY,
+        help="Hash-pinned baseline registry (defaults to the repository inventory).",
+    )
     parser.add_argument(
         "--candidate",
         required=True,
@@ -237,17 +253,33 @@ def main() -> int:
     parser.add_argument("--sample", type=int, default=25)
     parser.add_argument(
         "--repo",
+        required=True,
         type=Path,
         help=(
-            "The analyzed repository. When given, every baseline fact is "
-            "checked against the sources first, splitting facts about this "
-            "codebase from names the baseline asserts the absence of."
+            "The clean, pinned analyzed repository. Every baseline fact is "
+            "checked against its sources, splitting facts about this codebase "
+            "from names the baseline asserts the absence of."
         ),
     )
     args = parser.parse_args()
 
-    baseline = args.baseline.read_text(encoding="utf-8")
-    candidate = "\n".join(path.read_text(encoding="utf-8") for path in args.candidate)
+    record = _load_baseline_record(args.baseline_inventory.resolve(strict=True), args.baseline_id)
+    baseline_path = args.baseline.resolve(strict=True)
+    repository_path = args.repo.resolve(strict=True)
+    candidate_paths = [path.resolve(strict=True) for path in args.candidate]
+    baseline_receipt = _verify_baseline_artifact(baseline_path, record)
+    repository_receipt = _verify_repository(repository_path, record)
+    candidate_receipts = [
+        {
+            "bytes": path.stat().st_size,
+            "filename": path.name,
+            "sha256": _sha256(path),
+        }
+        for path in candidate_paths
+    ]
+
+    baseline = baseline_path.read_text(encoding="utf-8")
+    candidate = "\n".join(path.read_text(encoding="utf-8") for path in candidate_paths)
     haystack = candidate.casefold()
 
     symbols = _symbols(baseline)
@@ -262,13 +294,13 @@ def main() -> int:
     def pct(part: int, whole: int) -> str:
         return f"{part / whole:.1%}" if whole else "n/a"
 
-    measured = ", ".join(f"`{path.name}`" for path in args.candidate)
+    measured = ", ".join(f"`{path.name}`" for path in candidate_paths)
     # A run produces a readable document and a queryable index, and a fact in
     # the second is extracted whether or not the first mentions it. Measuring
     # one artifact and calling the remainder "not extracted" reported 74.0%
     # where the run actually carried 93.3%, so what the sentence claims now
     # depends on what was actually measured.
-    complete_run = len(args.candidate) > 1
+    complete_run = len(candidate_paths) > 1
     shortfall = (
         "What is missing is value the run did not produce."
         if complete_run
@@ -281,7 +313,9 @@ def main() -> int:
         (
             "Every distinct fact the baseline asserts, checked against "
             f"{args.candidate_label}. {shortfall}\n\n"
-            f"Measured against {measured}.\n\n"
+            f"Measured against {measured}. Registered external baseline "
+            f"`{record['id']}` and repository commit "
+            f"`{repository_receipt['commit']}` were verified first.\n\n"
         ),
         f"| Fact family | Baseline asserts | {args.candidate_label} carries | Coverage |\n",
         "|---|---:|---:|---:|\n",
@@ -296,44 +330,42 @@ def main() -> int:
         f"| **Total** | **{total:,}** | **{hits:,}** | **{pct(hits, total)}** |\n\n",
     ]
 
-    grounded_summary: dict[str, Any] = {}
-    if args.repo is not None:
-        repository = _repository_text(args.repo)
-        every = list(symbols) + list(quantities)
-        grounded = {item for item in every if _is_grounded(item, repository)}
-        asserted_absent = [item for item in every if item not in grounded]
-        missing_all = set(symbol_missing) | set(quantity_missing)
-        grounded_hits = len(grounded) - len(grounded & missing_all)
-        absent_hits = len(asserted_absent) - len(set(asserted_absent) & missing_all)
-        grounded_summary = {
-            "grounded_expected": len(grounded),
-            "grounded_covered": grounded_hits,
-            "absence_expected": len(asserted_absent),
-            "absence_covered": absent_hits,
-        }
-        lines.append(
-            "## Facts about this repository, and names asserted absent from it\n\n"
-            "A baseline names two different things. Some are facts about the "
-            "code — a symbol, a path, a value that exists. Others are "
-            "technologies it checked for and did not find, listed to record "
-            "their absence: matching those means reproducing somebody's vendor "
-            "checklist, not extracting anything from this codebase.\n\n"
-            "The split is computed by testing each fact against the repository "
-            "sources, not chosen by hand. Both rows are reported because "
-            "dropping the second one would be moving the goalposts; it is "
-            "shown separately because the two measure different things.\n\n"
-            "| Fact origin | Baseline asserts | Carried | Coverage |\n"
-            "|---|---:|---:|---:|\n"
-            f"| Present in the repository | {len(grounded):,} | {grounded_hits:,} | "
-            f"{pct(grounded_hits, len(grounded))} |\n"
-            f"| Asserted absent from it | {len(asserted_absent):,} | {absent_hits:,} | "
-            f"{pct(absent_hits, len(asserted_absent))} |\n\n"
-            "Grounding is a substring test over concatenated sources, which "
-            "over-includes: a short name that happens to occur inside a longer "
-            "word counts as present. That bias runs against the candidate, "
-            "since anything wrongly called present stays in the stricter "
-            "denominator.\n\n"
-        )
+    repository = _repository_text(repository_path)
+    every = list(symbols) + list(quantities)
+    grounded = {item for item in every if _is_grounded(item, repository)}
+    asserted_absent = [item for item in every if item not in grounded]
+    missing_all = set(symbol_missing) | set(quantity_missing)
+    grounded_hits = len(grounded) - len(grounded & missing_all)
+    absent_hits = len(asserted_absent) - len(set(asserted_absent) & missing_all)
+    grounded_summary: dict[str, Any] = {
+        "grounded_expected": len(grounded),
+        "grounded_covered": grounded_hits,
+        "absence_expected": len(asserted_absent),
+        "absence_covered": absent_hits,
+    }
+    lines.append(
+        "## Facts about this repository, and names asserted absent from it\n\n"
+        "A baseline names two different things. Some are facts about the "
+        "code — a symbol, a path, a value that exists. Others are "
+        "technologies it checked for and did not find, listed to record "
+        "their absence: matching those means reproducing somebody's vendor "
+        "checklist, not extracting anything from this codebase.\n\n"
+        "The split is computed by testing each fact against the repository "
+        "sources, not chosen by hand. Both rows are reported because "
+        "dropping the second one would be moving the goalposts; it is "
+        "shown separately because the two measure different things.\n\n"
+        "| Fact origin | Baseline asserts | Carried | Coverage |\n"
+        "|---|---:|---:|---:|\n"
+        f"| Present in the repository | {len(grounded):,} | {grounded_hits:,} | "
+        f"{pct(grounded_hits, len(grounded))} |\n"
+        f"| Asserted absent from it | {len(asserted_absent):,} | {absent_hits:,} | "
+        f"{pct(absent_hits, len(asserted_absent))} |\n\n"
+        "Grounding is a substring test over concatenated sources, which "
+        "over-includes: a short name that happens to occur inside a longer "
+        "word counts as present. That bias runs against the candidate, "
+        "since anything wrongly called present stays in the stricter "
+        "denominator.\n\n"
+    )
 
     if symbol_missing:
         counts = collections.Counter(
@@ -364,7 +396,7 @@ def main() -> int:
             lines.append(f"\n_…and {len(quantity_missing) - args.sample:,} more._\n")
         lines.append("\n")
 
-    lines.extend(_per_artifact(args.candidate, symbols, quantities, total, pct))
+    lines.extend(_per_artifact(candidate_paths, symbols, quantities, total, pct))
     lines.append(
         "## Method and its limits\n\n"
         "Facts are extracted from the baseline's own code spans, so this measures "
@@ -382,6 +414,13 @@ def main() -> int:
     (args.output_dir / "fact-coverage.json").write_text(
         json.dumps(
             {
+                "schema_version": "open-skeleton.fact-coverage.v1",
+                "baseline": {
+                    "artifact_verification": baseline_receipt,
+                    "id": record["id"],
+                },
+                "candidate_artifacts": candidate_receipts,
+                "repository_verification": repository_receipt,
                 "symbols_expected": len(symbols),
                 "symbols_covered": symbol_hits,
                 "quantities_expected": len(quantities),

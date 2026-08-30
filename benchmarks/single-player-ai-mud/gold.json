@@ -30,7 +30,7 @@
     "testing_gap"
   ],
   "baseline": {
-    "name": "Commercial baseline exported tech spec",
+    "name": "External baseline exported technical specification",
     "artifact_sha256": "e70f4315c0c19b669bbf8d9ed9bbf8ae46e10216caf07308d0f3afe6fdeca138",
     "measurements": {
       "total_time_ms": 20820000,

@@ -5,9 +5,9 @@
 - repository: `undergroundrap/SINGLE-PLAYER-AI-MUD`
 - commit: `93ebd51cb4083d2307564c265394358e53c4f5ca`
 - gold: `benchmarks/single-player-ai-mud/gold.json`
-- baseline: supplied commercial Markdown export, SHA-256 pinned in the gold file
+- baseline: registered external Markdown export, SHA-256 pinned in the gold file and baseline inventory
 
-The gold set contains 33 source-grounded material claims covering API/client counts, concentration, persistence, state ownership, security, documentation drift, dependency drift, mathematics, testing, delivery, runtime topology, AI failures, and framework behavior. Scoring uses deterministic regex/category/status matchers plus current receipt-hash validation. No LLM judge determines the score.
+The gold set contains 34 source-grounded material claims covering API/client counts, concentration, persistence, state ownership, security, documentation drift, dependency drift, mathematics, testing, delivery, runtime topology, AI failures, and framework behavior. Scoring uses deterministic regex/category/status matchers plus current receipt-hash validation. No LLM judge determines the score.
 
 ## Metrics
 
@@ -21,6 +21,26 @@ The gold set contains 33 source-grounded material claims covering API/client cou
 - output volume: characters, whitespace-delimited words, and physical lines in the concise Markdown projection
 
 Baseline `hit`, `partial`, `incorrect`, and `miss` outcomes are manual source/artifact adjudications. Baseline precision is limited to statements mapped into the gold set; the million-character artifact has not been exhaustively sentence-labeled.
+
+## Baseline identity
+
+`benchmarks/comparison/baselines.json` is the complete inventory: exactly two
+external technical-specification runs were supplied. Each export directory also
+contains a PDF, but the PDF is another rendering of its canonical Markdown and
+does not represent another run.
+
+| Registered baseline | Repository revision | Revision basis | Canonical Markdown SHA-256 | Recorded wall time |
+|---|---|---|---|---:|
+| `external-single-player-ai-mud-2026-08-04` | `93ebd51cb4083d2307564c265394358e53c4f5ca` | author-recorded | `e70f4315c0c19b669bbf8d9ed9bbf8ae46e10216caf07308d0f3afe6fdeca138` | approximately 20,820 s |
+| `external-open-skeleton-2026-08-07` | `6e52e76104885fce6b827de80d469d9d87bb4181` | timestamp-inferred | `0c5d75f04335fae018216390f7a26be6e0613d5cd9c755caa9375710b21242ea` | not reliably recorded |
+
+The Open Skeleton revision is deliberately labelled as an inference. The local
+Markdown artifact is timestamped 11:05:25 EDT, and the named commit was local
+`HEAD` from 04:11:52 until the next commit at 12:13:43, but the artifact embeds
+no commit
+identifier. The comparison runner requires that best-known clean revision and
+prints the uncertainty beside every result. It does not invent a speed ratio
+for the run whose timing was not recorded.
 
 A category belongs in the scoped-precision denominator only while the gold set
 adjudicates every claim that category emits for the pinned fixture. This is a
@@ -46,9 +66,9 @@ The command fails on a commit mismatch and writes `analysis.jsonl`, `analysis.md
 
 ## Current local result
 
-On the August 4, 2026 release-candidate run, Open Skeleton matched all 33 material claims with current receipts. It completed in 1.247 seconds, reached the first finding in 691 ms, and allocated a traced peak of 10,699,295 bytes. The concise report contained 4,086 words.
+On the August 30, 2026 pinned run, Open Skeleton matched all 34 material claims with current receipts. It completed in 3.261 seconds, reached the first finding in 1,706 ms, and allocated a traced peak of 11,521,887 bytes. The concise report contained 5,421 words.
 
-The supplied baseline artifact scored 89.4% material recall/scoped precision, 95.5% evidence correctness, and 75.0% conflict detection. It took approximately 20,820,000 ms and contained approximately 180,845 words.
+The registered AI-MUD external artifact scored 89.7% material recall/scoped precision, 95.6% evidence correctness, and 75.0% conflict detection. It took approximately 20,820,000 ms and contained approximately 180,845 words.
 
 ## Fact coverage, and the artifact you measure it against
 
@@ -68,28 +88,28 @@ loop variable beside a public function to a human buries the surface that
 matters under the noise that does not.
 
 Measured against `spec.md` alone, coverage of facts present in the repository
-is 74.0%. Measured against everything the same run produced, it is 95.9%. That
-22-point difference is not extraction; it is presentation. The report now says
+is 74.8%. Measured against everything the same run produced, it is 96.9%. That
+22.1-point difference is not extraction; it is presentation. The report now says
 which it measured, and only calls a shortfall "value the run did not produce"
 when every artifact was passed.
 
 | Repository | Present-in-repo facts | Carried | Coverage |
 |---|---:|---:|---:|
-| Reference web app (Next.js + FastAPI) | 4,244 | 4,068 | 95.9% |
-| This repository | 4,297 | 4,096 | 95.3% |
+| Reference web app (Next.js + FastAPI) | 4,192 | 4,064 | 96.9% |
+| This repository | 4,274 | 4,066 | 95.1% |
 
-Two repositories of different shape, language mix and size land within a point
+Two repositories of different shape, language mix and size land within two points
 of each other, which is the result that says something about the engine rather
 than about either codebase.
 
 The remaining category is separate and deliberately not chased. Of facts the
 baseline asserts are *absent* from the repository -- technologies it checked
-for and did not find -- a run carries 45.0%. Matching the rest means
+for and did not find -- the two runs carry 43.3% and 31.8%. Matching the rest means
 reproducing a vendor checklist rather than reading a codebase, so the two rows
 are reported separately and only the first is treated as a target.
 
 ```bash
-python benchmarks/comparison/run_fact_coverage.py --baseline <tech_spec.md> --candidate <out>/spec.md <out>/spec.json <out>/spec.index.json --repo <repository> --output-dir <dir>
+python benchmarks/comparison/run_fact_coverage.py --baseline <tech_spec.md> --baseline-id external-single-player-ai-mud-2026-08-04 --candidate <out>/spec.md <out>/spec.json <out>/spec.index.json --repo <repository> --output-dir <dir>
 ```
 
 ## Structural coverage, and the same measurement mistake twice
