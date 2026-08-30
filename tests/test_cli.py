@@ -135,3 +135,37 @@ class CliTests(TestCase):
             with redirect_stdout(StringIO()):
                 result = main(["spec", str(root), "--state-dir", str(state), "--verify", "--json"])
             self.assertEqual(result, 1)
+
+    def test_plan_synthesis_writes_parallel_jobs_without_contacting_a_model(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            output = Path(temporary) / "plan.json"
+            root.mkdir()
+            create_sample_repository(root)
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(
+                    main(["analyze", str(root), "--state-dir", str(state), "--quiet"]), 0
+                )
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = main(
+                    [
+                        "plan-synthesis",
+                        str(root),
+                        "--state-dir",
+                        str(state),
+                        "--output",
+                        str(output),
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            summary = json.loads(stdout.getvalue())
+            plan = json.loads(output.read_text(encoding="utf-8"))
+            self.assertFalse(summary["contacts_model"])
+            self.assertGreater(summary["job_count"], 0)
+            self.assertEqual(plan["job_count"], summary["job_count"])
+            self.assertTrue(all(item["parallel_safe"] for item in plan["jobs"]))

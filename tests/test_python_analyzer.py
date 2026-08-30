@@ -1007,6 +1007,67 @@ class AnalyzerContractTests(TestCase):
             self.assertTrue(checked.version, f"{analyzer!r} declares no version")
 
 
+class CollectionDrivenWorksetTests(TestCase):
+    """A private imported collection can quietly become another module's scheduler."""
+
+    def _claims(self, source: str, path: str = "worker.py") -> dict[str, str]:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(source, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return {claim.category: claim.claim for claim in result.claims}
+
+    def test_private_imported_collection_defining_a_loop_is_reported(self) -> None:
+        source = (
+            "from app.store import store\n\n"
+            "def tick():\n"
+            "    pending = list(store._cache.keys())\n"
+            "    for key in pending:\n"
+            "        process(key)\n"
+        )
+
+        found = self._claims(source)
+
+        self.assertIn("collection_driven_workset", found)
+        self.assertIn("store._cache", found["collection_driven_workset"])
+        self.assertIn("values not resident", found["collection_driven_workset"])
+
+    def test_local_private_collection_is_not_cross_module_coupling(self) -> None:
+        source = (
+            "class Worker:\n"
+            "    def tick(self):\n"
+            "        for key in self._cache.keys():\n"
+            "            process(key)\n"
+        )
+
+        self.assertNotIn("collection_driven_workset", self._claims(source))
+
+    def test_public_imported_iterable_is_an_ordinary_contract(self) -> None:
+        source = (
+            "from app.store import store\n\n"
+            "def tick():\n"
+            "    for key in store.pending_keys:\n"
+            "        process(key)\n"
+        )
+
+        self.assertNotIn("collection_driven_workset", self._claims(source))
+
+    def test_a_test_loop_does_not_describe_the_product_scheduler(self) -> None:
+        source = (
+            "from app.store import store\n\n"
+            "def test_pending():\n"
+            "    for key in store._cache:\n"
+            "        assert key\n"
+        )
+
+        found = self._claims(source, "tests/test_worker.py")
+
+        self.assertNotIn("collection_driven_workset", found)
+        self.assertIn("test_collection_driven_workset", found)
+
+
 class GlobalCounterTests(TestCase):
     """A `global` name that is not a mutable container.
 

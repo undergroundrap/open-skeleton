@@ -95,3 +95,21 @@ class ContentMatchTests(TestCase):
         self.assertEqual(len(bodies), len(self.sections))
         self.assertIn("RESPONSE_CODES", bodies[0])
         self.assertIn("LATENCY_BUDGET", bodies[1])
+
+    def test_code_fence_comments_are_not_counted_as_document_headings(self) -> None:
+        document = (
+            "# Real heading\n\n"
+            "```python\n"
+            "# Example comment\n"
+            "## Example pseudo-heading\n"
+            "```\n\n"
+            "## Second real heading\n"
+        )
+
+        sections = _sections(document)
+        bodies = _section_bodies(document)
+
+        self.assertEqual(
+            [section.title for section in sections], ["Real heading", "Second real heading"]
+        )
+        self.assertIn("Example pseudo-heading", bodies[0])

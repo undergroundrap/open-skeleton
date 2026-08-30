@@ -897,6 +897,55 @@ class EvidenceLedger:
                 ]
         return results
 
+    def claims_by_ids(
+        self,
+        snapshot_id: str,
+        claim_ids: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        """Return exact claims in caller order, including both evidence sides.
+
+        Context assembly used to read the first 5,000 claims into a lookup and
+        silently lose receipts for any search result beyond that page. Large
+        repositories are exactly where bounded context matters most, so an
+        exact-ID lookup must not depend on the claim's position in a global
+        listing.
+        """
+
+        ordered_ids = tuple(dict.fromkeys(str(item) for item in claim_ids if str(item)))
+        if not ordered_ids:
+            return []
+        if len(ordered_ids) > 500:
+            raise ValueError("Exact claim lookup accepts at most 500 IDs")
+        placeholders = ", ".join("?" for _ in ordered_ids)
+        with self._session() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT claim_id, snapshot_id, claim, category, status, confidence,
+                       importance, produced_by, created_at, verified_at
+                FROM claims
+                WHERE snapshot_id = ? AND claim_id IN ({placeholders})
+                """,
+                (snapshot_id, *ordered_ids),
+            ).fetchall()
+            by_id = {str(row["claim_id"]): dict(row) for row in rows}
+            for claim_id, result in by_id.items():
+                evidence_rows = connection.execute(
+                    """
+                    SELECT evidence_id, relationship FROM claim_evidence
+                    WHERE claim_id = ? ORDER BY relationship, evidence_id
+                    """,
+                    (claim_id,),
+                ).fetchall()
+                result["supporting_evidence"] = [
+                    row["evidence_id"] for row in evidence_rows if row["relationship"] == "supports"
+                ]
+                result["contradicting_evidence"] = [
+                    row["evidence_id"]
+                    for row in evidence_rows
+                    if row["relationship"] == "contradicts"
+                ]
+        return [by_id[claim_id] for claim_id in ordered_ids if claim_id in by_id]
+
     def list_files(self, snapshot_id: str) -> list[dict[str, Any]]:
         """Return every included file of one snapshot, ordered by path."""
 
@@ -1147,29 +1196,97 @@ class EvidenceLedger:
             raise ValueError("Context pack max_chars must be between 1000 and 200000")
         if max_claims < 1 or max_claims > 100:
             raise ValueError("Context pack max_claims must be between 1 and 100")
-        claims = self.search_claims(snapshot_id, query, limit=max_claims)
-        full_claims = {
-            item["claim_id"]: item for item in self.list_claims(snapshot_id, limit=5_000)
-        }
+        matches = self.search_claims(snapshot_id, query, limit=max_claims)
+        claims = self.claims_by_ids(
+            snapshot_id,
+            [str(item["claim_id"]) for item in matches],
+        )
+        return self._bounded_context_pack(
+            snapshot_id,
+            query,
+            claims,
+            max_chars=max_chars,
+            omitted_claim_ids=(),
+            missing_claim_ids=(),
+        )
+
+    def context_pack_for_claims(
+        self,
+        snapshot_id: str,
+        claim_ids: Sequence[str],
+        *,
+        query: str,
+        max_chars: int = 20_000,
+        max_claims: int = 100,
+    ) -> dict[str, Any]:
+        """Build a bounded pack for an exact evidence obligation.
+
+        Search is right for an interactive question. A synthesis job already
+        knows which claims its section is responsible for, and searching their
+        prose again can substitute a similarly worded claim or miss one whose
+        vocabulary differs. Exact selection keeps the narrative packet aligned
+        with the deterministic outline routing.
+        """
+
+        if not query.strip():
+            raise ValueError("Context pack query cannot be empty")
+        if max_chars < 1_000 or max_chars > 200_000:
+            raise ValueError("Context pack max_chars must be between 1000 and 200000")
+        if max_claims < 1 or max_claims > 100:
+            raise ValueError("Context pack max_claims must be between 1 and 100")
+        requested = tuple(dict.fromkeys(str(item) for item in claim_ids if str(item)))
+        bounded_ids = requested[:max_claims]
+        claims = self.claims_by_ids(snapshot_id, bounded_ids)
+        found_ids = {str(item["claim_id"]) for item in claims}
+        return self._bounded_context_pack(
+            snapshot_id,
+            query,
+            claims,
+            max_chars=max_chars,
+            omitted_claim_ids=requested[max_claims:],
+            missing_claim_ids=tuple(item for item in bounded_ids if item not in found_ids),
+        )
+
+    def _bounded_context_pack(
+        self,
+        snapshot_id: str,
+        query: str,
+        claims: Sequence[dict[str, Any]],
+        *,
+        max_chars: int,
+        omitted_claim_ids: Sequence[str],
+        missing_claim_ids: Sequence[str],
+    ) -> dict[str, Any]:
+        """Fit exact claims and two-sided receipts into one provider packet."""
+
         selected: list[dict[str, Any]] = []
         receipts: list[dict[str, Any]] = []
+        omitted_claims = list(omitted_claim_ids)
+        omitted_evidence: list[str] = []
         used_chars = 0
-        for match in claims:
-            claim = full_claims.get(str(match["claim_id"]), match)
+        for claim in claims:
             claim_chars = len(str(claim.get("claim", "")))
             if used_chars + claim_chars > max_chars:
-                break
+                omitted_claims.append(str(claim["claim_id"]))
+                continue
             selected.append(claim)
             used_chars += claim_chars
-            for evidence_id in claim.get("supporting_evidence", [])[:8]:
-                receipt = self.get_evidence_excerpt(str(evidence_id), max_lines=12)
-                if receipt is None:
-                    continue
-                excerpt_chars = len(str(receipt.get("excerpt") or ""))
-                if used_chars + excerpt_chars > max_chars:
-                    continue
-                receipts.append(receipt)
-                used_chars += excerpt_chars
+            evidence_sides = (
+                ("supports", claim.get("supporting_evidence", [])),
+                ("contradicts", claim.get("contradicting_evidence", [])),
+            )
+            for relationship, evidence_ids in evidence_sides:
+                for evidence_id in evidence_ids[:8]:
+                    receipt = self.get_evidence_excerpt(str(evidence_id), max_lines=12)
+                    if receipt is None:
+                        omitted_evidence.append(str(evidence_id))
+                        continue
+                    excerpt_chars = len(str(receipt.get("excerpt") or ""))
+                    if used_chars + excerpt_chars > max_chars:
+                        omitted_evidence.append(str(evidence_id))
+                        continue
+                    receipts.append({**receipt, "relationship": relationship})
+                    used_chars += excerpt_chars
         return {
             "snapshot_id": snapshot_id,
             "query": query,
@@ -1177,7 +1294,10 @@ class EvidenceLedger:
             "used_chars": used_chars,
             "claims": selected,
             "evidence": receipts,
-            "truncated": len(selected) < len(claims),
+            "omitted_claim_ids": omitted_claims,
+            "omitted_evidence_ids": omitted_evidence,
+            "missing_claim_ids": list(missing_claim_ids),
+            "truncated": bool(omitted_claims or omitted_evidence or missing_claim_ids),
         }
 
     def search_claims(

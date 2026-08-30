@@ -66,7 +66,7 @@ The command fails on a commit mismatch and writes `analysis.jsonl`, `analysis.md
 
 ## Current local result
 
-On the August 30, 2026 pinned run, Open Skeleton matched all 34 material claims with current receipts. It completed in 3.261 seconds, reached the first finding in 1,706 ms, and allocated a traced peak of 11,521,887 bytes. The concise report contained 5,421 words.
+On the August 30, 2026 pinned run, Open Skeleton matched all 34 material claims with current receipts. It completed in 3.801 seconds, reached the first finding in 2,055 ms, and allocated a traced peak of 11,543,426 bytes. The concise report contained 5,428 words.
 
 The registered AI-MUD external artifact scored 89.7% material recall/scoped precision, 95.6% evidence correctness, and 75.0% conflict detection. It took approximately 20,820,000 ms and contained approximately 180,845 words.
 
@@ -128,11 +128,12 @@ The report now asks both questions and prints both answers.
 
 | Question | Sections | Share |
 |---|---:|---:|
-| Baseline heading matched by a candidate heading | 181 of 640 | 28.3% |
-| Baseline section's distinctive terms present in the candidate | 342 of 496 | 69.0% |
+| Baseline heading matched by a candidate heading | 187 of 639 | 29.3% |
+| Baseline section's distinctive terms present in the candidate | 349 of 495 | 70.5% |
 
 A term most baseline sections already use cannot identify a subject, so only
-terms rare across the baseline count. A further 144 sections carry fewer than
+terms rare across the baseline count. Headings inside fenced source examples are
+ignored rather than mistaken for document structure. A further 144 sections carry fewer than
 three distinctive names and are argued almost entirely in prose; they are
 reported and not scored, because a subject with nothing nameable in it is not
 evidence in either direction and counting it as a miss would repeat the
@@ -179,7 +180,7 @@ rather than targeted.
 
 This is a useful regression fixture, not evidence of universal superiority. It was authored and adjudicated with repository-author knowledge, not audited by an external laboratory. More languages, architectures, repository sizes, and independent reviewers are required before broad claims.
 
-## A measurement that was attempted and abandoned
+## Why automatic conclusion scoring was abandoned
 
 Three benchmarks here compare a document against a baseline: fact coverage
 compares the names both mention, the structure diff compares the subjects both
@@ -215,6 +216,28 @@ in it by design. A keyword comparison can tell you what two documents *name*;
 it cannot tell you what they *concluded*. Shipping a number that claims
 otherwise would be the true-but-misleading failure `open-skeleton audit`
 exists to catch, applied to our own benchmarks.
+
+The failed automatic scores have been replaced by a one-to-one review inventory,
+not by a fourth heuristic score. The inventory extracts high-salience causal,
+consequence, risk, and constraint-bearing units from a registered baseline,
+separates repository-grounded anchors from ingestion-context hints, and retrieves
+the closest candidate paragraph as a review aid. It is fence-aware and refuses to
+report conclusion coverage until every extracted unit has an explicit adjudication.
+
+```powershell
+python benchmarks\comparison\run_reasoning_inventory.py `
+  --baseline C:\path\to\registered\tech_spec.md `
+  --baseline-id external-single-player-ai-mud-2026-08-04 `
+  --candidate C:\path\to\spec.md `
+  --repo C:\path\to\pinned\repository `
+  --context C:\path\to\codebase_context.md `
+  --output-dir reasoning-review
+```
+
+The valid review outcomes are `equivalent`, `partial`, `missing`,
+`baseline_incorrect`, and `unjudgeable`. A lexical match is never accepted as one
+of those outcomes. See [source-grounded synthesis](SYNTHESIS.md) for how the same
+finite obligation model feeds bounded narrative jobs.
 
 ## Robustness across unseen packages
 

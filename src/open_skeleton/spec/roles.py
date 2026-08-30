@@ -56,6 +56,7 @@ CATEGORY_FAMILY: dict[str, str] = {
     "hardcoded_endpoint": "integration",
     "configuration_read": "integration",
     "external_calls": "integration",
+    "collection_driven_workset": "integration",
     "absorbed_failure": "integration",
     "exponential_scaling": "domain",
     "mathematical_conflict": "domain",

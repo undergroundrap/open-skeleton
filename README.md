@@ -107,6 +107,7 @@ open-skeleton evidence    inspect one immutable receipt
 open-skeleton diff        compare snapshots and project stale claims
 open-skeleton serve       run the read-only local dashboard
 open-skeleton synthesize  explicitly invoke an optional provider
+open-skeleton plan-synthesis  build independent source-grounded narrative jobs
 open-skeleton benchmark   score a pinned fixture and baseline artifact
 open-skeleton spec        render a long-form specification from an outline profile
 open-skeleton audit       flag claim groups shaped like a known mistake
@@ -236,7 +237,18 @@ open-skeleton synthesize "state ownership" C:\repo --provider claude
 open-skeleton synthesize "state ownership" C:\repo --provider local-command --command my-local-adapter
 ```
 
-Provider invocation is explicit and may incur third-party cost or network activity. See [docs/PROVIDERS.md](docs/PROVIDERS.md).
+For a whole document, `plan-synthesis` first creates one independent bounded job
+per non-structural outline obligation without contacting a model. An external
+orchestrator can run those jobs concurrently while the local ledger remains the
+source of truth.
+
+```powershell
+open-skeleton plan-synthesis C:\repo
+```
+
+Provider invocation is explicit and may incur third-party cost or network
+activity. See [source-grounded synthesis](docs/SYNTHESIS.md) and
+[provider adapters](docs/PROVIDERS.md).
 
 ## Reproducible AI-MUD benchmark
 
@@ -247,7 +259,7 @@ The included gold set pins `SINGLE-PLAYER-AI-MUD` commit `93ebd51cb4083d2307564c
 | Open Skeleton | 100.0% | 100.0% | 100.0% | 100.0% |
 | Registered external baseline | 89.7% | 89.7% | 95.6% | 75.0% |
 
-Open Skeleton completed end to end in about 3.3 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. That is 0.0161% of the recorded external wall time, a baseline/candidate elapsed-time ratio of about 6,222x. The generated specification is 90 sections and roughly 50,800 words, against approximately 180,800 words for the baseline. The external timing is an author-recorded historical observation, not a same-machine rerun.
+Open Skeleton completed end to end in about 3.8 seconds; the supplied baseline artifact took approximately 5 hours 47 minutes. That is 0.0183% of the recorded external wall time, a baseline/candidate elapsed-time ratio of about 5,477x. The generated specification is 90 sections and roughly 50,800 words, against approximately 180,800 words for the baseline. The external timing is an author-recorded historical observation, not a same-machine rerun.
 
 **These numbers describe one author-reviewed fixture, not universal product superiority**, and the comparison is deliberately narrow. It measures whether the material findings of a long-form specification can be reproduced deterministically and cited verifiably. It does not measure breadth: the baseline artifact also contains a requirements catalog, process and state-machine diagrams, architectural decision records, and user-interface analysis that Open Skeleton does not attempt. Baseline precision is limited to statements mapped to the material gold set, and peak memory is Python allocation data rather than process RSS. See [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
@@ -272,7 +284,7 @@ author-recorded commit:
 
 | Measure | Open Skeleton | Baseline |
 |---|---:|---:|
-| Generation time | ~3.3 s | 5 h 47 m |
+| Generation time | ~3.8 s | 5 h 47 m |
 | Diagrams | 83 | 82 |
 | References carrying a line number | 549 | 375 |
 | Citations verified against source hashes | 860 | 0 |

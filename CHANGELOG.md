@@ -6,6 +6,19 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Added
 
+- `open-skeleton plan-synthesis`, producing one independent, bounded,
+  source-grounded narrative job per non-structural specification obligation
+  without invoking a model
+- exact claim-ID context packs that retain both supporting and contradicting
+  receipts and report claim IDs omitted by size bounds
+- a one-to-one reasoning review inventory for registered baselines, separating
+  repository-grounded conclusions from ingestion-context hints and refusing an
+  automatic semantic-coverage score
+- Python detection of loops whose work set is an imported private collection,
+  exposing when an internal cache or registry also controls which values receive
+  scheduled work
+- fence-aware structural comparison, so headings inside code examples cannot
+  inflate or fragment document coverage
 - `open-skeleton spec`: outline-driven long-form specifications projected from the
   claim ledger, with user-editable JSON profiles and no model in the path
 - 90-section standard profile covering functional surface, state ownership,

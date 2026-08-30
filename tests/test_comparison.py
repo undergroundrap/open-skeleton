@@ -29,6 +29,17 @@ from run_comparison import (
     _validate_repository_state,
     _verify_baseline_artifact,
 )
+from run_reasoning_inventory import (
+    ADJUDICATION_SCHEMA,
+    TextUnit,
+    _anchor_recall,
+    _anchors,
+    _best_candidate,
+    _load_adjudications,
+    _markdown_units,
+    _reasoning_score,
+    _tokens,
+)
 
 INVENTORY = Path(__file__).resolve().parents[1] / "benchmarks" / "comparison" / "baselines.json"
 
@@ -166,3 +177,64 @@ class ComparisonReportTests(TestCase):
         report = _render(self.ours, self.theirs, _record(), self.repository_receipt)
 
         self.assertNotIn("elapsed-time ratio", report)
+
+
+class ReasoningInventoryTests(TestCase):
+    def test_anchor_retrieval_matches_a_path_suffix_and_member_prefix(self) -> None:
+        expected = frozenset({"simulation.py", "vec_db._zone_cache.keys"})
+        observed = frozenset({"backend/app/core/simulation.py", "vec_db._zone_cache"})
+
+        self.assertEqual(_anchor_recall(expected, observed), 1.0)
+
+    def test_markdown_parser_does_not_invent_reasoning_from_a_code_fence(self) -> None:
+        document = (
+            "# Architecture\n\n"
+            "Because `src/app.py` owns state, a second process cannot share it.\n\n"
+            "```python\n"
+            "# Because fake.py therefore means risk without state\n"
+            "```\n"
+            "## Runtime\n\n"
+            "Ordinary descriptive text.\n"
+        )
+
+        units = _markdown_units(document)
+
+        self.assertEqual(len(units), 2)
+        self.assertEqual(units[0].heading, "Architecture")
+        self.assertNotIn("fake.py", " ".join(item.text for item in units))
+        self.assertGreaterEqual(_reasoning_score(units[0].text)[0], 5)
+        self.assertEqual(_reasoning_score(units[1].text)[0], 0)
+
+    def test_retrieval_exposes_similarity_without_calling_it_equivalence(self) -> None:
+        baseline = "Because `src/app.py` owns process state, a second process cannot share it."
+        candidate = TextUnit(
+            heading="State",
+            line=8,
+            text="`src/app.py` contains process-local state and has no shared cache.",
+        )
+
+        best, score, anchor_recall, _ = _best_candidate(
+            _tokens(baseline),
+            _anchors(baseline),
+            [(candidate, _tokens(candidate.text), _anchors(candidate.text))],
+        )
+
+        self.assertEqual(best, candidate)
+        self.assertGreater(score, 0.5)
+        self.assertEqual(anchor_recall, 1.0)
+
+    def test_adjudication_sidecar_rejects_an_automated_similarity_status(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "adjudications.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": ADJUDICATION_SCHEMA,
+                        "adjudications": [{"id": "one", "status": "likely_match"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unsupported reasoning adjudication status"):
+                _load_adjudications(path)

@@ -101,6 +101,7 @@ TEST_SCOPED_CATEGORIES = {
     # should never have carried that category in the first place.
     "caught_exception": "test_caught_exception",
     "exception_type": "test_exception_type",
+    "collection_driven_workset": "test_collection_driven_workset",
 }
 INSERT_TABLE_PATTERN = re.compile(
     r"\bINSERT\s+(?:OR\s+\w+\s+)?INTO\s+[\"`\[]?([A-Za-z_][\w]*)",
@@ -202,6 +203,97 @@ def _expr_name(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Subscript):
         return _expr_name(node.value)
     return None
+
+
+def _iterated_collection(node: ast.AST) -> str | None:
+    """Name the collection that supplies a loop, through harmless wrappers.
+
+    ``for key in list(store._pending.keys())`` is structurally a loop over
+    ``store._pending``. Recording ``list`` or ``keys`` as the source loses the
+    architectural fact: membership in the collection decides which work can
+    run. Only wrappers that preserve the collection's members are removed.
+    """
+
+    current = node
+    for _ in range(4):
+        if not isinstance(current, ast.Call):
+            break
+        called = _expr_name(current.func) or ""
+        final = called.rsplit(".", maxsplit=1)[-1]
+        if final in {"list", "tuple", "set", "iter", "sorted", "reversed"}:
+            if len(current.args) != 1 or current.keywords:
+                return None
+            current = current.args[0]
+            continue
+        if final in {"keys", "values", "items"} and isinstance(current.func, ast.Attribute):
+            current = current.func.value
+            continue
+        break
+    return _expr_name(current)
+
+
+class _LoopWorksetCollector(ast.NodeVisitor):
+    """Resolve one local alias between an imported collection and a loop."""
+
+    def __init__(self) -> None:
+        self.aliases: list[dict[str, str]] = [{}]
+        self.worksets: dict[int, str] = {}
+
+    def _resolved(self, node: ast.AST) -> str | None:
+        value = _iterated_collection(node)
+        if value is None:
+            return None
+        return self.aliases[-1].get(value, value)
+
+    def _visit_scope(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self.aliases.append({})
+        for statement in node.body:
+            self.visit(statement)
+        self.aliases.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_scope(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_scope(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        source = self._resolved(node.value)
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if source is None:
+                self.aliases[-1].pop(target.id, None)
+            else:
+                self.aliases[-1][target.id] = source
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            source = self._resolved(node.value)
+            if source is None:
+                self.aliases[-1].pop(node.target.id, None)
+            else:
+                self.aliases[-1][node.target.id] = source
+            self.generic_visit(node.value)
+
+    def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
+        source = self._resolved(node.iter)
+        if source is not None:
+            self.worksets[id(node)] = source
+        self.generic_visit(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_loop(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self._visit_loop(node)
+
+
+def _loop_worksets(tree: ast.Module) -> dict[int, str]:
+    collector = _LoopWorksetCollector()
+    collector.visit(tree)
+    return collector.worksets
 
 
 def _literal_string(node: ast.AST | None) -> str | None:
@@ -1359,6 +1451,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.caught_family_evidence: dict[str, list[str]] = {}
         self.signatures = _signatures(tree)
         self.external_calls = _external_calls(tree, local_modules)
+        self.loop_worksets = _loop_worksets(tree)
         self.name_index = _name_index(tree)
         # `--output-dir` is not a Python identifier, so the generic walk skips
         # it, and a reader searching for a flag found nothing. It is still a
@@ -1945,6 +2038,46 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     importance="high",
                     supporting=(evidence.evidence_id,),
                 )
+        self.generic_visit(node)
+
+    def _collection_workset(self, node: ast.For | ast.AsyncFor) -> None:
+        collection = self.loop_worksets.get(id(node)) or _iterated_collection(node.iter)
+        imported = {
+            str(name) for entry in self.imported_names.values() for name in entry.get("names", ())
+        }
+        if not collection or collection.split(".", maxsplit=1)[0] not in imported:
+            return
+        # A public iterable is an ordinary module contract. Reaching into an
+        # underscore member is the unusual boundary: the caller's work now
+        # depends on an internal collection the provider is free to change.
+        if not any(part.startswith("_") for part in collection.split(".")[1:]):
+            return
+        evidence = self._evidence(
+            start_line=node.lineno,
+            end_line=node.lineno,
+            symbol=self.current_qualified_name,
+            evidence_kind="collection_driven_workset",
+        )
+        self._claim(
+            text=(
+                f"{self.current_qualified_name} iterates over the imported private collection "
+                f"`{collection}`; membership in that collection defines this loop's work set, "
+                "so values not resident in it receive no work from this loop."
+            ),
+            category="collection_driven_workset",
+            status="verified",
+            confidence=1.0,
+            importance="high",
+            supporting=(evidence.evidence_id,),
+            invalidation_keys=(f"file:{self.path}", f"symbol:{self.current_qualified_name}"),
+        )
+
+    def visit_For(self, node: ast.For) -> None:
+        self._collection_workset(node)
+        self.generic_visit(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self._collection_workset(node)
         self.generic_visit(node)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:

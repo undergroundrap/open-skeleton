@@ -45,6 +45,7 @@ from open_skeleton.spec import (
 )
 from open_skeleton.spec.coherence import check_coherence, check_conservation
 from open_skeleton.state import resolve_state_dir
+from open_skeleton.synthesis_plan import build_synthesis_plan
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -185,6 +186,27 @@ def _parser() -> argparse.ArgumentParser:
         help="Executable and arguments for --provider local-command.",
     )
     synthesize.add_argument("--json", action="store_true")
+
+    plan_synthesis = subparsers.add_parser(
+        "plan-synthesis",
+        help="Build source-grounded jobs for parallel narrative synthesis without running a model.",
+    )
+    plan_synthesis.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    plan_synthesis.add_argument("--state-dir", type=Path, help="State directory.")
+    plan_synthesis.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
+    plan_synthesis.add_argument(
+        "--profile",
+        type=Path,
+        help="Outline profile JSON. Defaults to the packaged standard profile.",
+    )
+    plan_synthesis.add_argument(
+        "--output",
+        type=Path,
+        help="Plan path. Defaults to <state-dir>/synthesis-plan.json.",
+    )
+    plan_synthesis.add_argument("--max-chars", type=int, default=20_000)
+    plan_synthesis.add_argument("--max-claims", type=int, default=100)
+    plan_synthesis.add_argument("--json", action="store_true")
 
     benchmark = subparsers.add_parser(
         "benchmark",
@@ -521,6 +543,44 @@ def _synthesize(args: argparse.Namespace) -> int:
     return 0 if result.status in {"complete", "disabled"} else 1
 
 
+def _plan_synthesis(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    ledger = EvidenceLedger(state_dir / "evidence.sqlite3")
+    profile = load_profile(args.profile)
+    document = build_spec(ledger, profile, snapshot_id=args.snapshot)
+    plan = build_synthesis_plan(
+        document,
+        ledger,
+        max_chars=args.max_chars,
+        max_claims=args.max_claims,
+    )
+    output = (args.output or state_dir / "synthesis-plan.json").expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(plan, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    summary = {
+        "snapshot_id": plan["snapshot_id"],
+        "profile_id": plan["profile_id"],
+        "job_count": plan["job_count"],
+        "priority_counts": plan["priority_counts"],
+        "verdict_counts": plan["verdict_counts"],
+        "contacts_model": plan["contacts_model"],
+        "artifact": str(output),
+    }
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False))
+    else:
+        print(f"Snapshot: {plan['snapshot_id']}")
+        print(f"Jobs: {plan['job_count']:,}")
+        print("Model contacted: no")
+        print(f"Plan: {output}")
+    return 0
+
+
 def _benchmark(args: argparse.Namespace) -> int:
     result = run_benchmark(Path(args.path), args.gold, args.output_dir)
     if args.json:
@@ -654,6 +714,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _diff(args)
         if args.command == "synthesize":
             return _synthesize(args)
+        if args.command == "plan-synthesis":
+            return _plan_synthesis(args)
         if args.command == "benchmark":
             return _benchmark(args)
         if args.command == "spec":

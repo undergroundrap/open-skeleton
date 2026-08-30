@@ -1016,6 +1016,7 @@
           "findings": {
             "categories": [
               "client_route_reconciliation",
+              "collection_driven_workset",
               "external_call",
               "hardcoded_endpoint",
               "http_client_route",
@@ -2978,7 +2979,7 @@
           "number": "9.14",
           "title": "Structures Carrying More Than One Concern",
           "concern": "Where one object turns out to do two jobs.",
-          "framing": "The useful sentences in a specification are rarely single facts; they are coincidences. A cache that is also the work queue means a zone never loaded is never simulated, and neither claim carries that alone. These are the structures where a change will not do only what its author intended.",
+          "framing": "The useful sentences in a specification are rarely isolated facts; they explain how one structure spans concerns. These are the structures where a change can have effects outside the concern its author intended to modify.",
           "panels": [
             "multi_role_structures"
           ]

@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.M)
+FENCE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(.*)$")
 LEADING_NUMBER = re.compile(r"^[\d.]+\s*")
 WORD = re.compile(r"[A-Za-z][A-Za-z-]{2,}")
 # Words that pair unrelated sections because every specification uses them.
@@ -102,8 +103,36 @@ def _keywords(title: str) -> frozenset[str]:
     )
 
 
+def _heading_matches(document: str) -> list[re.Match[str]]:
+    """Find Markdown headings while ignoring examples inside code fences."""
+
+    matches: list[re.Match[str]] = []
+    active_fence: tuple[str, int] | None = None
+    offset = 0
+    for line in document.splitlines(keepends=True):
+        raw_line = line.rstrip("\r\n")
+        fence = FENCE.match(raw_line)
+        if fence is not None:
+            marker = fence.group(1)
+            remainder = fence.group(2)
+            if active_fence is None:
+                active_fence = (marker[0], len(marker))
+            elif (
+                marker[0] == active_fence[0]
+                and len(marker) >= active_fence[1]
+                and not remainder.strip()
+            ):
+                active_fence = None
+            offset += len(line)
+            continue
+        if active_fence is None and (match := HEADING.match(document, offset)) is not None:
+            matches.append(match)
+        offset += len(line)
+    return matches
+
+
 def _sections(document: str) -> list[Section]:
-    matches = list(HEADING.finditer(document))
+    matches = _heading_matches(document)
     sections: list[Section] = []
     for index, match in enumerate(matches):
         start = match.end()
@@ -127,7 +156,7 @@ def _sections(document: str) -> list[Section]:
 def _section_bodies(document: str) -> list[str]:
     """The text under each heading, in the same order `_sections` returns."""
 
-    matches = list(HEADING.finditer(document))
+    matches = _heading_matches(document)
     bodies: list[str] = []
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(document)

@@ -2,6 +2,10 @@
 
 Providers synthesize bounded ledger context; they do not analyze the repository directly.
 
+For whole-document work, `open-skeleton plan-synthesis` builds one bounded,
+parallel-safe job per non-structural outline obligation without invoking any
+provider. See [source-grounded synthesis](SYNTHESIS.md).
+
 ## Shared contract
 
 Input contains task, snapshot ID, bounded context pack, output schema, optional model, and timeout. Output contains summary, findings with claim IDs and caveats, conflicts, and unknowns.
