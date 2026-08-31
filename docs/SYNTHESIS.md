@@ -5,6 +5,34 @@ build the inventory, graph, claims, conflicts, and immutable source receipts fir
 An optional model receives one bounded obligation at a time after that work is
 complete. The model explains evidence; it is not asked to rediscover the repository.
 
+## Audit-only product boundary
+
+The product ends at a verified codebase-understanding artifact. It does not turn the
+artifact into an implementation backlog, edit the analyzed checkout, or advertise
+autonomous delivery. That boundary keeps the local engine reusable by a human, Claude,
+Codex, or another model without making any one provider the product.
+
+The local engine owns work that is faster and more reliable as code:
+
+- exact corpus accounting, parsing, symbol and relationship indexing;
+- framework registries, configuration, routes, schemas, tests, and build/deploy facts;
+- cross-file concordance, counted absences, contradictions, and deterministic
+  consequences;
+- source receipts, content hashes, snapshots, diffs, bounded evidence packets, and
+  fail-closed quality gates.
+
+A model is useful only after that pass. Its bounded job is to explain why one evidence
+packet matters, compare supported alternatives, preserve uncertainty, and turn the
+result into readable prose. It is not asked to search the whole checkout, repeat the
+census, or silently supply facts the repository never contained.
+
+This separation creates two different parity measures. **Natural-discovery parity**
+counts only conclusions recoverable from code and repository documentation.
+**Document parity** may also include business purpose, vocabulary, compliance
+constraints, architecture rationale, and known debt supplied through an ingestion
+context. Until that context is a first-class hash-pinned input, those facts remain a
+declared gap; they must never be credited as discoveries.
+
 ## What the two registered examples reveal
 
 The two supplied external specifications describe unrelated repositories, yet both
@@ -29,6 +57,35 @@ The resulting working model is:
 The exact private orchestration is not observable from two outputs. This model is the
 smallest mechanism consistent with both artifacts and with the public workflow
 description; it is not a claim that the original implementation has been copied.
+
+## Generalized parity obligations
+
+The two registered examples share a recurring micro-template even where their source
+stacks differ: determine applicability, inventory the implementation, connect ownership
+and data flow, name constraints and negative space, explain consequences, show
+verification, and attach references. The production profile should apply that template
+across these obligation families rather than copy any external document's headings:
+
+- architecture shape, module boundaries, layering, ownership, coupling, and single
+  points of failure;
+- internal and external dependencies, versions, private registries, APIs, and services;
+- terminology, business flows, domain rules, and coding conventions;
+- interface contracts across routes, clients, documentation, constructors, schemas,
+  command-line values, and tests;
+- state identity, lifecycle, retention, invalidation, persistence, migration, recovery,
+  and transaction/failure semantics;
+- security and compliance boundaries, trust assumptions, and mechanism-specific
+  negative space;
+- test intent, coverage expectations, build/deploy pipelines, observability, capacity,
+  readiness, and operational failure visibility;
+- UI and actor/use-case surfaces, process flows, state machines, requirements, and
+  architectural decision packets—or an explicit unsupported verdict.
+
+The engine must first emit deterministic motifs such as `registry/docs mismatch`,
+`section verdict conflicts with projection`, `shared facade`, `store without pruning`,
+`constraint-layer mismatch`, and `callback declared but not forwarded`. Only the
+relationship or tradeoff that cannot be stated without judgement becomes a bounded
+narrative task.
 
 ## The faster local path
 

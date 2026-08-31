@@ -17,8 +17,17 @@ that would need to guess at intent is not a rule and does not belong here.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimCondition:
+    """A category whose claim text must match a deterministic pattern."""
+
+    category: str
+    pattern: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,13 +38,20 @@ class ConsequenceRule:
     statement: str
     when_present: tuple[str, ...] = ()
     when_absent: tuple[str, ...] = ()
+    when_matching: tuple[ClaimCondition, ...] = ()
     severity: str = "medium"
     # Categories whose claims are cited as the derivation's basis. Defaults to
     # `when_present` when unset.
     cite: tuple[str, ...] = ()
 
     def basis(self) -> tuple[str, ...]:
-        return self.cite or self.when_present
+        if self.cite:
+            return self.cite
+        return tuple(
+            dict.fromkeys(
+                (*self.when_present, *(condition.category for condition in self.when_matching))
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,11 +92,26 @@ STANDARD_RULES: tuple[ConsequenceRule, ...] = (
     ConsequenceRule(
         rule_id="unauthenticated-open-origin",
         statement=(
-            "No route signature declares an authorization dependency, and the "
-            "transport boundary accepts any origin. Together these mean any "
-            "origin that can reach the port can reach every route."
+            "The application declares a wildcard browser-origin policy while no "
+            "detected route signature declares an authorization dependency. The "
+            "declared CORS policy permits eligible browser responses to be read by "
+            "arbitrary origins without a declared route-level identity check."
+        ),
+        when_present=("auth_control_census", "security_boundary", "http_route"),
+        severity="high",
+    ),
+    ConsequenceRule(
+        rule_id="cross-origin-mutation-reachability",
+        statement=(
+            "The served surface includes POST, PUT, PATCH, or DELETE, declares a "
+            "wildcard browser-origin policy, and declares no route-level "
+            "authorization dependency. At the route-signature layer, no identity "
+            "check stands between an eligible cross-origin request using that method "
+            "and handler entry; middleware and infrastructure remain outside this "
+            "derivation."
         ),
         when_present=("auth_control_census", "security_boundary"),
+        when_matching=(ClaimCondition("http_route", r"^(?:POST|PUT|PATCH|DELETE)\s"),),
         severity="critical",
     ),
     ConsequenceRule(
@@ -188,12 +219,29 @@ def derive(
     """
 
     present: dict[str, list[str]] = {}
+    claims_by_category: dict[str, list[dict[str, Any]]] = {}
     for claim in claims:
-        present.setdefault(str(claim["category"]), []).append(str(claim["claim_id"]))
+        category = str(claim["category"])
+        present.setdefault(category, []).append(str(claim["claim_id"]))
+        claims_by_category.setdefault(category, []).append(claim)
 
     derived: list[Consequence] = []
     for rule in rules:
         if any(category not in present for category in rule.when_present):
+            continue
+        matched: dict[str, list[str]] = {}
+        conditions_hold = True
+        for condition in rule.when_matching:
+            identifiers = [
+                str(claim["claim_id"])
+                for claim in claims_by_category.get(condition.category, ())
+                if re.search(condition.pattern, str(claim.get("claim", "")))
+            ]
+            if not identifiers:
+                conditions_hold = False
+                break
+            matched.setdefault(condition.category, []).extend(identifiers)
+        if not conditions_hold:
             continue
         blocked = [
             category
@@ -203,7 +251,13 @@ def derive(
         if blocked:
             continue
         claim_ids = tuple(
-            sorted(claim_id for category in rule.basis() for claim_id in present.get(category, []))
+            sorted(
+                {
+                    claim_id
+                    for category in rule.basis()
+                    for claim_id in matched.get(category, present.get(category, []))
+                }
+            )
         )
         if not claim_ids:
             continue

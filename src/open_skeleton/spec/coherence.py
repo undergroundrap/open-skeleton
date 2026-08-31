@@ -79,7 +79,7 @@ def _number(text: str) -> int:
 
 
 def _verdict_contradictions(document: SpecDocument) -> list[Incoherence]:
-    """A section may not announce absence above its own evidence."""
+    """A section may not announce absence above any of its own projections."""
 
     found: list[Incoherence] = []
     for section in document.sections:
@@ -89,6 +89,20 @@ def _verdict_contradictions(document: SpecDocument) -> list[Incoherence]:
                     "verdict-contradicts-findings",
                     f"§{section.number} {section.title} reports `{section.verdict}` "
                     f"and renders {len(section.findings):,} finding(s) beneath it.",
+                )
+            )
+        active_diagrams = [item.title for item in section.diagrams if item.mermaid]
+        active_panels = [item.title for item in section.panels if item.rows]
+        if section.verdict in ABSENCE_VERDICTS and (active_diagrams or active_panels):
+            projections = [
+                *(f"diagram `{title}`" for title in active_diagrams),
+                *(f"panel `{title}`" for title in active_panels),
+            ]
+            found.append(
+                Incoherence(
+                    "verdict-contradicts-projection",
+                    f"§{section.number} {section.title} reports `{section.verdict}` "
+                    f"while rendering {', '.join(projections)}.",
                 )
             )
     return found

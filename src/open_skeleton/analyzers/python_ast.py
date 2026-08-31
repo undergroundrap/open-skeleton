@@ -30,8 +30,9 @@ from open_skeleton.models import (
 from open_skeleton.policy import describes_the_product
 
 ANALYZER_NAME = "python-ast"
-ANALYZER_VERSION = "python-ast/v2"
+ANALYZER_VERSION = "python-ast/v3"
 HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "options", "head"})
+STDLIB_HTTP_HANDLER_BASES = frozenset({"BaseHTTPRequestHandler", "SimpleHTTPRequestHandler"})
 MUTATING_METHODS = frozenset(
     {
         "add",
@@ -496,6 +497,90 @@ def _control_flow(node: ast.AST) -> list[dict[str, Any]]:
     walk([item for item in body if isinstance(item, ast.stmt)], 0)
     events.sort(key=lambda item: int(item["line"]))
     return events[:MAX_FLOW_NODES]
+
+
+def _route_subject(node: ast.AST) -> bool:
+    """Whether an expression names the request path inside an HTTP handler.
+
+    ``BaseHTTPRequestHandler`` exposes ``self.path`` directly. Code commonly
+    parses it once and then compares ``parsed.path`` or a local ``path``. This
+    deliberately accepts only those three shapes and only inside a proven
+    standard-library handler class; a filesystem variable named ``path`` in an
+    ordinary function must not become an endpoint.
+    """
+
+    name = _expr_name(node) or ""
+    return name == "path" or name.endswith(".path")
+
+
+def _route_literals(node: ast.AST) -> tuple[tuple[str, int, int], ...]:
+    """Literal paths selected by one standard-library request method.
+
+    Framework decorators state routes directly. ``http.server`` instead names
+    the verb in ``do_GET``/``do_POST`` and dispatches with ordinary comparisons.
+    The generic control-flow projection already sees those comparisons, but the
+    route census did not. This extracts only exact equality/membership checks
+    and path-prefix checks, preserving the source line that proves each route.
+    """
+
+    found: dict[str, tuple[int, int]] = {}
+
+    def record(value: str | None, owner: ast.AST, *, prefix: bool = False) -> None:
+        if value is None or not ROUTE_PATH_LITERAL.fullmatch(value):
+            return
+        path = f"{value}{{remainder}}" if prefix else value
+        found.setdefault(
+            path,
+            (
+                int(getattr(owner, "lineno", 1)),
+                int(getattr(owner, "end_lineno", getattr(owner, "lineno", 1))),
+            ),
+        )
+
+    class Collector(ast.NodeVisitor):
+        def visit_FunctionDef(self, _child: ast.FunctionDef) -> None:
+            # Nested callables have their own request contract, if any.
+            return
+
+        def visit_AsyncFunctionDef(self, _child: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_ClassDef(self, _child: ast.ClassDef) -> None:
+            return
+
+        def visit_Compare(self, comparison: ast.Compare) -> None:
+            operands = [comparison.left, *comparison.comparators]
+            for left, operator, right in zip(
+                operands[:-1], comparison.ops, operands[1:], strict=True
+            ):
+                if isinstance(operator, (ast.Eq, ast.Is)):
+                    if _route_subject(left):
+                        record(_literal_string(right), comparison)
+                    elif _route_subject(right):
+                        record(_literal_string(left), comparison)
+                elif (
+                    isinstance(operator, (ast.In, ast.NotIn))
+                    and _route_subject(left)
+                    and isinstance(right, (ast.List, ast.Tuple, ast.Set))
+                ):
+                    for item in right.elts:
+                        record(_literal_string(item), comparison)
+            self.generic_visit(comparison)
+
+        def visit_Call(self, call: ast.Call) -> None:
+            if (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr == "startswith"
+                and _route_subject(call.func.value)
+                and call.args
+            ):
+                record(_literal_string(call.args[0]), call, prefix=True)
+            self.generic_visit(call)
+
+    collector = Collector()
+    for statement in getattr(node, "body", []):
+        collector.visit(statement)
+    return tuple((path, start, end) for path, (start, end) in found.items())
 
 
 MIN_STATE_VALUES = 2
@@ -1419,6 +1504,11 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.claims: list[ClaimRecord] = []
         self.scope_names: list[str] = [self.module]
         self.scope_ids: list[str] = []
+        # One value per lexical scope. A request method is a route only when
+        # its immediate owner is a proven ``http.server`` handler class. The
+        # false value pushed for functions prevents a nested ``do_GET`` helper
+        # from inheriting the surrounding class's transport role.
+        self.stdlib_http_handler_scopes: list[bool] = [False]
         self.test_evidence: list[str] = []
         self.route_evidence: list[str] = []
         self.route_path_literals: set[str] = set()
@@ -1656,12 +1746,32 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                         decorator, "end_lineno", getattr(decorator, "lineno", None)
                     ),
                     "owner": _expr_name(decorator.func.value),
+                    "framework": "decorator",
                     # Carried so the endpoint catalog can separate the served
                     # surface from routes a test registers to exercise it.
                     "role": str(self.file_record.role),
                 }
             )
         return routes
+
+    def _stdlib_routes(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[dict[str, Any]]:
+        if not self.stdlib_http_handler_scopes[-1] or not node.name.startswith("do_"):
+            return []
+        method = node.name.removeprefix("do_").casefold()
+        if method not in HTTP_METHODS:
+            return []
+        return [
+            {
+                "method": method.upper(),
+                "path": path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "owner": "http.server",
+                "framework": "http.server",
+                "role": str(self.file_record.role),
+            }
+            for path, start_line, end_line in _route_literals(node)
+        ]
 
     def _visit_definition(
         self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
@@ -1675,6 +1785,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             else "function"
         )
         routes = self._routes(node.decorator_list)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            routes.extend(self._stdlib_routes(node))
         metadata: dict[str, Any] = {}
         if routes:
             metadata["routes"] = routes
@@ -1742,7 +1854,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 if arguments is not None
                 else []
             )
-            if typed_parameters:
+            if typed_parameters and route.get("framework") == "decorator":
                 signature_evidence = self._evidence(
                     start_line=node.lineno,
                     end_line=node.lineno,
@@ -1780,7 +1892,13 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
 
         self.scope_names.append(node.name)
         self.scope_ids.append(symbol.symbol_id)
+        handler_scope = isinstance(node, ast.ClassDef) and any(
+            (_expr_name(base) or "").rsplit(".", 1)[-1] in STDLIB_HTTP_HANDLER_BASES
+            for base in node.bases
+        )
+        self.stdlib_http_handler_scopes.append(handler_scope)
         self.generic_visit(node)
+        self.stdlib_http_handler_scopes.pop()
         self.scope_ids.pop()
         self.scope_names.pop()
 
@@ -2763,9 +2881,9 @@ class PythonAstAnalyzer:
                 )
             if not route_auth_control_evidence:
                 auth_text = (
-                    f"None of the {len(route_evidence)} detected FastAPI route signatures uses "
-                    "Depends or Security; this census does not rule out custom checks inside "
-                    "handler bodies or middleware."
+                    f"None of the {len(route_evidence)} detected Python route declarations uses "
+                    "Depends or Security in its signature; this census does not rule out "
+                    "custom checks inside handler bodies or middleware."
                 )
                 claims.append(
                     ClaimRecord(
@@ -2800,7 +2918,7 @@ class PythonAstAnalyzer:
             else:
                 control_text = (
                     f"{len(route_auth_control_evidence)} of the {len(route_evidence)} "
-                    "detected FastAPI route signatures declare a Depends or Security "
+                    "detected Python route declarations declare a Depends or Security "
                     "dependency; the census does not evaluate what those dependencies "
                     "enforce."
                 )

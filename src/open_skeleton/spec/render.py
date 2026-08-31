@@ -496,27 +496,6 @@ def build_spec(
         # not implement while the document itself showed otherwise.
         if verdict == "absent" and selected:
             verdict = "evidenced"
-        # Adjacent queries are run only when the concern was not found. If
-        # the probes matched, what is nearby is not the interesting fact.
-        candidate_results = (
-            tuple(run_probe(probe, corpus) for probe in section.candidates)
-            if verdict == "absent" and section.candidates
-            else ()
-        )
-        # A concern can presuppose another. Pagination without an HTTP surface
-        # is not a gap in the system, it is a question that does not arise —
-        # and reporting fifty of those buries the handful that do. The
-        # requirement is read from verdicts already decided this pass.
-        unmet = [
-            name
-            for name in section.requires
-            if decided.get(name) not in {"applicable", "degenerate", "evidenced"}
-        ]
-        if unmet and verdict == "absent":
-            verdict = "not_applicable"
-        decided[section.section_id] = verdict
-        unmet_requirements = tuple(unmet) if verdict == "not_applicable" else ()
-
         findings = tuple(
             RenderedClaim(
                 claim_id=str(item["claim_id"]),
@@ -554,6 +533,40 @@ def build_spec(
             )
         )
         panels = tuple(build_panel(name, panel_context) for name in section.panels)
+
+        # Diagrams and panels are projections of the same pinned ledger as the
+        # findings. If one of them renders concrete rows or edges, the concern
+        # cannot remain absent merely because its configured probe missed the
+        # underlying representation. Architectural Concentration once printed
+        # a populated concentration graph under an ``absent`` verdict; the
+        # graph was true and the probe was incomplete. Reconcile all output
+        # shapes before dependent sections read this verdict.
+        if verdict == "absent" and (
+            any(diagram.mermaid for diagram in diagrams) or any(panel.rows for panel in panels)
+        ):
+            verdict = "evidenced"
+
+        # Adjacent queries are run only when the concern was not found. If a
+        # finding, diagram, or panel established it, what is nearby is not the
+        # interesting fact.
+        candidate_results = (
+            tuple(run_probe(probe, corpus) for probe in section.candidates)
+            if verdict == "absent" and section.candidates
+            else ()
+        )
+        # A concern can presuppose another. Pagination without an HTTP surface
+        # is not a gap in the system, it is a question that does not arise —
+        # and reporting fifty of those buries the handful that do. The
+        # requirement is read from verdicts already decided this pass.
+        unmet = [
+            name
+            for name in section.requires
+            if decided.get(name) not in {"applicable", "degenerate", "evidenced"}
+        ]
+        if unmet and verdict == "absent":
+            verdict = "not_applicable"
+        decided[section.section_id] = verdict
+        unmet_requirements = tuple(unmet) if verdict == "not_applicable" else ()
 
         rendered.append(
             RenderedSection(

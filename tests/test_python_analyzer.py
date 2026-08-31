@@ -934,6 +934,83 @@ class RouteRoleTests(TestCase):
         self.assertIn("exercises the framework", grouped["test_route"][0])
 
 
+class StandardLibraryRouteTests(TestCase):
+    """``http.server`` dispatch is a route declaration written as control flow."""
+
+    SOURCE = (
+        "from http.server import BaseHTTPRequestHandler\n"
+        "from urllib.parse import urlparse\n\n"
+        "class Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        parsed = urlparse(self.path)\n"
+        "        if parsed.path == '/':\n"
+        "            return self.home()\n"
+        "        if parsed.path.startswith('/api/evidence/'):\n"
+        "            return self.evidence()\n"
+    )
+
+    def _result(self, source: str, filename: str = "server.py") -> Any:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / filename).write_text(source, encoding="utf-8")
+            return analyze_snapshot(scan_repository(root))
+
+    def test_literal_dispatch_in_a_standard_handler_becomes_routes(self) -> None:
+        result = self._result(self.SOURCE)
+        routes = sorted(claim.claim for claim in result.claims if claim.category == "http_route")
+
+        self.assertEqual(len(routes), 2)
+        self.assertTrue(any("GET / is handled by" in claim for claim in routes))
+        self.assertTrue(
+            any("GET /api/evidence/{remainder} is handled by" in claim for claim in routes)
+        )
+        inventory = [
+            claim.claim for claim in result.claims if claim.category == "http_route_inventory"
+        ]
+        self.assertEqual(inventory, ["Python source declares 2 HTTP route handlers."])
+
+    def test_the_route_metadata_drives_existing_diagrams_and_panels(self) -> None:
+        result = self._result(self.SOURCE)
+        handler = next(
+            symbol for symbol in result.symbols if symbol.qualified_name.endswith("Handler.do_GET")
+        )
+
+        self.assertEqual(
+            [(item["method"], item["path"]) for item in handler.metadata["routes"]],
+            [("GET", "/"), ("GET", "/api/evidence/{remainder}")],
+        )
+
+    def test_a_method_with_the_conventional_name_in_an_ordinary_class_is_not_a_route(self) -> None:
+        result = self._result(
+            "class FileWalker:\n"
+            "    def do_GET(self):\n"
+            "        if self.path == '/tmp':\n"
+            "            return None\n"
+        )
+
+        self.assertFalse(any(claim.category == "http_route" for claim in result.claims))
+
+    def test_unrelated_literals_inside_a_handler_are_not_routes(self) -> None:
+        result = self._result(
+            "from http.server import BaseHTTPRequestHandler\n"
+            "class Handler(BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            "        if self.resource == '/internal':\n"
+            "            return None\n"
+        )
+
+        self.assertFalse(any(claim.category == "http_route" for claim in result.claims))
+
+    def test_a_standard_handler_fixture_does_not_become_the_served_surface(self) -> None:
+        result = self._result(self.SOURCE, "test_server.py")
+
+        self.assertFalse(any(claim.category == "http_route" for claim in result.claims))
+        self.assertEqual(
+            sum(claim.category == "test_route" for claim in result.claims),
+            2,
+        )
+
+
 class EndpointPositionTests(TestCase):
     """A URL-shaped string is only an endpoint if the program dials it.
 

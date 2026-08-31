@@ -6,6 +6,9 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Added
 
+- Python standard-library HTTP route recovery from literal `do_GET`/`do_POST`
+  dispatch, cross-output verdict reconciliation, and text-qualified consequence rules
+  that join only the mutating route claims relevant to a trust-boundary finding
 - a loss-accounted full-document parity corpus that assigns every nonblank baseline
   and candidate line to a stable block and keeps private-derived output outside Git
 - blinded, resumable Claude/Codex parity-review batches with strict evidence-bound

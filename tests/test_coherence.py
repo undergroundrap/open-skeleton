@@ -74,6 +74,32 @@ class CoherenceTests(TestCase):
         )
         self.assertIn("verdict-contradicts-findings", self._checks(broken))
 
+    def test_a_populated_projection_prevents_an_absent_verdict(self) -> None:
+        # The concentration graph is computed from the file census. Its probe
+        # can miss when a small repository does not cross the concentration
+        # claim threshold, but the graph still establishes the concern.
+        section = next(
+            item
+            for item in self._sample().sections
+            if item.section_id == "introduction.concentration"
+        )
+
+        self.assertTrue(any(diagram.mermaid for diagram in section.diagrams))
+        self.assertEqual(section.verdict, "evidenced")
+
+    def test_absence_announced_above_a_populated_projection_is_caught(self) -> None:
+        document = self._sample()
+        target = next(item for item in document.sections if any(x.mermaid for x in item.diagrams))
+        broken = replace(
+            document,
+            sections=tuple(
+                replace(item, verdict="absent", findings=()) if item is target else item
+                for item in document.sections
+            ),
+        )
+
+        self.assertIn("verdict-contradicts-projection", self._checks(broken))
+
     def test_a_wrong_absence_tally_is_still_caught(self) -> None:
         # The tally check finds its paragraph by heading and reports "coherent"
         # when it finds none, so renaming the section in the renderer alone
