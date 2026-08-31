@@ -142,8 +142,19 @@ def _verify_repository(repository: Path, record: dict[str, Any]) -> dict[str, An
         raise ValueError("git is required to verify the comparison fixture")
 
     def run(*arguments: str) -> str:
+        # Desktop tasks can create the isolated fixture through a sandbox user
+        # and later verify it through the signed-in user. Trust only this exact,
+        # caller-selected fixture path for the read-only command; never mutate
+        # the user's global safe.directory list.
         completed = subprocess.run(  # noqa: S603
-            [git, "-C", str(repository), *arguments],
+            [
+                git,
+                "-c",
+                f"safe.directory={repository.resolve().as_posix()}",
+                "-C",
+                str(repository),
+                *arguments,
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -277,7 +288,10 @@ def _render(
     def row(name: str, key: str, fmt: str = "{:,}") -> str:
         left = ours.get(key)
         right = theirs.get(key)
-        render = lambda value: "not reported" if value is None else fmt.format(value)  # noqa: E731
+
+        def render(value: Any) -> str:
+            return "not reported" if value is None else fmt.format(value)
+
         return f"| {name} | {render(left)} | {render(right)} |\n"
 
     baseline_name = f"{record['provider']} baseline"

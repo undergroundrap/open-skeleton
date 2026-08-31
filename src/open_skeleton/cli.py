@@ -45,7 +45,9 @@ from open_skeleton.spec import (
 )
 from open_skeleton.spec.coherence import check_coherence, check_conservation
 from open_skeleton.state import resolve_state_dir
+from open_skeleton.synthesis_assembly import assemble_synthesis
 from open_skeleton.synthesis_plan import build_synthesis_plan
+from open_skeleton.synthesis_runner import run_synthesis_plan, validate_external_output
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -207,6 +209,57 @@ def _parser() -> argparse.ArgumentParser:
     plan_synthesis.add_argument("--max-chars", type=int, default=20_000)
     plan_synthesis.add_argument("--max-claims", type=int, default=100)
     plan_synthesis.add_argument("--json", action="store_true")
+
+    run_plan = subparsers.add_parser(
+        "run-synthesis-plan",
+        help="Dry-run or explicitly execute a bounded synthesis plan.",
+    )
+    run_plan.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    run_plan.add_argument("--state-dir", type=Path, help="State directory.")
+    run_plan.add_argument(
+        "--plan", type=Path, help="Plan path. Defaults to <state-dir>/synthesis-plan.json."
+    )
+    run_plan.add_argument(
+        "--output-dir",
+        type=Path,
+        help="External result directory. Defaults to <state-dir>/synthesis-runs/<provider>.",
+    )
+    run_plan.add_argument("--provider", required=True, choices=["codex", "claude", "local-command"])
+    run_plan.add_argument("--execute", action="store_true", help="Actually contact the provider.")
+    run_plan.add_argument("--model")
+    run_plan.add_argument("--timeout-seconds", type=int, default=300)
+    run_plan.add_argument("--concurrency", type=int, default=1)
+    run_plan.add_argument("--max-jobs", type=int, default=100)
+    run_plan.add_argument(
+        "--command",
+        dest="provider_command",
+        nargs="+",
+        help="Executable and arguments for --provider local-command.",
+    )
+    run_plan.add_argument("--json", action="store_true")
+
+    assemble = subparsers.add_parser(
+        "assemble-synthesis",
+        help="Validate completed synthesis receipts and render a separate Markdown projection.",
+    )
+    assemble.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    assemble.add_argument("--state-dir", type=Path, help="State directory.")
+    assemble.add_argument(
+        "--plan", type=Path, help="Plan path. Defaults to <state-dir>/synthesis-plan.json."
+    )
+    assemble.add_argument(
+        "--results-dir",
+        required=True,
+        type=Path,
+        help="External synthesis-run directory containing completed job receipts.",
+    )
+    assemble.add_argument(
+        "--output",
+        type=Path,
+        help="Markdown path. Defaults to <state-dir>/source-grounded-synthesis.md.",
+    )
+    assemble.add_argument("--max-jobs", type=int, default=1_000)
+    assemble.add_argument("--json", action="store_true")
 
     benchmark = subparsers.add_parser(
         "benchmark",
@@ -556,6 +609,7 @@ def _plan_synthesis(args: argparse.Namespace) -> int:
         max_claims=args.max_claims,
     )
     output = (args.output or state_dir / "synthesis-plan.json").expanduser().resolve()
+    validate_external_output(output, root)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(plan, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -578,6 +632,64 @@ def _plan_synthesis(args: argparse.Namespace) -> int:
         print(f"Jobs: {plan['job_count']:,}")
         print("Model contacted: no")
         print(f"Plan: {output}")
+    return 0
+
+
+def _run_synthesis_plan(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    plan_path = (args.plan or state_dir / "synthesis-plan.json").expanduser().resolve()
+    if args.provider == "codex":
+        adapter: ProviderAdapter = CodexCliProvider()
+    elif args.provider == "claude":
+        adapter = ClaudeCliProvider()
+    else:
+        if not args.provider_command:
+            raise ValueError("--provider local-command requires --command")
+        adapter = LocalCommandProvider(args.provider_command)
+    output_dir = (
+        (args.output_dir or state_dir / "synthesis-runs" / adapter.name).expanduser().resolve()
+    )
+    summary = run_synthesis_plan(
+        plan_path,
+        source_root=root,
+        output_dir=output_dir,
+        adapter=adapter,
+        execute=args.execute,
+        model=args.model,
+        timeout_seconds=args.timeout_seconds,
+        concurrency=args.concurrency,
+        max_jobs=args.max_jobs,
+    )
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False))
+    else:
+        print(f"Provider: {summary['provider']}")
+        print(f"Mode: {'execute' if summary['execute'] else 'dry-run'}")
+        print(f"Jobs: {summary['job_count']:,}")
+        print(f"Results: {summary['output_dir']}")
+    failures = int(summary["status_counts"].get("error", 0))
+    return 1 if args.execute and failures else 0
+
+
+def _assemble_synthesis(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    plan_path = (args.plan or state_dir / "synthesis-plan.json").expanduser().resolve()
+    output = (args.output or state_dir / "source-grounded-synthesis.md").expanduser().resolve()
+    summary = assemble_synthesis(
+        plan_path,
+        results_dir=args.results_dir,
+        source_root=root,
+        output_path=output,
+        max_jobs=args.max_jobs,
+    )
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False))
+    else:
+        print(f"Jobs assembled: {summary['job_count']:,}")
+        print("Model contacted: no")
+        print(f"Document: {summary['artifact']}")
     return 0
 
 
@@ -716,6 +828,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _synthesize(args)
         if args.command == "plan-synthesis":
             return _plan_synthesis(args)
+        if args.command == "run-synthesis-plan":
+            return _run_synthesis_plan(args)
+        if args.command == "assemble-synthesis":
+            return _assemble_synthesis(args)
         if args.command == "benchmark":
             return _benchmark(args)
         if args.command == "spec":

@@ -169,3 +169,65 @@ class CliTests(TestCase):
             self.assertGreater(summary["job_count"], 0)
             self.assertEqual(plan["job_count"], summary["job_count"])
             self.assertTrue(all(item["parallel_safe"] for item in plan["jobs"]))
+
+    def test_run_synthesis_plan_requires_execute_before_contacting_provider(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            create_sample_repository(root)
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(
+                    main(["analyze", str(root), "--state-dir", str(state), "--quiet"]), 0
+                )
+                self.assertEqual(main(["plan-synthesis", str(root), "--state-dir", str(state)]), 0)
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = main(
+                    [
+                        "run-synthesis-plan",
+                        str(root),
+                        "--state-dir",
+                        str(state),
+                        "--provider",
+                        "codex",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            summary = json.loads(stdout.getvalue())
+            self.assertFalse(summary["execute"])
+            self.assertEqual(summary["status_counts"], {"planned": summary["job_count"]})
+            self.assertFalse((state / "synthesis-runs").exists())
+
+    def test_plan_synthesis_rejects_source_derived_output_inside_git(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            state = workspace / "state"
+            worktree = workspace / "other-worktree"
+            root.mkdir()
+            worktree.mkdir()
+            (worktree / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
+            create_sample_repository(root)
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                self.assertEqual(
+                    main(["analyze", str(root), "--state-dir", str(state), "--quiet"]), 0
+                )
+
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                result = main(
+                    [
+                        "plan-synthesis",
+                        str(root),
+                        "--state-dir",
+                        str(state),
+                        "--output",
+                        str(worktree / "synthesis-plan.json"),
+                    ]
+                )
+            self.assertEqual(result, 2)
+            self.assertIn("outside Git worktrees", stderr.getvalue())

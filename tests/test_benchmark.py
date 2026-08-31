@@ -5,15 +5,33 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 
-from open_skeleton.benchmark import _claim_matches, _load_gold, run_benchmark
+from open_skeleton.benchmark import _claim_matches, _git_commit, _load_gold, run_benchmark
 from open_skeleton.models import ClaimRecord
 
 
 class BenchmarkTests(TestCase):
+    def test_git_receipt_trusts_only_the_exact_selected_fixture_for_the_command(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "fixture"
+            root.mkdir()
+            expected = "a" * 40
+
+            with patch(
+                "open_skeleton.benchmark.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0, expected + "\n", ""),
+            ) as run:
+                observed = _git_commit(root)
+
+        self.assertEqual(observed, expected)
+        command = run.call_args.args[0]
+        self.assertIn(f"safe.directory={root.resolve().as_posix()}", command)
+
     def _claim(self, text: str, category: str, status: str) -> ClaimRecord:
         return ClaimRecord(
             claim_id="claim",

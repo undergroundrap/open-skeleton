@@ -217,26 +217,34 @@ it cannot tell you what they *concluded*. Shipping a number that claims
 otherwise would be the true-but-misleading failure `open-skeleton audit`
 exists to catch, applied to our own benchmarks.
 
-The failed automatic scores have been replaced by a one-to-one review inventory,
-not by a fourth heuristic score. The inventory extracts high-salience causal,
-consequence, risk, and constraint-bearing units from a registered baseline,
-separates repository-grounded anchors from ingestion-context hints, and retrieves
-the closest candidate paragraph as a review aid. It is fence-aware and refuses to
-report conclusion coverage until every extracted unit has an explicit adjudication.
+The failed automatic scores have been replaced by a fail-closed parity protocol,
+not by a fourth heuristic score. The first stage accounts for every nonblank line in
+both artifacts, including lists, tables, diagrams, code, headings, and prose. No model
+decides what enters the denominator.
 
 ```powershell
-python benchmarks\comparison\run_reasoning_inventory.py `
+python benchmarks\comparison\run_parity_inventory.py `
   --baseline C:\path\to\registered\tech_spec.md `
   --baseline-id external-single-player-ai-mud-2026-08-04 `
   --candidate C:\path\to\spec.md `
   --repo C:\path\to\pinned\repository `
   --context C:\path\to\codebase_context.md `
-  --output-dir reasoning-review
+  --output-dir C:\private\parity-corpus
 ```
 
-The valid review outcomes are `equivalent`, `partial`, `missing`,
-`baseline_incorrect`, and `unjudgeable`. A lexical match is never accepted as one
-of those outcomes. See [source-grounded synthesis](SYNTHESIS.md) for how the same
+`run_agent_parity.py` then creates blinded Claude/Codex review batches. Planning is
+model-free; `--execute` plus explicit provider model identifiers are required to
+contact either provider. The valid semantic
+relations are `equivalent`, `candidate_superset`, `partial`, `missing`,
+`contradictory`, `baseline_incorrect`, and `unjudgeable`. Lexical retrieval never
+assigns a relation. Exact dual-agent agreement remains a proposal.
+
+`run_parity_gate.py` is the only stage allowed to emit `parity_proven: true`. It
+requires a named human to verify every block and every semantic atom, and requires a
+second human plus repository evidence for any baseline-invalid denominator change.
+The resulting proof is fixture-scoped and binds the corpus, proposals, candidate,
+baseline, rubric, and clean repository revision by hashes. See
+[source-grounded synthesis](SYNTHESIS.md) for the complete protocol and how the same
 finite obligation model feeds bounded narrative jobs.
 
 ## Robustness across unseen packages

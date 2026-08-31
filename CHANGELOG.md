@@ -6,6 +6,19 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Added
 
+- a loss-accounted full-document parity corpus that assigns every nonblank baseline
+  and candidate line to a stable block and keeps private-derived output outside Git
+- blinded, resumable Claude/Codex parity-review batches with strict evidence-bound
+  schemas, deterministic reconciliation, and no provider invocation without
+  `--execute`
+- a fail-closed human parity gate that requires atom verification for every block and
+  two humans plus repository evidence for denominator-changing decisions
+- `open-skeleton run-synthesis-plan`, a dry-run-by-default bounded dispatcher with
+  explicit provider execution, concurrency limits, exact-request resume, isolated
+  workspaces, and atomic source-derived results outside Git
+- `open-skeleton assemble-synthesis`, a model-free exact-receipt gate that preserves
+  claim citations and renders completed jobs as a separate narrative document without
+  modifying the deterministic specification
 - `open-skeleton plan-synthesis`, producing one independent, bounded,
   source-grounded narrative job per non-structural specification obligation
   without invoking a model
@@ -139,6 +152,9 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Fixed
 
+- read-only benchmark and comparison Git receipts now trust only the exact selected
+  fixture for each command, allowing desktop and sandbox users to verify the same
+  checkout without changing global Git configuration
 - ledgers written by an earlier schema are migrated additively instead of
   failing on a missing column; a migrated row reports unknown yield rather
   than a fabricated zero

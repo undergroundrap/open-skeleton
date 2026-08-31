@@ -66,9 +66,33 @@ open-skeleton plan-synthesis C:\path\to\repository
 ```
 
 The default artifact is `synthesis-plan.json` in the repository's external state
-directory. An orchestrator may dispatch its `parallel_safe` jobs concurrently. Open
-Skeleton does not currently dispatch the whole plan itself; provider invocation remains
-explicit.
+directory. `run-synthesis-plan` validates the frozen plan and prepares exact request
+hashes without contacting a provider by default:
+
+```powershell
+open-skeleton run-synthesis-plan C:\path\to\repository --provider codex
+```
+
+`--execute` is required to contact Codex, Claude, or an explicitly selected local
+command. Execution supports 1–16 workers, exact-request resume, and atomic per-job
+receipts. Context packets are limited to 100 claims, 200,000 declared characters, and
+1 MB of serialized content. Provider workspaces and results must remain outside the
+analyzed repository and every Git worktree; a local provider command cannot point to
+target-repository code.
+
+After every frozen job has one complete receipt, `assemble-synthesis` validates exact
+plan and job coverage, rejects invented claim IDs, and renders a separate narrative
+projection:
+
+```powershell
+open-skeleton assemble-synthesis C:\path\to\repository `
+  --results-dir C:\private\synthesis-runs\codex-cli
+```
+
+The static assembly step contacts no model. It preserves section numbers and titles,
+summaries, narratives, claim IDs, caveats, conflicts, and unknowns in
+`source-grounded-synthesis.md`. It refuses to overwrite deterministic `spec.md` and
+also refuses target-repository or Git-worktree output paths.
 
 ## Why this can be faster
 
@@ -82,29 +106,63 @@ This design does not assume that a model is better at repository census. Its use
 is narrower: connect already verified facts into an explanation, state consequences,
 and make uncertainty readable.
 
-## Measuring whether the conclusions are truly present
+## Proving whether the conclusions are truly present
 
 Fact coverage and heading coverage cannot answer whether two documents reach the same
-conclusion. `run_reasoning_inventory.py` creates a one-to-one review queue instead:
+conclusion. The strict parity workflow begins with a loss-accounted corpus instead:
 
 ```powershell
-python benchmarks\comparison\run_reasoning_inventory.py `
+python benchmarks\comparison\run_parity_inventory.py `
   --baseline C:\path\to\registered\tech_spec.md `
   --baseline-id external-single-player-ai-mud-2026-08-04 `
   --candidate C:\path\to\spec.md `
   --repo C:\path\to\pinned\repository `
   --context C:\path\to\codebase_context.md `
-  --output-dir reasoning-review
+  --output-dir C:\private\parity-corpus
 ```
 
-The inventory is fence-aware, verifies the registered artifact and repository revision,
-marks repository-grounded and prompt-seeded anchors, and retrieves a related candidate
-paragraph. Retrieval is only a review aid. It never labels lexical similarity as
-semantic equivalence and reports no conclusion-coverage number until every extracted
-unit is adjudicated as `equivalent`, `partial`, `missing`, `baseline_incorrect`, or
-`unjudgeable`.
+The inventory verifies the registered artifact and clean repository revision, freezes
+the candidate and context hashes, and assigns every nonblank baseline and candidate
+line exactly once. Its blocks include prose, headings, lists, table rows, code, and
+diagrams. Because it contains private baseline text, it refuses to write inside the
+analyzed repository, this tool repository, or any Git worktree.
 
-This is the current honest boundary: the deterministic engine recovers nearly all
-repository-present names in both registered examples, but that does not prove it
-naturally reaches every useful conclusion. The review inventory makes the remaining
-question finite, attributable, and safe to use as the next analyzer-development queue.
+The next command is a dry run by default. It freezes a rubric and creates deterministic
+batches without contacting a model:
+
+```powershell
+python benchmarks\comparison\run_agent_parity.py `
+  --corpus C:\private\parity-corpus\parity-corpus.json `
+  --output-dir C:\private\parity-review
+```
+
+Passing `--execute` is the explicit paid-provider action and requires
+`--codex-model` and `--claude-model` (or the corresponding option for a selected
+single reviewer), so the model identifiers become part of the frozen plan. Claude and
+Codex then review the same batches independently in fresh, restricted sessions. Each
+sees the complete candidate corpus and neither sees the other's output. The strict result contract
+requires complete unit coverage, evidence IDs, candidate block IDs, a rationale,
+materiality, baseline validity, and one of `equivalent`, `candidate_superset`,
+`partial`, `missing`, `contradictory`, `baseline_incorrect`, `unjudgeable`, or
+`not_applicable`. Exact agreement becomes an agent-consensus proposal; disagreement
+becomes disputed. Duplicate, missing, malformed, or denominator-changing results fail
+closed.
+
+Two models agreeing is still not proof. Generate the human work file only after the
+provider proposals are frozen:
+
+```powershell
+python benchmarks\comparison\run_parity_gate.py `
+  --corpus C:\private\parity-corpus\parity-corpus.json `
+  --proposals C:\private\parity-review\parity-review-proposals.json `
+  --output-dir C:\private\parity-proof `
+  --write-template
+```
+
+The template prefills exact consensus but requires a named human to inspect every
+block and attest that every semantic atom was checked. Any decision that marks the
+baseline incorrect needs a distinct second human and repository evidence IDs. Running
+the gate again with `--adjudications` produces `parity_proven: true` only when every
+supported material block is human-verified as equivalent or a supported candidate
+superset. The receipt is scoped to the exact hash-pinned fixture; it cannot establish
+universal superiority or natural-discovery parity on unseen repositories.

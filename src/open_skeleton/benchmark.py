@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import time
 import tracemalloc
@@ -35,10 +36,21 @@ def _load_gold(path: Path) -> dict[str, Any]:
 
 
 def _git_commit(root: Path) -> str | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
     try:
         # Fixed argument vector, no shell, read-only git query.
         completed = subprocess.run(  # noqa: S603
-            ["git", "-C", str(root), "rev-parse", "HEAD"],  # noqa: S607
+            [
+                git,
+                "-c",
+                f"safe.directory={root.resolve().as_posix()}",
+                "-C",
+                str(root),
+                "rev-parse",
+                "HEAD",
+            ],
             capture_output=True,
             text=True,
             timeout=10,

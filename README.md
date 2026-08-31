@@ -108,6 +108,8 @@ open-skeleton diff        compare snapshots and project stale claims
 open-skeleton serve       run the read-only local dashboard
 open-skeleton synthesize  explicitly invoke an optional provider
 open-skeleton plan-synthesis  build independent source-grounded narrative jobs
+open-skeleton run-synthesis-plan  dry-run or execute bounded narrative jobs
+open-skeleton assemble-synthesis  validate receipts and render narrative Markdown
 open-skeleton benchmark   score a pinned fixture and baseline artifact
 open-skeleton spec        render a long-form specification from an outline profile
 open-skeleton audit       flag claim groups shaped like a known mistake
@@ -238,17 +240,35 @@ open-skeleton synthesize "state ownership" C:\repo --provider local-command --co
 ```
 
 For a whole document, `plan-synthesis` first creates one independent bounded job
-per non-structural outline obligation without contacting a model. An external
-orchestrator can run those jobs concurrently while the local ledger remains the
-source of truth.
+per non-structural outline obligation without contacting a model. The companion
+runner is also a dry run unless `--execute` is present; it supports bounded
+concurrency, exact-request resume, and atomic external result receipts while the
+local ledger remains the source of truth.
 
 ```powershell
 open-skeleton plan-synthesis C:\repo
+open-skeleton run-synthesis-plan C:\repo --provider codex
+open-skeleton run-synthesis-plan C:\repo --provider codex --model MODEL_ID --execute --concurrency 4
+open-skeleton assemble-synthesis C:\repo --results-dir C:\private\synthesis-runs\codex-cli
 ```
 
 Provider invocation is explicit and may incur third-party cost or network
 activity. See [source-grounded synthesis](docs/SYNTHESIS.md) and
 [provider adapters](docs/PROVIDERS.md).
+
+### Full-document parity proof
+
+The comparison suite can freeze every nonblank line in a registered baseline and
+candidate, create blinded Claude/Codex review batches, reconcile their independent
+proposals, and generate a human adjudication file. It never calls a provider without
+`--execute`, and it never treats model agreement as proof. `parity_proven` can become
+true only after a named human verifies every block's semantic atoms; removing an
+incorrect baseline item from the denominator requires a second human and repository
+evidence. Private baseline-derived files are rejected inside every Git worktree.
+
+This proves semantic coverage only for the exact hash-pinned artifact and fixture. It
+does not prove universal quality on unseen repositories. See the
+[strict parity protocol](docs/SYNTHESIS.md#proving-whether-the-conclusions-are-truly-present).
 
 ## Reproducible AI-MUD benchmark
 
