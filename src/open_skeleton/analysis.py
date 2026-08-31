@@ -25,6 +25,7 @@ from open_skeleton.analyzers.rust_lexical import RustLexicalAnalyzer
 from open_skeleton.analyzers.sql_schema import SqlSchemaAnalyzer
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer
 from open_skeleton.analyzers.workflow_triggers import WorkflowTriggerAnalyzer
+from open_skeleton.http_targets import local_request_path
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -557,7 +558,7 @@ def _append_route_documentation_conflicts(
     )
 
 
-CLIENT_ROUTE_PATH = re.compile(r"^(?P<path>/\S*) (?:is requested|begins a request path)")
+CLIENT_ROUTE_PATH = re.compile(r"^(?P<target>\S+) (?:is requested|begins a request path)")
 SERVED_ROUTE_PATH = re.compile(
     r"^(?:(?P<method>[A-Z]+) )?(?P<path>/\S*) is (?:registered|handled|served)"
 )
@@ -593,12 +594,14 @@ def _append_client_route_reconciliation(
         if match:
             served.setdefault(match.group("path"), claim)
 
-    requested = [
-        (match.group("path"), claim)
-        for claim in claims
-        if claim.category == "http_client_route"
-        and (match := CLIENT_ROUTE_PATH.match(claim.claim)) is not None
-    ]
+    requested: list[tuple[str, ClaimRecord]] = []
+    for claim in claims:
+        if claim.category != "http_client_route":
+            continue
+        match = CLIENT_ROUTE_PATH.match(claim.claim)
+        path = local_request_path(match.group("target")) if match is not None else None
+        if path is not None:
+            requested.append((path, claim))
 
     for path, client_claim in requested:
         route_claim = served.get(path)

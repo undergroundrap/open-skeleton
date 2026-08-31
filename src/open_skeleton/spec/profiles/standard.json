@@ -180,7 +180,8 @@
             "security.authentication"
           ],
           "panels": [
-            "endpoint_catalog"
+            "endpoint_catalog",
+            "contract_concordance"
           ],
           "candidates": [
             {

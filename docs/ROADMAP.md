@@ -1,5 +1,10 @@
 # Roadmap
 
+The authoritative dependency order and proof gates are in
+[PARITY_EXECUTION_PLAN.md](PARITY_EXECUTION_PLAN.md). The immediate next work is
+contract concordance beyond HTTP; ownership topology and state-lifecycle synthesis
+follow only after that contract layer is proven.
+
 ## Completed foundation
 
 - bounded inventory, content hashes, SQLite ledger, JSONL, and concise Markdown
@@ -18,8 +23,8 @@
 ## Next analysis depth
 
 - framework rule packs versioned separately from parsers
-- contract concordance across routes, clients, docs, constructors, schemas, CLI values,
-  and tests
+- extend the completed HTTP route/client/documentation concordance across explicit
+  model, schema, constructor, SQL, CLI, registry, and test contracts
 - state-lifecycle synthesis: identity, CRUD shape, retention, pruning, invalidation,
   migration, recovery, and transaction/failure windows
 - call-graph resolution, endpoint-to-client comparison, shared-facade ownership, and

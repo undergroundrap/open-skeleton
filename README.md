@@ -42,6 +42,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Runtime-reach extraction: platform API called through imports, and third-party hosts named in stylesheets and markup that no dependency manifest shows
 - Substitute analysis, so an absent concern names the structure doing its job instead of stopping at the absence
 - A security control matrix, an endpoint catalog with per-handler guards and refusals, and module-level data flow
+- HTTP contract concordance across served routes, recognized API tables, exact client paths, and literal dynamic prefixes, with complete claim/evidence references for bounded agent explanation
 - Per-section provenance: which files each section's conclusions were read out of
 - Citation integrity verification that re-resolves every receipt against current source bytes
 - Self-consistency checks that read the generated document and fail it when the prose disagrees with the data it was projected from
@@ -269,6 +270,8 @@ evidence. Private baseline-derived files are rejected inside every Git worktree.
 This proves semantic coverage only for the exact hash-pinned artifact and fixture. It
 does not prove universal quality on unseen repositories. See the
 [strict parity protocol](docs/SYNTHESIS.md#proving-whether-the-conclusions-are-truly-present).
+The dependency-ordered implementation program is the
+[parity execution plan](docs/PARITY_EXECUTION_PLAN.md).
 
 ## Reproducible AI-MUD benchmark
 

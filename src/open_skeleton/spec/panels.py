@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_skeleton.spec.capabilities import Capability
+from open_skeleton.spec.concordance import ContractRoute
 from open_skeleton.spec.consequences import Consequence
 from open_skeleton.spec.roles import MultiRole
 from open_skeleton.spec.substitutes import Substitute
@@ -57,6 +58,7 @@ class PanelContext:
     exclusions: tuple[dict[str, Any], ...] = ()
     snapshot: dict[str, Any] = field(default_factory=dict)
     capabilities: tuple[Capability, ...] = ()
+    contract_concordance: tuple[ContractRoute, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
     claim_locations: dict[str, str] = field(default_factory=dict)
@@ -1010,6 +1012,33 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _contract_concordance(routes: tuple[ContractRoute, ...]) -> Panel:
+    """Route contracts joined across implementation, docs, and local callers."""
+
+    rows = tuple(
+        (
+            f"`{item.path}`",
+            ", ".join(item.served_methods) or "—",
+            ", ".join(item.documented_methods) or "—",
+            item.client_relation,
+            item.documentation_relation,
+        )
+        for item in routes
+    )
+    return Panel(
+        name="contract_concordance",
+        title="HTTP contract concordance",
+        columns=("Path", "Served methods", "Documented methods", "Local caller", "Relation"),
+        alignments=("left", "left", "left", "left", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Exact paths and literal static prefixes only. A local caller match does not prove "
+            "that runtime configuration sends the request to this server. The complete rows, "
+            "claim IDs, and evidence IDs are in `spec.json` under `contract_concordance`."
+        ),
+    )
+
+
 def _security_matrix(context: PanelContext) -> Panel:
     """Every security control in one table, with the verdict already reached.
 
@@ -1473,6 +1502,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _data_flow(context)
     if name == "endpoint_catalog":
         return _endpoint_catalog(context.symbols)
+    if name == "contract_concordance":
+        return _contract_concordance(context.contract_concordance)
     if name == "security_matrix":
         return _security_matrix(context)
     if name == "multi_role_structures":

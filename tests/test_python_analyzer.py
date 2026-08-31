@@ -1501,6 +1501,22 @@ class ClientRouteReconciliationTests(TestCase):
         self.assertIn("/api/notes", found[0])
         self.assertIn("both sides of that call are in this snapshot", found[0])
 
+    def test_an_absolute_loopback_url_is_joined_by_its_path(self) -> None:
+        client = (
+            "export async function load() {\n"
+            '  return fetch("http://localhost:8000/api/notes?limit=5");\n'
+            "}\n"
+        )
+        found = self._claims({"api.py": self.SERVER, "web/app.ts": client})
+        self.assertEqual(len(found), 1)
+        self.assertIn("/api/notes", found[0])
+
+    def test_an_external_url_with_the_same_path_is_not_joined(self) -> None:
+        client = (
+            'export async function load() {\n  return fetch("https://example.com/api/notes");\n}\n'
+        )
+        self.assertEqual(self._claims({"api.py": self.SERVER, "web/app.ts": client}), [])
+
     def test_the_join_does_not_claim_the_client_reaches_it(self) -> None:
         # A monorepo can hold two services spelling a path the same way, and
         # nothing here resolves configuration.

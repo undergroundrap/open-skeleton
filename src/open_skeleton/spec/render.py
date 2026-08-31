@@ -15,6 +15,7 @@ from typing import Any
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import utc_now
 from open_skeleton.spec.capabilities import Capability, build_capabilities
+from open_skeleton.spec.concordance import ContractRoute, build_contract_concordance
 from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
@@ -200,6 +201,7 @@ class SpecDocument:
     total_claims: int
     cited_claims: int
     capabilities: tuple[Capability, ...] = ()
+    contract_concordance: tuple[ContractRoute, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     dossiers: tuple[Dossier, ...] = ()
     substitutes: tuple[Substitute, ...] = ()
@@ -219,6 +221,7 @@ class SpecDocument:
         return {
             "schema": self.schema,
             "capabilities": [item.to_dict() for item in self.capabilities],
+            "contract_concordance": [item.to_dict() for item in self.contract_concordance],
             "consequences": [item.to_dict() for item in self.consequences],
             "dossiers": [item.to_dict() for item in self.dossiers],
             "substitutes": [item.to_dict() for item in self.substitutes],
@@ -445,6 +448,11 @@ def build_spec(
         edges=edges,
         evidence_by_id=evidence_by_id,
     )
+    contract_concordance = build_contract_concordance(
+        snapshot_id=resolved_id,
+        claims=claims,
+        evidence_by_id=evidence_by_id,
+    )
     # Consequences need the absent verdicts, which are only known once every
     # section has been evaluated, so panels are rebuilt after that pass below.
     panel_context = PanelContext(
@@ -452,6 +460,7 @@ def build_spec(
         exclusions=exclusions,
         snapshot=snapshot_row,
         capabilities=capabilities,
+        contract_concordance=contract_concordance,
         symbols=symbols,
     )
 
@@ -670,6 +679,7 @@ def build_spec(
             "test_files": sum(1 for item in files if str(item["role"]) == "test"),
         },
         capabilities=capabilities,
+        contract_concordance=contract_concordance,
         consequences=consequences,
         dossiers=dossiers,
         substitutes=substitutes,
