@@ -76,6 +76,10 @@ _VERDICT_SENTENCE = {
     "structural": (
         "This section organizes the subsections below and makes no presence claim of its own."
     ),
+    "structural_leaf": (
+        "This section makes no presence claim of its own. The tables below are drawn "
+        "from evidence established elsewhere in this document."
+    ),
     "evidenced": (
         "**Determination: present, but not by probe.** Every probe declared for this "
         "concern returned zero matches, and {findings:,} claim(s) about it were still "
@@ -165,6 +169,10 @@ class RenderedSection:
     examined_files: tuple[tuple[str, int], ...] = ()
     unmet_requirements: tuple[str, ...] = ()
     candidate_results: tuple[ProbeResult, ...] = ()
+    # Whether the profile gives this section subsections. A structural
+    # section that has none still carries panels, and saying it organizes
+    # subsections below it is false about the document itself.
+    has_children: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -614,6 +622,7 @@ def build_spec(
                 verdict=verdict,
                 probe_results=probe_results,
                 candidate_results=candidate_results,
+                has_children=bool(section.children),
                 findings=findings,
                 constraints=constraints,
                 diagrams=diagrams,
@@ -1284,7 +1293,13 @@ def render_spec_markdown(document: SpecDocument) -> str:
         # An absence is only as strong as the corpus it was measured against.
         # "The glob matched zero" invites the question zero out of what, and
         # the answer is already known here.
-        sentence = _VERDICT_SENTENCE[section.verdict].format(
+        # A structural section with no subsections organizes nothing.
+        verdict_key = (
+            "structural_leaf"
+            if section.verdict == "structural" and not section.has_children
+            else section.verdict
+        )
+        sentence = _VERDICT_SENTENCE[verdict_key].format(
             total=total,
             findings=len(section.findings),
             corpus=corpus_files,

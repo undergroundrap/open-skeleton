@@ -430,3 +430,45 @@ class UnreadLanguageTests(TestCase):
             self.assertIn("Shell", dict(document.unread_languages))
             markdown = render_spec_markdown(document)
             self.assertIn("no analyzer is equipped to read", markdown)
+
+
+class StructuralSentenceTests(TestCase):
+    """A structural section with no subsections organizes nothing.
+
+    Six sections carried tables and told the reader they organized the
+    subsections below them. There were none. A document that misdescribes its
+    own shape is the failure this module exists to catch, and it does not stop
+    being one because the sentence is boilerplate.
+    """
+
+    def _sentences(self) -> dict[str, str]:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            markdown = render_spec_markdown(_document(root, workspace / "state"))
+        found: dict[str, str] = {}
+        heading: str | None = None
+        for line in markdown.splitlines():
+            if line.startswith("#"):
+                heading = line.lstrip("# ").strip()
+            elif heading and "makes no presence claim" in line:
+                found.setdefault(heading, line.strip())
+        return found
+
+    def test_a_parent_section_says_it_organizes_its_children(self) -> None:
+        sentences = self._sentences()
+        parents = [text for text in sentences.values() if "organizes the subsections" in text]
+        self.assertTrue(parents, "expected at least one parent section")
+
+    def test_a_leaf_section_does_not_claim_subsections(self) -> None:
+        sentences = self._sentences()
+        leaves = [
+            heading
+            for heading, text in sentences.items()
+            if "drawn from evidence established elsewhere" in text
+        ]
+        self.assertTrue(leaves, "expected at least one panel-only section")
+        for heading in leaves:
+            self.assertNotIn("organizes the subsections", sentences[heading])

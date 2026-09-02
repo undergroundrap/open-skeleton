@@ -181,9 +181,7 @@
           ],
           "panels": [
             "endpoint_catalog",
-            "contract_concordance",
-            "value_set_concordance",
-            "record_concordance"
+            "contract_concordance"
           ],
           "candidates": [
             {
@@ -456,6 +454,17 @@
             ],
             "limit": 20
           }
+        },
+        {
+          "id": "surface.cross-form-contracts",
+          "number": "2.14",
+          "title": "Contracts Declared in More Than One Form",
+          "concern": "One contract written out in several places, and every place that writes it.",
+          "framing": "A closed vocabulary and a record shape are routinely stated more than once -- as a database constraint, a type, a schema, a guard -- and nothing makes the copies move together. Changing one means finding the rest, which otherwise means reading the repository. Each row below is joined on content rather than on names: identical members, or field sets in an exact containment relation. Similar spellings are never joined, and shapes that only partly overlap are left apart.",
+          "panels": [
+            "value_set_concordance",
+            "record_concordance"
+          ]
         }
       ]
     },
