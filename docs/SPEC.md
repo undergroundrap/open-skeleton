@@ -238,6 +238,42 @@ Adding a panel means a function in `spec/panels.py`, an entry in `PANEL_KINDS`,
 and a row here. The profile schema rejects a panel name it does not know, so a
 typo fails at load rather than rendering an empty section.
 
+## Asking the specification instead of reading it
+
+A rendered specification is a document for people. For an agent it is a bill:
+this engine's own `spec.md` is roughly 34,700 words, `spec.json` 78,600, and
+`spec.index.json` 124,200. Loading any of them to learn one fact costs more
+than the fact is worth, and the richest facts -- which contracts are stated in
+several places at once -- lived only inside the JSON.
+
+`open-skeleton contracts` answers that question directly from the ledger the
+document is projected from:
+
+```bash
+open-skeleton contracts . --term verified
+```
+
+```
+value set: conflict, inferred, stale, unknown, verified
+  5 site(s) across 5 form(s)
+  schema_enum        schemas/claim.schema.json:1 (status)
+  cli_choices        src/open_skeleton/cli.py:126 (status)
+  sql_check          src/open_skeleton/ledger.py:179 (status)
+  literal_type       src/open_skeleton/mcp_server.py:71 (status)
+  membership_guard   src/open_skeleton/models.py:162 (status)
+```
+
+Thirty-nine words, against 34,700 for the document that contains the same
+rows: roughly a thousandth of the cost, with a path and line for every site.
+`--json` returns the complete records for a caller that wants to act on them,
+`--kind` selects vocabularies or record shapes, and `--term` narrows to one
+contract.
+
+The rule this follows is worth stating, because it is what keeps the command
+honest: it computes nothing the document does not already contain. The answer
+and the specification are two projections of one ledger, so they cannot drift
+apart, and a reader who wants to check the short answer can read the long one.
+
 ## Capabilities and traceability
 
 Sections §2.4–2.6 answer the question a specification exists to answer: *what does

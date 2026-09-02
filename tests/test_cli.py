@@ -231,3 +231,66 @@ class CliTests(TestCase):
                 )
             self.assertEqual(result, 2)
             self.assertIn("outside Git worktrees", stderr.getvalue())
+
+
+class ContractsCommandTests(TestCase):
+    """Asking what moves together, without loading the document that says so.
+
+    The concordances lived only inside `spec.json`, so learning that a
+    vocabulary is declared in five places meant loading a hundred thousand
+    words. That is the difference between a specification a team publishes
+    and one an agent can ask.
+    """
+
+    SCHEMA_SOURCE = (
+        'SCHEMA = "CREATE TABLE job ('
+        "state TEXT NOT NULL CHECK (state IN ('queued', 'done')), "
+        'owner TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL);"\n'
+    )
+    GUARD_SOURCE = (
+        "def check(state):\n"
+        "    if state not in {'queued', 'done'}:\n"
+        "        raise ValueError(state)\n"
+    )
+
+    def _run(self, *argv: str) -> str:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            (root / "store.py").write_text(self.SCHEMA_SOURCE, encoding="utf-8")
+            (root / "guard.py").write_text(self.GUARD_SOURCE, encoding="utf-8")
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                main(["analyze", str(root), "--state-dir", str(state)])
+            captured = StringIO()
+            with redirect_stdout(captured), redirect_stderr(StringIO()):
+                main(["contracts", str(root), "--state-dir", str(state), *argv])
+            return captured.getvalue()
+
+    def test_it_names_every_site_of_a_shared_vocabulary(self) -> None:
+        output = self._run()
+        self.assertIn("value set: done, queued", output)
+        self.assertIn("sql_check", output)
+        self.assertIn("membership_guard", output)
+
+    def test_the_answer_is_small_enough_to_hand_an_agent(self) -> None:
+        # The point of the command. `spec.md` for this engine is ~34,700
+        # words; an answer that costs the same is not an answer.
+        self.assertLess(len(self._run().split()), 200)
+
+    def test_a_term_narrows_to_the_contract_asked_about(self) -> None:
+        self.assertIn("done, queued", self._run("--term", "queued"))
+
+    def test_a_term_matching_nothing_says_so_rather_than_printing_nothing(self) -> None:
+        output = self._run("--term", "nothing-declares-this")
+        self.assertIn("No contract declared in more than one form", output)
+
+    def test_a_kind_filter_selects_one_family(self) -> None:
+        self.assertNotIn("value set:", self._run("--kind", "record"))
+
+    def test_json_output_is_machine_readable(self) -> None:
+        payload = json.loads(self._run("--json"))
+        self.assertIn("value_sets", payload)
+        self.assertIn("records", payload)
+        self.assertTrue(payload["snapshot_id"])
+        self.assertEqual(payload["value_sets"][0]["members"], ["done", "queued"])

@@ -44,6 +44,11 @@ from open_skeleton.spec import (
     verify_spec,
 )
 from open_skeleton.spec.coherence import check_coherence, check_conservation
+from open_skeleton.spec.concordance import (
+    build_record_concordance,
+    build_value_set_concordance,
+)
+from open_skeleton.spec.render import _every_symbol
 from open_skeleton.state import resolve_state_dir
 from open_skeleton.synthesis_assembly import assemble_synthesis
 from open_skeleton.synthesis_plan import build_synthesis_plan
@@ -118,6 +123,20 @@ def _parser() -> argparse.ArgumentParser:
         help="State directory. Defaults to the OS-local state area for PATH.",
     )
     status.add_argument("--json", action="store_true", help="Print status as JSON.")
+
+    contracts = subparsers.add_parser(
+        "contracts",
+        help="Show contracts declared in more than one form, and where each is written.",
+    )
+    contracts.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    contracts.add_argument("--state-dir", type=Path, help="State directory.")
+    contracts.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
+    contracts.add_argument(
+        "--term",
+        help="Only contracts whose members, fields, or labels contain this text.",
+    )
+    contracts.add_argument("--kind", choices=["all", "value-set", "record"], default="all")
+    contracts.add_argument("--json", action="store_true", help="Print complete rows as JSON.")
 
     claims = subparsers.add_parser("claims", help="List claims from the latest analysis.")
     claims.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
@@ -448,6 +467,79 @@ def _ledger_and_snapshot(args: argparse.Namespace) -> tuple[EvidenceLedger, str]
     if latest is None:
         raise ValueError(f"No snapshot found in {state_dir}")
     return ledger, str(latest["snapshot_id"])
+
+
+def _contracts(args: argparse.Namespace) -> int:
+    """Answer "what else moves if I change this?" without rendering a document.
+
+    The concordances are the most expensive facts to recover by reading and
+    the cheapest to answer once recovered, and until now they existed only
+    inside `spec.json` -- a hundred thousand words a caller had to load in
+    full to learn that a vocabulary is declared in five places. This reads
+    the same ledger the document is projected from and prints the rows that
+    match, which is the difference between a specification a team publishes
+    and a specification an agent can ask.
+    """
+
+    ledger, snapshot_id = _ledger_and_snapshot(args)
+    symbols = tuple(_every_symbol(ledger, snapshot_id))
+    value_sets, ambiguous = build_value_set_concordance(snapshot_id=snapshot_id, symbols=symbols)
+    records = build_record_concordance(snapshot_id=snapshot_id, symbols=symbols)
+
+    term = (args.term or "").casefold()
+    if term:
+        value_sets = tuple(
+            item
+            for item in value_sets
+            if any(term in member.casefold() for member in item.members)
+            or any(term in entry.label.casefold() for entry in item.declarations)
+        )
+        records = tuple(
+            item
+            for item in records
+            if any(term in field.casefold() for field in item.fields)
+            or any(term in entry.label.casefold() for entry in item.declarations)
+        )
+
+    if args.kind == "value-set":
+        records = ()
+    elif args.kind == "record":
+        value_sets = ()
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "snapshot_id": snapshot_id,
+                    "value_sets": [item.to_dict() for item in value_sets],
+                    "records": [item.to_dict() for item in records],
+                    "ambiguous_labels": list(ambiguous),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    for item in value_sets:
+        members = ", ".join(item.members)
+        print(f"value set: {members}")
+        print(f"  {len(item.declarations):,} site(s) across {len(item.kinds):,} form(s)")
+        for entry in item.declarations:
+            print(f"  {entry.kind:18} {entry.path}:{entry.line} ({entry.label})")
+        print()
+    for record in records:
+        names = " + ".join(shape.label for shape in record.declarations)
+        print(f"record: {names} [{record.relation}, {len(record.fields):,} shared field(s)]")
+        for shape in record.declarations:
+            print(f"  {shape.kind:18} {shape.path}:{shape.line}")
+        print()
+    if not value_sets and not records:
+        # An empty answer is a result. Saying so beats printing nothing and
+        # letting a caller wonder whether the command ran.
+        scope = f" matching {args.term!r}" if args.term else ""
+        print(f"No contract declared in more than one form{scope}.")
+    return 0
 
 
 def _claims(args: argparse.Namespace) -> int:
@@ -814,6 +906,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _analyze(args)
         if args.command == "status":
             return _status(args)
+        if args.command == "contracts":
+            return _contracts(args)
         if args.command == "claims":
             return _claims(args)
         if args.command == "audit":
