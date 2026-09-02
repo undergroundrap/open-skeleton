@@ -211,6 +211,7 @@ Consolidated views — the same determinations, arranged for one question:
 | `security_matrix` | Every security control this profile checks, and what was found |
 | `endpoint_catalog` | Each route with its handler's guards, refusals, and response fields |
 | `contract_concordance` | Served routes beside recognized API-table entries and in-repository callers |
+| `value_set_concordance` | One closed vocabulary and every form that states it: a SQL `CHECK`, a schema `enum`, a `Literal`, a CLI `choices`, a runtime guard |
 | `data_flow` | Where data enters, rests, and leaves each module |
 | `substitute_analysis` | What plays an absent concern's part, since the work happens regardless |
 | `multi_role_structures` | Structures carrying a concern from more than one family at once |

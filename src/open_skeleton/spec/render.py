@@ -15,7 +15,12 @@ from typing import Any
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import utc_now
 from open_skeleton.spec.capabilities import Capability, build_capabilities
-from open_skeleton.spec.concordance import ContractRoute, build_contract_concordance
+from open_skeleton.spec.concordance import (
+    ContractRoute,
+    ContractValueSet,
+    build_contract_concordance,
+    build_value_set_concordance,
+)
 from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
@@ -202,6 +207,11 @@ class SpecDocument:
     cited_claims: int
     capabilities: tuple[Capability, ...] = ()
     contract_concordance: tuple[ContractRoute, ...] = ()
+    # Vocabularies written out in more than one form. A reader adding a
+    # member has to change every one of them, and nothing else says where
+    # they are.
+    value_set_concordance: tuple[ContractValueSet, ...] = ()
+    ambiguous_value_labels: tuple[str, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     dossiers: tuple[Dossier, ...] = ()
     substitutes: tuple[Substitute, ...] = ()
@@ -222,6 +232,8 @@ class SpecDocument:
             "schema": self.schema,
             "capabilities": [item.to_dict() for item in self.capabilities],
             "contract_concordance": [item.to_dict() for item in self.contract_concordance],
+            "value_set_concordance": [item.to_dict() for item in self.value_set_concordance],
+            "ambiguous_value_labels": list(self.ambiguous_value_labels),
             "consequences": [item.to_dict() for item in self.consequences],
             "dossiers": [item.to_dict() for item in self.dossiers],
             "substitutes": [item.to_dict() for item in self.substitutes],
@@ -453,6 +465,10 @@ def build_spec(
         claims=claims,
         evidence_by_id=evidence_by_id,
     )
+    value_set_concordance, ambiguous_value_labels = build_value_set_concordance(
+        snapshot_id=resolved_id,
+        symbols=symbols,
+    )
     # Consequences need the absent verdicts, which are only known once every
     # section has been evaluated, so panels are rebuilt after that pass below.
     panel_context = PanelContext(
@@ -461,6 +477,7 @@ def build_spec(
         snapshot=snapshot_row,
         capabilities=capabilities,
         contract_concordance=contract_concordance,
+        value_set_concordance=value_set_concordance,
         symbols=symbols,
     )
 
@@ -680,6 +697,8 @@ def build_spec(
         },
         capabilities=capabilities,
         contract_concordance=contract_concordance,
+        value_set_concordance=value_set_concordance,
+        ambiguous_value_labels=ambiguous_value_labels,
         consequences=consequences,
         dossiers=dossiers,
         substitutes=substitutes,

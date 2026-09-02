@@ -200,3 +200,142 @@ def build_contract_concordance(
         )
 
     return tuple(sorted(rows, key=lambda item: (item.path, item.contract_id)))
+
+
+@dataclass(frozen=True, slots=True)
+class ValueSetDeclaration:
+    """One place a closed vocabulary is written out."""
+
+    path: str
+    line: int
+    kind: str
+    label: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"path": self.path, "line": self.line, "kind": self.kind, "label": self.label}
+
+
+@dataclass(frozen=True, slots=True)
+class ContractValueSet:
+    """One vocabulary and every place that states it in full.
+
+    A project writes the same closed set of values in several forms -- a SQL
+    `CHECK`, a `Literal` annotation, a schema `enum`, a runtime guard, a
+    command-line `choices` -- and nothing makes them move together. Adding a
+    member means finding all of them, which today means reading the
+    repository. Naming them together is the difference between a specification
+    that describes the code and one that saves an agent from crawling it.
+    """
+
+    contract_id: str
+    members: tuple[str, ...]
+    declarations: tuple[ValueSetDeclaration, ...]
+
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        return tuple(sorted({item.kind for item in self.declarations}))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "contract_id": self.contract_id,
+            "members": list(self.members),
+            "kinds": list(self.kinds),
+            "declarations": [item.to_dict() for item in self.declarations],
+        }
+
+
+def _normalized_label(label: str) -> str:
+    """A label reduced to the one systematic rename this repository uses.
+
+    Column names carry a serialization suffix that the field they persist does
+    not (`failures_json` holds `failures`). Nothing else is normalized: a
+    looser rule would start joining names that merely resemble each other,
+    which is the failure this whole module is built to avoid.
+    """
+
+    lowered = label.strip().casefold()
+    for suffix in ("_json", "_text"):
+        if lowered.endswith(suffix):
+            return lowered[: -len(suffix)]
+    return lowered
+
+
+def build_value_set_concordance(
+    *,
+    snapshot_id: str,
+    symbols: tuple[dict[str, Any], ...],
+) -> tuple[tuple[ContractValueSet, ...], tuple[str, ...]]:
+    """Vocabularies stated in more than one place, and labels that are ambiguous.
+
+    The join key is the member set itself, exactly. Two declarations belong
+    together when they admit precisely the same values, which is a fact rather
+    than a resemblance -- this repository has three different vocabularies
+    spelled `status`, and joining on the name would merge them.
+
+    The second return value names labels carrying more than one vocabulary.
+    Those are reported as unresolved rather than as conflicts: two unrelated
+    columns may legitimately share a name, and deciding which is wrong needs
+    an identity this reader does not have.
+    """
+
+    grouped: defaultdict[tuple[str, ...], list[ValueSetDeclaration]] = defaultdict(list)
+    by_label: defaultdict[str, set[tuple[str, ...]]] = defaultdict(set)
+
+    for symbol in symbols:
+        metadata = symbol.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        declared = metadata.get("value_sets")
+        if not isinstance(declared, list):
+            continue
+        path = str(symbol.get("path", ""))
+        for entry in declared:
+            if not isinstance(entry, dict):
+                continue
+            members = entry.get("members")
+            if not isinstance(members, list):
+                continue
+            # Deduplicated here as well as in each extractor: identity is the
+            # set of admitted values, so a list that repeats one of them is
+            # the same vocabulary and must land in the same group.
+            key = tuple(sorted({str(item) for item in members}))
+            if len(key) < 2:
+                continue
+            label = str(entry.get("label", ""))
+            grouped[key].append(
+                ValueSetDeclaration(
+                    path=path,
+                    line=int(entry.get("line", 1) or 1),
+                    kind=str(entry.get("kind", "unknown")),
+                    label=label,
+                )
+            )
+            by_label[_normalized_label(label)].add(key)
+
+    joined: list[ContractValueSet] = []
+    for members, declarations in grouped.items():
+        # One site restating its own vocabulary is not a join. Two sites are.
+        sites = {(item.path, item.line) for item in declarations}
+        if len(sites) < 2:
+            continue
+        # More than one *form*, not merely more than one place. Two `in {...}`
+        # guards inside the same tokenizer are one form used twice: this
+        # repository's parsers test `{"(", "[", "{"}` in six files, and
+        # reporting that as a contract declared six times buries the vocabulary
+        # that really is one. A set written as both a CHECK and a schema enum
+        # spans representations, which is what makes it a contract somebody has
+        # to keep in step.
+        if len({item.kind for item in declarations}) < 2:
+            continue
+        ordered = tuple(sorted(declarations, key=lambda item: (item.path, item.line)))
+        joined.append(
+            ContractValueSet(
+                contract_id=stable_id("contract", (snapshot_id, "value_set", *members)),
+                members=members,
+                declarations=ordered,
+            )
+        )
+
+    ambiguous = tuple(sorted(label for label, sets in by_label.items() if label and len(sets) > 1))
+    joined.sort(key=lambda item: (-len(item.declarations), item.members))
+    return tuple(joined), ambiguous

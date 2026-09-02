@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_skeleton.spec.capabilities import Capability
-from open_skeleton.spec.concordance import ContractRoute
+from open_skeleton.spec.concordance import ContractRoute, ContractValueSet
 from open_skeleton.spec.consequences import Consequence
 from open_skeleton.spec.roles import MultiRole
 from open_skeleton.spec.substitutes import Substitute
@@ -59,6 +59,7 @@ class PanelContext:
     snapshot: dict[str, Any] = field(default_factory=dict)
     capabilities: tuple[Capability, ...] = ()
     contract_concordance: tuple[ContractRoute, ...] = ()
+    value_set_concordance: tuple[ContractValueSet, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
     claim_locations: dict[str, str] = field(default_factory=dict)
@@ -1039,6 +1040,43 @@ def _contract_concordance(routes: tuple[ContractRoute, ...]) -> Panel:
     )
 
 
+def _value_set_concordance(vocabularies: tuple[ContractValueSet, ...]) -> Panel:
+    """Closed vocabularies written out in more than one form.
+
+    This is the table that saves a reader from crawling. A value set declared
+    as a SQL `CHECK`, a schema `enum`, and a runtime guard has to be changed in
+    all three, and nothing else in this document says where the three are.
+    """
+
+    rows = tuple(
+        (
+            ", ".join(f"`{member}`" for member in item.members[:6])
+            + (f" +{len(item.members) - 6:,} more" if len(item.members) > 6 else ""),
+            f"{len(item.declarations):,}",
+            ", ".join(item.kinds),
+            "; ".join(
+                f"{declaration.path}:{declaration.line}" for declaration in item.declarations
+            ),
+        )
+        for item in vocabularies
+    )
+    return Panel(
+        name="value_set_concordance",
+        title="Vocabularies declared in more than one form",
+        columns=("Members", "Sites", "Forms", "Declared at"),
+        alignments=("left", "right", "left", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Joined on the member set itself, exactly -- never on the name, because this "
+            "kind of vocabulary is routinely spelled under different names in different "
+            "files, and different vocabularies are routinely spelled under the same name. "
+            "A set written in only one form is not listed: two guards in one parser are "
+            "the same form used twice, not a contract. Complete rows are in `spec.json` "
+            "under `value_set_concordance`."
+        ),
+    )
+
+
 def _security_matrix(context: PanelContext) -> Panel:
     """Every security control in one table, with the verdict already reached.
 
@@ -1504,6 +1542,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _endpoint_catalog(context.symbols)
     if name == "contract_concordance":
         return _contract_concordance(context.contract_concordance)
+    if name == "value_set_concordance":
+        return _value_set_concordance(context.value_set_concordance)
     if name == "security_matrix":
         return _security_matrix(context)
     if name == "multi_role_structures":

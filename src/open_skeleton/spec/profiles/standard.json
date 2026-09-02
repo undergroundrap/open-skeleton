@@ -181,7 +181,8 @@
           ],
           "panels": [
             "endpoint_catalog",
-            "contract_concordance"
+            "contract_concordance",
+            "value_set_concordance"
           ],
           "candidates": [
             {

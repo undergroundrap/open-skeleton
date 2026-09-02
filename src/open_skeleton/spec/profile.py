@@ -49,6 +49,7 @@ PANEL_KINDS = frozenset(
         "security_matrix",
         "endpoint_catalog",
         "contract_concordance",
+        "value_set_concordance",
         "data_flow",
         "config_settings",
         "object_keys",

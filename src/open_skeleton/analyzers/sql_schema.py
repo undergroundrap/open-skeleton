@@ -117,6 +117,15 @@ ON_DELETE = re.compile(
     re.IGNORECASE,
 )
 PRIMARY_KEY_COLUMNS = re.compile(r"\bPRIMARY\s+KEY\s*\((?P<columns>[^)]*)\)", re.IGNORECASE)
+# `CHECK (status IN ('a', 'b'))` states a closed vocabulary. The same set is
+# usually written again in application code and in a schema document, and
+# nothing makes the three move together, so the members are worth keeping
+# rather than counting.
+CHECK_IN_VALUES = re.compile(
+    r"""\bCHECK\s*\(\s*["'`\[]?(?P<column>\w+)["'`\]]?\s+IN\s*\((?P<values>[^)]*)\)""",
+    re.IGNORECASE,
+)
+QUOTED_VALUE = re.compile(r"'([^']*)'")
 
 MAX_SOURCE_BYTES = 4_000_000
 
@@ -139,6 +148,8 @@ class Column:
     not_null: bool
     primary_key: bool
     references: str | None
+    # The literal vocabulary a CHECK constraint admits, when it names one.
+    allowed_values: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -454,11 +465,20 @@ def parse_tables(text: str) -> list[Table]:
             folded = definition.casefold()
             target = REFERENCES.search(definition)
             inline_key = "primary key" in folded
+            allowed = CHECK_IN_VALUES.search(definition)
+            named_column = _unquote(words[0])
             column = Column(
-                name=_unquote(words[0]),
+                name=named_column,
                 not_null="not null" in folded,
                 primary_key=inline_key,
                 references=_unquote(target.group("table")) if target else None,
+                # Only when the constraint names this column: a table-level
+                # CHECK on a different column is not this column's vocabulary.
+                allowed_values=(
+                    tuple(sorted(set(QUOTED_VALUE.findall(allowed.group("values")))))
+                    if allowed and named_column.casefold() == allowed.group("column").casefold()
+                    else ()
+                ),
             )
             table.columns.append(column)
             if inline_key:
@@ -648,6 +668,26 @@ class SqlSchemaAnalyzer:
                             "analysis_level": "declared",
                             "columns": [column.name for column in table.columns],
                             "primary_key": list(table.primary_key),
+                            # A CHECK naming a closed set is the same kind of
+                            # fact a Literal annotation or a schema enum
+                            # states, and is recorded in the same shape so a
+                            # later join can compare them without reparsing.
+                            **(
+                                {
+                                    "value_sets": [
+                                        {
+                                            "label": column.name,
+                                            "members": list(column.allowed_values),
+                                            "kind": "sql_check",
+                                            "line": table.line,
+                                        }
+                                        for column in table.columns
+                                        if column.allowed_values
+                                    ]
+                                }
+                                if any(column.allowed_values for column in table.columns)
+                                else {}
+                            ),
                         },
                     )
                 )

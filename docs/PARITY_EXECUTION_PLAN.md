@@ -80,6 +80,25 @@ The first implementation slice of work package 1—HTTP routes, docs, and local
 callers—is complete. Extend its evidence-preserving pattern; do not replace it with a
 general name-similarity matcher.
 
+The second slice—closed value sets—is also complete. A vocabulary written as a SQL
+`CHECK`, a JSON Schema `enum`, a `Literal` annotation, a CLI `choices`, or a runtime
+membership guard is recovered from each form and joined across them. The join key is
+the member set itself: this repository spells three different vocabularies `status`,
+so a name join would merge them, while the AI-MUD fixture states one vocabulary as
+`preset` in a backend guard and `target` in a CLI script, which a name join would
+miss. A set appearing in only one *form* is not reported, because two membership
+guards inside one tokenizer are the same form used twice rather than a contract.
+Labels carrying more than one vocabulary are listed as unresolved rather than
+adjudicated.
+
+Remaining in work package 1: field-set correspondence—SQL table columns against
+record types (`@dataclass` and Pydantic both, since the two fixtures use disjoint
+forms) and against JSON Schema `properties`. The survey found nine table/dataclass
+pairs in this repository, five of them exact, plus one systematic rename
+(`metadata_json` ↔ `metadata`). The AI-MUD fixture has no such pair: its `players`
+table stores a serialized model in a single `data TEXT` column, which is a blob and
+must not be joined.
+
 ## Agent boundary
 
 Agents should receive packets, not repositories. A packet may ask an agent to:

@@ -201,6 +201,46 @@ def _referenced_assets(source: str) -> list[tuple[str, str, int]]:
     return found
 
 
+def _schema_value_sets(document: Any, label: str = "") -> list[dict[str, Any]]:
+    """Every `enum` a JSON document declares, with the property it constrains.
+
+    A schema enum is the same fact as a SQL CHECK and a runtime guard: a
+    closed vocabulary written out in full. Recovering it here is what lets a
+    later join say whether the three agree, which nothing currently checks.
+
+    The walk is structural rather than name-based. `enum` is a JSON Schema
+    keyword wherever it appears, including inside `items`, `$defs`, and
+    nested object properties, and a document that happens to hold a key
+    called `enum` whose value is not a list of strings is skipped rather than
+    guessed at.
+    """
+
+    found: list[dict[str, Any]] = []
+    if isinstance(document, dict):
+        for key, value in document.items():
+            if key == "enum" and isinstance(value, list):
+                members = [item for item in value if isinstance(item, str)]
+                if len(members) == len(value) and len(set(members)) > 1:
+                    found.append(
+                        {
+                            "label": label or "enum",
+                            "members": sorted(set(members)),
+                            "kind": "schema_enum",
+                            "line": 1,
+                        }
+                    )
+                continue
+            # `properties` names the field; every other container keeps the
+            # label it already had, so `items` under `status` stays `status`.
+            nested = str(key) if isinstance(key, str) else label
+            carried = nested if key not in {"items", "$defs", "definitions"} else label
+            found.extend(_schema_value_sets(value, carried))
+    elif isinstance(document, list):
+        for item in document:
+            found.extend(_schema_value_sets(item, label))
+    return found
+
+
 def _strip_json_comments(source: str) -> str:
     """Remove the comments a tsconfig is allowed to carry but JSON is not.
 
@@ -1668,6 +1708,12 @@ class ProjectMetadataAnalyzer:
             if source is None:
                 continue
             names = _text_name_index(source)
+            schema_sets: list[dict[str, Any]] = []
+            if suffix == ".json":
+                try:
+                    schema_sets = _schema_value_sets(json.loads(_strip_json_comments(source)))
+                except (json.JSONDecodeError, ValueError, RecursionError):
+                    schema_sets = []
             if suffix in {".html", ".htm"} and describes_the_product(file_record.role):
                 assets = _referenced_assets(source)
                 if assets:
@@ -1814,7 +1860,10 @@ class ProjectMetadataAnalyzer:
                     end_line=max(1, file_record.line_count),
                     language=file_record.language,
                     analyzer=ANALYZER_VERSION,
-                    metadata={"name_index": names},
+                    metadata={
+                        "name_index": names,
+                        **({"value_sets": schema_sets} if schema_sets else {}),
+                    },
                 )
             )
 

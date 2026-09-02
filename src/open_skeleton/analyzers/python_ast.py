@@ -1112,6 +1112,136 @@ def _declared_cli_flags(tree: ast.Module) -> tuple[dict[str, int], dict[str, int
     return options, positionals
 
 
+# A vocabulary written out as literal strings. The same set is routinely
+# declared in several places -- a SQL CHECK, a runtime guard, a schema enum, a
+# type annotation -- and nothing makes them move together.
+VALUE_SET_KINDS = ("literal_type", "enum_class", "cli_choices", "membership_guard")
+MIN_VALUE_SET_MEMBERS = 2
+
+
+def _string_members(node: ast.expr | None) -> tuple[str, ...]:
+    """Every element of a literal collection, when all of them are strings.
+
+    A collection with one non-literal element is not a closed vocabulary, and
+    reporting the literal part of it would name a set the code never uses.
+    """
+
+    if not isinstance(node, ast.Tuple | ast.List | ast.Set):
+        return ()
+    members: list[str] = []
+    for element in node.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return ()
+        members.append(element.value)
+    return tuple(members)
+
+
+def _literal_members(node: ast.expr | None) -> tuple[str, ...]:
+    """Members of a `Literal[...]` annotation, ignoring any `| None` union."""
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _literal_members(node.left) or _literal_members(node.right)
+    if not isinstance(node, ast.Subscript):
+        return ()
+    base = node.value
+    name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+    if name != "Literal":
+        return ()
+    index = node.slice
+    elements = index.elts if isinstance(index, ast.Tuple) else [index]
+    members: list[str] = []
+    for element in elements:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return ()
+        members.append(element.value)
+    return tuple(members)
+
+
+def _declared_value_sets(tree: ast.Module) -> list[dict[str, Any]]:
+    """Closed vocabularies this module states, with where and how each is written.
+
+    Four spellings, all of them literal in source. A `Literal[...]` annotation
+    names the values a parameter accepts; a `str, Enum` class names them as
+    members; `choices=` names them on a command line; and `x not in {...}`
+    names them in a guard that raises.
+
+    The point is not any one of these. It is that a project usually writes the
+    same vocabulary in more than one of them, and changing one leaves the rest
+    stale with nothing to notice. Recovering each with its own receipt is what
+    lets a later join say they agree, or say precisely how they do not.
+    """
+
+    found: list[dict[str, Any]] = []
+
+    def record(label: str, members: tuple[str, ...], kind: str, line: int) -> None:
+        if len(set(members)) < MIN_VALUE_SET_MEMBERS:
+            return
+        found.append(
+            {
+                "label": label,
+                "members": sorted(set(members)),
+                "kind": kind,
+                "line": line,
+            }
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            bases = {
+                base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+                for base in node.bases
+            }
+            if "Enum" in bases or "StrEnum" in bases:
+                members = tuple(
+                    statement.value.value
+                    for statement in node.body
+                    if isinstance(statement, ast.Assign)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                )
+                record(node.name, members, "enum_class", node.lineno)
+            continue
+
+        if isinstance(node, ast.arg) and node.annotation is not None:
+            members = _literal_members(node.annotation)
+            if members:
+                record(node.arg, members, "literal_type", node.lineno)
+            continue
+
+        if isinstance(node, ast.AnnAssign) and node.annotation is not None:
+            members = _literal_members(node.annotation)
+            if members:
+                target = _expr_name(node.target) or "value"
+                record(target, members, "literal_type", node.lineno)
+            continue
+
+        if isinstance(node, ast.Call):
+            for keyword in node.keywords:
+                if keyword.arg != "choices":
+                    continue
+                members = _string_members(keyword.value)
+                if not members:
+                    continue
+                first = node.args[0] if node.args else None
+                label = (
+                    first.value.lstrip("-").replace("-", "_")
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str)
+                    else "choices"
+                )
+                record(label, members, "cli_choices", node.lineno)
+            continue
+
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            if not isinstance(node.ops[0], ast.In | ast.NotIn):
+                continue
+            members = _string_members(node.comparators[0])
+            if not members:
+                continue
+            label = _expr_name(node.left) or "value"
+            record(label.rsplit(".", 1)[-1], members, "membership_guard", node.lineno)
+    return found
+
+
 def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Numeric literals written inside a function body.
 
@@ -1533,6 +1663,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.imported_names = _imported_names(tree)
         self.string_constants = _string_constants(tree)
         self.embedded_literals = _embedded_literals(tree)
+        self.value_sets = _declared_value_sets(tree)
         cli_options, cli_positionals = _declared_cli_flags(tree)
         self.cli_options = sorted(cli_options)
         self.cli_positionals = sorted(cli_positionals)
@@ -2552,6 +2683,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["signatures"] = self.signatures
         if self.external_calls:
             payload["external_calls"] = self.external_calls
+        if self.value_sets:
+            payload["value_sets"] = self.value_sets
         if self.name_index:
             payload["name_index"] = self.name_index
         if self.cli_options or self.cli_positionals:
