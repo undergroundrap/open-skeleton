@@ -16,6 +16,7 @@ open-skeleton-mcp C:\path\to\repo --state-dir C:\path\to\state
 
 - `project_status`
 - `analysis_coverage`
+- `list_contracts` — contracts declared in more than one form, with a path and line for every site
 - `list_claims`
 - `search_claims`
 - `get_evidence`

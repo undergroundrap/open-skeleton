@@ -18,6 +18,11 @@ from open_skeleton.exports import (
 )
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
+from open_skeleton.spec.concordance import (
+    build_record_concordance,
+    build_value_set_concordance,
+)
+from open_skeleton.spec.render import _every_symbol
 from open_skeleton.state import resolve_state_dir
 
 
@@ -77,6 +82,60 @@ class OpenSkeletonService:
         return self.ledger.list_claims(
             self._latest_snapshot_id(), status=status, category=category, limit=limit
         )
+
+    def list_contracts(
+        self,
+        term: str | None = None,
+        kind: Literal["all", "value-set", "record"] = "all",
+    ) -> dict[str, Any]:
+        """Contracts declared in more than one form, and where each is written.
+
+        A closed vocabulary or a record shape is routinely stated several
+        times -- a database constraint, a type, a schema, a guard -- and
+        nothing makes the copies move together. Changing one means finding the
+        rest, which otherwise means reading the repository.
+
+        This is the cheapest question in the ledger and was the most expensive
+        to reach: the rows existed only inside a rendered specification tens of
+        thousands of words long. Ask it before editing anything that looks like
+        a shared vocabulary or a stored record.
+
+        Joined on content rather than names: identical members, or field sets
+        in an exact containment relation. Similar spellings are never joined.
+        """
+
+        snapshot_id = self._latest_snapshot_id()
+        symbols = tuple(_every_symbol(self.ledger, snapshot_id))
+        value_sets, ambiguous = build_value_set_concordance(
+            snapshot_id=snapshot_id, symbols=symbols
+        )
+        records = build_record_concordance(snapshot_id=snapshot_id, symbols=symbols)
+
+        needle = (term or "").casefold()
+        if needle:
+            value_sets = tuple(
+                item
+                for item in value_sets
+                if any(needle in member.casefold() for member in item.members)
+                or any(needle in entry.label.casefold() for entry in item.declarations)
+            )
+            records = tuple(
+                item
+                for item in records
+                if any(needle in field.casefold() for field in item.fields)
+                or any(needle in shape.label.casefold() for shape in item.declarations)
+            )
+        if kind == "value-set":
+            records = ()
+        elif kind == "record":
+            value_sets = ()
+
+        return {
+            "snapshot_id": snapshot_id,
+            "value_sets": [item.to_dict() for item in value_sets],
+            "records": [item.to_dict() for item in records],
+            "ambiguous_labels": list(ambiguous),
+        }
 
     def analysis_coverage(self) -> list[dict[str, Any]]:
         """Return per-adapter analysis coverage for the latest snapshot."""
@@ -201,6 +260,9 @@ def create_mcp_server(service: OpenSkeletonService) -> Any:
 
     server.tool(title="Project status", annotations=read_only)(service.project_status)
     server.tool(title="List evidence-backed claims", annotations=read_only)(service.list_claims)
+    server.tool(title="List contracts declared in more than one form", annotations=read_only)(
+        service.list_contracts
+    )
     server.tool(title="Get analysis coverage", annotations=read_only)(service.analysis_coverage)
     server.tool(title="Search claims", annotations=read_only)(service.search_claims)
     server.tool(title="Get verified evidence excerpt", annotations=read_only)(service.get_evidence)
