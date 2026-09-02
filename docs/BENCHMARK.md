@@ -62,6 +62,26 @@ open-skeleton benchmark fixture `
   --output-dir benchmark-output
 ```
 
+### Running it against a checkout that has moved on
+
+The fixture pin is a commit, not a repository, and a working clone of that
+repository will not stay on it. Pointing the benchmark at a checkout that has
+advanced fails closed with a commit mismatch, which is correct behaviour and
+easy to misread as a broken benchmark.
+
+The pinned commit is usually still present in that clone's history, so the
+benchmark can run against it without disturbing anybody's working tree:
+
+```bash
+git -C <fixture-clone> worktree add --detach /tmp/fixture-pinned <pinned-sha>
+open-skeleton benchmark /tmp/fixture-pinned --gold benchmarks/single-player-ai-mud/gold.json --output-dir <dir>
+git -C <fixture-clone> worktree remove /tmp/fixture-pinned
+```
+
+Do not check the pinned commit out in place. The clone belongs to whoever is
+working in it, and moving their HEAD to run a benchmark is a side effect they
+did not ask for.
+
 The command fails on a commit mismatch and writes `analysis.jsonl`, `analysis.md`, `benchmark.json`, and `benchmark.md`.
 
 ## Current local result
