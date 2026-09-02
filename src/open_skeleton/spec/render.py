@@ -16,9 +16,11 @@ from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import utc_now
 from open_skeleton.spec.capabilities import Capability, build_capabilities
 from open_skeleton.spec.concordance import (
+    ContractRecord,
     ContractRoute,
     ContractValueSet,
     build_contract_concordance,
+    build_record_concordance,
     build_value_set_concordance,
 )
 from open_skeleton.spec.consequences import Consequence, derive
@@ -212,6 +214,8 @@ class SpecDocument:
     # they are.
     value_set_concordance: tuple[ContractValueSet, ...] = ()
     ambiguous_value_labels: tuple[str, ...] = ()
+    # Record shapes stated as a table, a class, and a schema at once.
+    record_concordance: tuple[ContractRecord, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     dossiers: tuple[Dossier, ...] = ()
     substitutes: tuple[Substitute, ...] = ()
@@ -234,6 +238,7 @@ class SpecDocument:
             "contract_concordance": [item.to_dict() for item in self.contract_concordance],
             "value_set_concordance": [item.to_dict() for item in self.value_set_concordance],
             "ambiguous_value_labels": list(self.ambiguous_value_labels),
+            "record_concordance": [item.to_dict() for item in self.record_concordance],
             "consequences": [item.to_dict() for item in self.consequences],
             "dossiers": [item.to_dict() for item in self.dossiers],
             "substitutes": [item.to_dict() for item in self.substitutes],
@@ -469,6 +474,10 @@ def build_spec(
         snapshot_id=resolved_id,
         symbols=symbols,
     )
+    record_concordance = build_record_concordance(
+        snapshot_id=resolved_id,
+        symbols=symbols,
+    )
     # Consequences need the absent verdicts, which are only known once every
     # section has been evaluated, so panels are rebuilt after that pass below.
     panel_context = PanelContext(
@@ -478,6 +487,7 @@ def build_spec(
         capabilities=capabilities,
         contract_concordance=contract_concordance,
         value_set_concordance=value_set_concordance,
+        record_concordance=record_concordance,
         symbols=symbols,
     )
 
@@ -698,6 +708,7 @@ def build_spec(
         capabilities=capabilities,
         contract_concordance=contract_concordance,
         value_set_concordance=value_set_concordance,
+        record_concordance=record_concordance,
         ambiguous_value_labels=ambiguous_value_labels,
         consequences=consequences,
         dossiers=dossiers,

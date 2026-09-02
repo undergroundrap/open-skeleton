@@ -241,6 +241,41 @@ def _schema_value_sets(document: Any, label: str = "") -> list[dict[str, Any]]:
     return found
 
 
+def _schema_properties(document: Any, path: str = "") -> dict[str, list[str]]:
+    """Every object shape a JSON document declares, by its `properties` keys.
+
+    A schema states the same record a table and a class also state. Recovering
+    its field names is what lets a join say the three agree, and a schema is
+    frequently the only one of the three that is versioned and published.
+
+    Nested shapes keep the path that reaches them, so `findings.claim_ids` is
+    distinguishable from a top-level `claim_ids`. A `properties` value that is
+    not an object is skipped rather than guessed at.
+    """
+
+    found: dict[str, list[str]] = {}
+    if isinstance(document, dict):
+        properties = document.get("properties")
+        if isinstance(properties, dict):
+            names = [str(key) for key in properties if isinstance(key, str)]
+            if names:
+                found[path or "root"] = sorted(names)
+            for key, value in properties.items():
+                if isinstance(key, str):
+                    found.update(_schema_properties(value, f"{path}.{key}" if path else key))
+        for key, value in document.items():
+            if key == "properties":
+                continue
+            # Every other key is a container -- `items`, `$defs`, `allOf` --
+            # rather than a field name, so the path a shape is reached by does
+            # not change when the walk descends through one.
+            found.update(_schema_properties(value, path))
+    elif isinstance(document, list):
+        for item in document:
+            found.update(_schema_properties(item, path))
+    return found
+
+
 def _strip_json_comments(source: str) -> str:
     """Remove the comments a tsconfig is allowed to carry but JSON is not.
 
@@ -1709,11 +1744,18 @@ class ProjectMetadataAnalyzer:
                 continue
             names = _text_name_index(source)
             schema_sets: list[dict[str, Any]] = []
+            schema_shapes: dict[str, list[str]] = {}
             if suffix == ".json":
                 try:
-                    schema_sets = _schema_value_sets(json.loads(_strip_json_comments(source)))
+                    document = json.loads(_strip_json_comments(source))
                 except (json.JSONDecodeError, ValueError, RecursionError):
-                    schema_sets = []
+                    document = None
+                if document is not None:
+                    try:
+                        schema_sets = _schema_value_sets(document)
+                        schema_shapes = _schema_properties(document)
+                    except RecursionError:
+                        schema_sets, schema_shapes = [], {}
             if suffix in {".html", ".htm"} and describes_the_product(file_record.role):
                 assets = _referenced_assets(source)
                 if assets:
@@ -1863,6 +1905,7 @@ class ProjectMetadataAnalyzer:
                     metadata={
                         "name_index": names,
                         **({"value_sets": schema_sets} if schema_sets else {}),
+                        **({"schema_shapes": schema_shapes} if schema_shapes else {}),
                     },
                 )
             )

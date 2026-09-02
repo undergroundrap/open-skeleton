@@ -24,10 +24,16 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.analyzers.project_metadata import _schema_value_sets
+from open_skeleton.analyzers.project_metadata import (
+    _schema_properties,
+    _schema_value_sets,
+)
 from open_skeleton.analyzers.python_ast import _declared_value_sets
 from open_skeleton.analyzers.sql_schema import parse_tables
-from open_skeleton.spec.concordance import build_value_set_concordance
+from open_skeleton.spec.concordance import (
+    build_record_concordance,
+    build_value_set_concordance,
+)
 
 
 def _symbol(path: str, *sets: dict[str, Any]) -> dict[str, Any]:
@@ -206,3 +212,119 @@ class EndToEndTests(TestCase):
             self.assertEqual(joined[0].members, ("done", "queued"))
             self.assertEqual(joined[0].kinds, ("membership_guard", "schema_enum", "sql_check"))
             self.assertEqual(len(joined[0].declarations), 3)
+
+
+def _shape(path: str, kind: str, label: str, fields: list[str], line: int = 1) -> dict[str, Any]:
+    """A symbol carrying one declared field set, in whichever form."""
+
+    if kind == "sql_table":
+        metadata: dict[str, Any] = {"columns": fields}
+        return {
+            "path": path,
+            "qualified_name": label,
+            "start_line": line,
+            "metadata": metadata,
+        }
+    if kind == "record_type":
+        metadata = {
+            "model_fields": {label: {"fields": [{"name": name, "line": line} for name in fields]}}
+        }
+        return {"path": path, "qualified_name": path, "start_line": line, "metadata": metadata}
+    return {
+        "path": path,
+        "qualified_name": path,
+        "start_line": line,
+        "metadata": {"schema_shapes": {label: fields}},
+    }
+
+
+class RecordJoinTests(TestCase):
+    """A table, the class carrying its rows, and the schema publishing them.
+
+    Three statements of one contract. Adding a field means changing all three,
+    and finding them means reading the repository -- which is the work this
+    join removes.
+    """
+
+    WIDE = ["alpha", "beta", "gamma", "delta"]
+
+    def _join(self, *symbols: dict[str, Any]) -> Any:
+        return build_record_concordance(snapshot_id="s", symbols=tuple(symbols))
+
+    def test_identical_field_sets_across_two_forms_join(self) -> None:
+        joined = self._join(
+            _shape("db.py", "sql_table", "thing", self.WIDE),
+            _shape("models.py", "record_type", "Thing", self.WIDE),
+        )
+        self.assertEqual(len(joined), 1)
+        self.assertEqual(joined[0].relation, "identical")
+        self.assertEqual(joined[0].kinds, ("record_type", "sql_table"))
+
+    def test_a_table_key_the_record_omits_is_a_superset(self) -> None:
+        # The ordinary case: `files` carries `snapshot_id`, `FileRecord` does not.
+        joined = self._join(
+            _shape("db.py", "sql_table", "thing", [*self.WIDE, "snapshot_id"]),
+            _shape("models.py", "record_type", "Thing", self.WIDE),
+        )
+        self.assertEqual(len(joined), 1)
+        self.assertEqual(joined[0].relation, "superset")
+        self.assertEqual(joined[0].fields, tuple(sorted(self.WIDE)))
+
+    def test_a_serialization_suffix_does_not_break_the_match(self) -> None:
+        # `metadata_json` persists `metadata`; that rename is systematic.
+        joined = self._join(
+            _shape("db.py", "sql_table", "t", ["alpha", "beta", "gamma", "metadata_json"]),
+            _shape("models.py", "record_type", "T", ["alpha", "beta", "gamma", "metadata"]),
+        )
+        self.assertEqual(len(joined), 1)
+        self.assertEqual(joined[0].relation, "identical")
+
+    def test_partial_overlap_is_not_a_join(self) -> None:
+        # Agreeing on some names and differing on others makes two shapes, and
+        # deciding which is authoritative needs an identity this reader lacks.
+        joined = self._join(
+            _shape("db.py", "sql_table", "t", ["alpha", "beta", "gamma", "delta"]),
+            _shape("models.py", "record_type", "T", ["alpha", "beta", "gamma", "epsilon"]),
+        )
+        self.assertEqual(joined, ())
+
+    def test_a_narrow_shape_is_not_joined(self) -> None:
+        # `{id, name}` is the field set of a dozen unrelated records, and
+        # pairing two of them is a similarity match in a set-equality costume.
+        joined = self._join(
+            _shape("db.py", "sql_table", "t", ["id", "name"]),
+            _shape("models.py", "record_type", "T", ["id", "name"]),
+        )
+        self.assertEqual(joined, ())
+
+    def test_one_form_restating_itself_is_not_a_contract(self) -> None:
+        joined = self._join(
+            _shape("a.py", "record_type", "A", self.WIDE),
+            _shape("b.py", "record_type", "B", self.WIDE),
+        )
+        self.assertEqual(joined, ())
+
+    def test_a_schema_block_joins_a_record_type(self) -> None:
+        joined = self._join(
+            _shape("thing.schema.json", "schema_properties", "root", self.WIDE),
+            _shape("models.py", "record_type", "Thing", self.WIDE),
+        )
+        self.assertEqual(len(joined), 1)
+        self.assertEqual(joined[0].kinds, ("record_type", "schema_properties"))
+
+    def test_schema_properties_are_read_with_their_path(self) -> None:
+        document: dict[str, Any] = {
+            "properties": {"outer": {"properties": {"a": {}, "b": {}}}, "x": {}}
+        }
+        shapes = _schema_properties(document)
+        self.assertEqual(shapes["root"], ["outer", "x"])
+        self.assertEqual(shapes["outer"], ["a", "b"])
+
+    def test_a_blob_column_does_not_make_a_record_join(self) -> None:
+        # The AI-MUD fixture stores a whole model in one `data TEXT` column.
+        # Only `id` is shared, so nothing should pair.
+        joined = self._join(
+            _shape("db.py", "sql_table", "players", ["id", "data", "updated_at"]),
+            _shape("schemas.py", "record_type", "Player", ["id", "name", "level", "hp"]),
+        )
+        self.assertEqual(joined, ())

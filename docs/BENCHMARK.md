@@ -82,6 +82,14 @@ Do not check the pinned commit out in place. The clone belongs to whoever is
 working in it, and moving their HEAD to run a benchmark is a side effect they
 did not ask for.
 
+The worktree must also be clean. A commit pin cannot see edits, so a checkout
+sitting at the right revision with modified or deleted files scores against
+different sources while passing the pin. One did: a stale worktree missing
+`.gitignore`, `LICENSE` and several package files scored 85.3% recall where a
+clean checkout of the same commit scores 100%, and the number read exactly like
+a regression in the engine. The benchmark now refuses a fixture whose tracked
+files differ and names what changed.
+
 The command fails on a commit mismatch and writes `analysis.jsonl`, `analysis.md`, `benchmark.json`, and `benchmark.md`.
 
 ## Current local result

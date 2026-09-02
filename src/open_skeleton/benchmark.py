@@ -35,6 +35,54 @@ def _load_gold(path: Path) -> dict[str, Any]:
     return document
 
 
+def _git_dirty(root: Path) -> str | None:
+    """Paths a fixture checkout has changed, or None when it is clean.
+
+    The commit pin says which revision a score belongs to. It says nothing
+    about whether the files on disk are still that revision, and a worktree
+    with deleted files passes the pin while producing a different repository
+    to analyze. One did: a stale checkout at the pinned commit, missing
+    `.gitignore`, `LICENSE` and several package files, scored 85.3% recall
+    where a clean checkout of the same commit scores 100%. The number looked
+    exactly like a regression in the engine.
+
+    An immutable benchmark that only checks the commit is fail-open, so this
+    reports the difference and lets the caller refuse.
+    """
+
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        # Fixed argument vector, no shell, read-only git query.
+        completed = subprocess.run(  # noqa: S603
+            [
+                git,
+                "-c",
+                f"safe.directory={root.resolve().as_posix()}",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    changed = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if not changed:
+        return None
+    shown = ", ".join(item.split(maxsplit=1)[-1] for item in changed[:5])
+    remainder = f" and {len(changed) - 5:,} more" if len(changed) > 5 else ""
+    return f"{len(changed):,} tracked path(s) differ: {shown}{remainder}"
+
+
 def _git_commit(root: Path) -> str | None:
     git = shutil.which("git")
     if git is None:
@@ -257,6 +305,13 @@ def run_benchmark(
     gold = _load_gold(gold_file)
     expected_commit = gold.get("fixture", {}).get("commit")
     actual_commit = _git_commit(root)
+    dirty = _git_dirty(root) if expected_commit else None
+    if dirty is not None:
+        raise ValueError(
+            "Fixture checkout is not the pinned revision on disk. "
+            f"{dirty}. Analyze a clean checkout: the commit pin cannot see "
+            "edits, so a modified fixture scores against different sources."
+        )
     if expected_commit and actual_commit != expected_commit:
         raise ValueError(
             f"Fixture commit mismatch: expected {expected_commit}, observed {actual_commit or 'unavailable'}"

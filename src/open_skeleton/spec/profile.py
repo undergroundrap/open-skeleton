@@ -50,6 +50,7 @@ PANEL_KINDS = frozenset(
         "endpoint_catalog",
         "contract_concordance",
         "value_set_concordance",
+        "record_concordance",
         "data_flow",
         "config_settings",
         "object_keys",

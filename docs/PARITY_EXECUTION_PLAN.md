@@ -91,13 +91,27 @@ guards inside one tokenizer are the same form used twice rather than a contract.
 Labels carrying more than one vocabulary are listed as unresolved rather than
 adjudicated.
 
-Remaining in work package 1: field-set correspondence—SQL table columns against
-record types (`@dataclass` and Pydantic both, since the two fixtures use disjoint
-forms) and against JSON Schema `properties`. The survey found nine table/dataclass
-pairs in this repository, five of them exact, plus one systematic rename
-(`metadata_json` ↔ `metadata`). The AI-MUD fixture has no such pair: its `players`
-table stores a serialized model in a single `data TEXT` column, which is a blob and
-must not be joined.
+The third slice—field-set correspondence—is also complete. SQL table columns,
+record types (`@dataclass` and Pydantic alike, since the two fixtures use disjoint
+forms), and JSON Schema `properties` are joined by their field names. Two relations
+are reported and both are exact set facts: `identical`, and `superset` where one
+form strictly contains the other, which is the ordinary case of a table carrying a
+key its record type does not declare. Partial overlap is never joined, and a shape
+narrower than four fields is not joined at all—`{id, name}` is the field set of a
+dozen unrelated records. This repository reports ten pairs, including the
+`claims` table, `ClaimRecord`, and `claim.schema.json` describing one contract three
+ways. The AI-MUD fixture reports none, correctly: its `players` table stores a
+serialized model in a single `data TEXT` column, which is a blob rather than a
+field set.
+
+Work package 1 is therefore complete for the contract forms structurally available
+in the two fixtures. Remaining forms named in the original order—OpenAPI documents
+and named registries—are absent from both fixtures, so building for them now would
+be fitting to an imagined repository rather than a measured one.
+
+The next work package is 2, ownership and shared-facade topology. Do not start it
+before reading its exit proof: every topology statement needs a path of edge and
+evidence IDs, and ambiguous targets must stay unresolved.
 
 ## Agent boundary
 

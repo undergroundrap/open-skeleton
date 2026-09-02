@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from open_skeleton.spec.capabilities import Capability
-from open_skeleton.spec.concordance import ContractRoute, ContractValueSet
+from open_skeleton.spec.concordance import ContractRecord, ContractRoute, ContractValueSet
 from open_skeleton.spec.consequences import Consequence
 from open_skeleton.spec.roles import MultiRole
 from open_skeleton.spec.substitutes import Substitute
@@ -60,6 +60,7 @@ class PanelContext:
     capabilities: tuple[Capability, ...] = ()
     contract_concordance: tuple[ContractRoute, ...] = ()
     value_set_concordance: tuple[ContractValueSet, ...] = ()
+    record_concordance: tuple[ContractRecord, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
     claim_locations: dict[str, str] = field(default_factory=dict)
@@ -1077,6 +1078,36 @@ def _value_set_concordance(vocabularies: tuple[ContractValueSet, ...]) -> Panel:
     )
 
 
+def _record_concordance(records: tuple[ContractRecord, ...]) -> Panel:
+    """Record shapes stated as a table, a class, and a schema at once."""
+
+    rows = tuple(
+        (
+            " + ".join(f"`{item.label}`" for item in record.declarations),
+            record.relation,
+            f"{len(record.fields):,}",
+            ", ".join(record.kinds),
+            "; ".join(f"{item.path}:{item.line}" for item in record.declarations),
+        )
+        for record in records
+    )
+    return Panel(
+        name="record_concordance",
+        title="Record shapes declared in more than one form",
+        columns=("Shapes", "Relation", "Shared fields", "Forms", "Declared at"),
+        alignments=("left", "left", "right", "left", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        note=(
+            "Joined on field names, exactly. `identical` means both forms name the same "
+            "fields; `superset` means one strictly contains the other, which is the "
+            "ordinary case where a table carries a key its record type does not declare. "
+            "Partial overlap is not joined: two shapes that agree on some names and "
+            "differ on others are two shapes. Complete rows are in `spec.json` under "
+            "`record_concordance`."
+        ),
+    )
+
+
 def _security_matrix(context: PanelContext) -> Panel:
     """Every security control in one table, with the verdict already reached.
 
@@ -1544,6 +1575,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _contract_concordance(context.contract_concordance)
     if name == "value_set_concordance":
         return _value_set_concordance(context.value_set_concordance)
+    if name == "record_concordance":
+        return _record_concordance(context.record_concordance)
     if name == "security_matrix":
         return _security_matrix(context)
     if name == "multi_role_structures":

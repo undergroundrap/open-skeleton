@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -144,3 +146,110 @@ class BenchmarkTests(TestCase):
             Path(__file__).parents[1] / "benchmarks" / "single-player-ai-mud" / "gold.json"
         )
         self.assertNotIn("storage_schema", gold["precision_scope_categories"])
+
+
+def _gold_stub() -> dict[str, Any]:
+    """The smallest gold file the loader accepts, pinned to a commit nothing has.
+
+    These tests are about the fixture checks that run before scoring, so the
+    claim only has to exist. The commit is deliberately unreachable so a clean
+    checkout still fails, which is how the test tells the worktree check apart
+    from the commit check.
+    """
+
+    return {
+        "schema_version": "open-skeleton.benchmark.v1",
+        "fixture": {"commit": "0" * 40},
+        "claims": [
+            {
+                "id": "stub",
+                "area": "stub",
+                "statement": "A placeholder the loader accepts.",
+                "expected_status": "verified",
+                "match": {"category": "public_api", "statuses": ["verified"]},
+            }
+        ],
+    }
+
+
+def _make_fixture_repo(git: str, root: Path) -> None:
+    """A throwaway git repository, isolated from the machine's git config.
+
+    Signing and hooks are disabled deliberately: this is a scratch fixture
+    built to be inspected, not a contribution, and a developer whose global
+    config signs every commit should not see these tests fail for it.
+    """
+
+    steps = (
+        ["init", "--quiet"],
+        ["add", "-A"],
+        [
+            "-c",
+            "user.email=fixture@example.com",
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--no-verify",
+            "-m",
+            "fixture",
+        ],
+    )
+    for argv in steps:
+        subprocess.run(  # noqa: S603
+            [git, "-C", str(root), *argv], check=True, capture_output=True
+        )
+
+
+class DirtyFixtureTests(TestCase):
+    """A commit pin cannot see edits, so it cannot make a fixture immutable.
+
+    A stale worktree at the pinned commit, missing `.gitignore`, `LICENSE` and
+    several package files, scored 85.3% recall where a clean checkout of the
+    same commit scores 100%. Nothing flagged it, and the number read exactly
+    like a regression in the engine.
+    """
+
+    def test_a_modified_tracked_file_is_refused(self) -> None:
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git is unavailable")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "kept.py").write_text("VALUE = 1\n", encoding="utf-8")
+            _make_fixture_repo(git, root)
+            (root / "kept.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+            gold = root / "gold.json"
+            gold.write_text(
+                json.dumps(_gold_stub()),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as raised:
+                run_benchmark(root, gold_path=gold, output_dir=root / "out")
+            message = str(raised.exception)
+
+            # The refusal has to name what changed, or the reader is left
+            # guessing which of the two checkouts is wrong.
+            self.assertIn("not the pinned revision on disk", message)
+            self.assertIn("kept.py", message)
+
+    def test_a_clean_checkout_reaches_the_commit_check(self) -> None:
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git is unavailable")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "kept.py").write_text("VALUE = 1\n", encoding="utf-8")
+            _make_fixture_repo(git, root)
+            gold = root / "gold.json"
+            gold.write_text(
+                json.dumps(_gold_stub()),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as raised:
+                run_benchmark(root, gold_path=gold, output_dir=root / "out")
+            # Clean, so it fails on the pin rather than on the worktree.
+            self.assertIn("commit mismatch", str(raised.exception))

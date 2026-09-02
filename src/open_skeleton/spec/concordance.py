@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -339,3 +340,191 @@ def build_value_set_concordance(
     ambiguous = tuple(sorted(label for label, sets in by_label.items() if label and len(sets) > 1))
     joined.sort(key=lambda item: (-len(item.declarations), item.members))
     return tuple(joined), ambiguous
+
+
+# A shape smaller than this joins by coincidence. `{id, name}` is the field set
+# of a dozen unrelated records in any repository, and pairing two of them would
+# be a similarity match wearing a set-equality costume.
+MIN_RECORD_FIELDS = 4
+
+
+@dataclass(frozen=True, slots=True)
+class RecordShape:
+    """One place a record's field names are written out."""
+
+    path: str
+    line: int
+    kind: str
+    label: str
+    fields: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "line": self.line,
+            "kind": self.kind,
+            "label": self.label,
+            "fields": list(self.fields),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ContractRecord:
+    """One record shape and every form that declares it.
+
+    A table, the class that carries its rows, and the schema that publishes
+    them are three statements of one contract. Adding a field means changing
+    all three, and finding them means reading the repository.
+    """
+
+    contract_id: str
+    fields: tuple[str, ...]
+    relation: str
+    declarations: tuple[RecordShape, ...]
+
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        return tuple(sorted({item.kind for item in self.declarations}))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "contract_id": self.contract_id,
+            "fields": list(self.fields),
+            "relation": self.relation,
+            "kinds": list(self.kinds),
+            "declarations": [item.to_dict() for item in self.declarations],
+        }
+
+
+def _normalized_fields(names: Iterable[str]) -> tuple[str, ...]:
+    return tuple(sorted({_normalized_label(str(name)) for name in names if str(name)}))
+
+
+def _collect_record_shapes(symbols: tuple[dict[str, Any], ...]) -> list[RecordShape]:
+    """Every declared field set, from whichever reader recovered it."""
+
+    shapes: list[RecordShape] = []
+    for symbol in symbols:
+        metadata = symbol.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        path = str(symbol.get("path", ""))
+        line = int(symbol.get("start_line", 1) or 1)
+
+        columns = metadata.get("columns")
+        if isinstance(columns, list) and columns:
+            shapes.append(
+                RecordShape(
+                    path=path,
+                    line=line,
+                    kind="sql_table",
+                    label=str(symbol.get("qualified_name") or symbol.get("path", "")),
+                    fields=_normalized_fields(columns),
+                )
+            )
+
+        models = metadata.get("model_fields")
+        if isinstance(models, dict):
+            for name, body in models.items():
+                declared = body.get("fields") if isinstance(body, dict) else None
+                if not isinstance(declared, list) or not declared:
+                    continue
+                names = [
+                    str(item["name"])
+                    for item in declared
+                    if isinstance(item, dict) and item.get("name")
+                ]
+                first = next(
+                    (
+                        int(item.get("line", line))
+                        for item in declared
+                        if isinstance(item, dict) and item.get("line")
+                    ),
+                    line,
+                )
+                shapes.append(
+                    RecordShape(
+                        path=path,
+                        line=first,
+                        kind="record_type",
+                        label=str(name),
+                        fields=_normalized_fields(names),
+                    )
+                )
+
+        schema_shapes = metadata.get("schema_shapes")
+        if isinstance(schema_shapes, dict):
+            for name, names in schema_shapes.items():
+                if not isinstance(names, list) or not names:
+                    continue
+                shapes.append(
+                    RecordShape(
+                        path=path,
+                        line=line,
+                        kind="schema_properties",
+                        label=str(name),
+                        fields=_normalized_fields(names),
+                    )
+                )
+    return shapes
+
+
+def build_record_concordance(
+    *,
+    snapshot_id: str,
+    symbols: tuple[dict[str, Any], ...],
+) -> tuple[ContractRecord, ...]:
+    """Record shapes stated in more than one form, joined by their field names.
+
+    Two relations are reported and both are exact set facts rather than
+    resemblances. `identical` means the two forms name the same fields.
+    `superset` means one form's fields strictly contain the other's, which is
+    the ordinary case where a table carries a key the class does not: the
+    ledger's `files` table adds `snapshot_id` to what `FileRecord` declares.
+    The extra names are listed so a reader can judge the pairing rather than
+    trust it.
+
+    Nothing partially overlapping is joined. Two shapes that share some names
+    and differ on others are two shapes, and deciding which is authoritative
+    needs an identity this reader does not have.
+    """
+
+    shapes = [
+        shape for shape in _collect_record_shapes(symbols) if len(shape.fields) >= MIN_RECORD_FIELDS
+    ]
+    joined: list[ContractRecord] = []
+    seen: set[frozenset[tuple[str, int, str]]] = set()
+
+    for index, left in enumerate(shapes):
+        for right in shapes[index + 1 :]:
+            if left.kind == right.kind:
+                # One form restating itself is not a cross-form contract.
+                continue
+            left_set, right_set = set(left.fields), set(right.fields)
+            if left_set == right_set:
+                relation = "identical"
+            elif left_set < right_set or right_set < left_set:
+                # Strict containment in either direction. A table routinely
+                # carries a key its record type does not declare, which is a
+                # set fact rather than a resemblance.
+                relation = "superset"
+            else:
+                continue
+            members = frozenset({(item.path, item.line, item.label) for item in (left, right)})
+            if members in seen:
+                continue
+            seen.add(members)
+            shared = tuple(sorted(left_set & right_set))
+            joined.append(
+                ContractRecord(
+                    contract_id=stable_id("contract", (snapshot_id, "record", *shared, relation)),
+                    fields=shared,
+                    relation=relation,
+                    declarations=tuple(
+                        sorted((left, right), key=lambda item: (item.path, item.line))
+                    ),
+                )
+            )
+
+    joined.sort(key=lambda item: (-len(item.fields), item.fields))
+    return tuple(joined)
