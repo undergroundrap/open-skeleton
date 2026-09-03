@@ -43,6 +43,22 @@ from open_skeleton.models import EdgeRecord, FileRecord, SymbolRecord
 MODULE_SUFFIXES = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs")
 INDEX_STEMS = ("index", "mod", "__init__")
 
+# Readers whose call edges say whether a call had a receiver. Only those may
+# have their calls bound, and this is a statement about the reader rather than
+# about the language.
+#
+# Given `text(1)` and `w.text()`, the Python reader records `text` and
+# `w.text`; the Rust and TypeScript readers both record `text` twice. A bare
+# name from those readers is a free call and a method call at once, so binding
+# it to the free function of that name is a coin toss written down as an edge
+# -- and an agent walking this graph would have no way to know. Measured on
+# one Rust crate, that mistake produced 254 resolved calls to `new`, the name
+# every Rust constructor has.
+#
+# This is the whole barrier: a reader that records its receivers joins the
+# list and its calls resolve with no further work here.
+CALL_RECEIVER_ANALYZERS = ("python-ast/",)
+
 
 def _dotted(path: str) -> str:
     """The dotted module name a path would carry, without its extension."""
@@ -101,6 +117,130 @@ def _candidates(reference: str, source_path: str) -> list[str]:
     if reference.startswith(("super::", "self::")) or reference in {"super", "self", "crate"}:
         return []
     return [reference]
+
+
+def _bound_names(edges: Sequence[EdgeRecord]) -> dict[str, dict[str, str]]:
+    """Per file, the local name each resolved import binds to a symbol.
+
+    `from open_skeleton.providers import ClaudeCliProvider` binds the name
+    `ClaudeCliProvider` in that file and nowhere else. This is the whole basis
+    for resolving a call: the file said what the name means.
+    """
+
+    bound: dict[str, dict[str, str]] = {}
+    for edge in edges:
+        if edge.relationship != "imports" or not edge.target_symbol_id:
+            continue
+        local = edge.target_ref.replace("::", ".").rstrip(".").split(".")[-1]
+        if local:
+            bound.setdefault(edge.source_path, {})[local] = edge.target_symbol_id
+    return bound
+
+
+def resolve_call_targets(
+    symbols: Sequence[SymbolRecord],
+    edges: Sequence[EdgeRecord],
+) -> tuple[EdgeRecord, ...]:
+    """Bind a call to a definition, where the file itself says what the name means.
+
+    Two bindings, both written down in the source and neither inferred:
+
+    1. the file imports the name, so the import says which symbol it is;
+    2. the calling symbol's own module defines it.
+
+    Everything else stays unresolved, and most calls should. Measured across
+    three repositories, 53% to 83% of call targets name nothing the repository
+    defines at all -- `len`, `append`, `clone`, `push_str`, `toBe` -- and
+    another 17% are methods on `self`, whose definition needs a type this
+    engine does not infer. The unambiguously bindable share is about one call
+    in six, so a resolver reporting 15% is near its ceiling rather than far
+    from a hundred.
+
+    That ceiling is the useful number and it is easy to mistake for failure.
+    An edge left empty because the call leaves the repository is a correct
+    answer, not a gap.
+    """
+
+    by_name: dict[str, list[SymbolRecord]] = {}
+    for symbol in symbols:
+        by_name.setdefault(symbol.qualified_name, []).append(symbol)
+    symbol_by_id = {item.symbol_id: item for item in symbols}
+    bound = _bound_names(edges)
+
+    resolved: list[EdgeRecord] = []
+    for edge in edges:
+        if edge.relationship != "calls" or edge.target_symbol_id:
+            resolved.append(edge)
+            continue
+        if not edge.analyzer.startswith(CALL_RECEIVER_ANALYZERS):
+            resolved.append(edge)
+            continue
+        reference = edge.target_ref.strip()
+        # `self.render` and `this.render` name a method on a value whose type
+        # is not written at the call site. Picking the one class that happens
+        # to define `render` would be a guess wearing a citation.
+        if not reference or reference.startswith(("self.", "this.")):
+            resolved.append(edge)
+            continue
+
+        target = _bound_call(reference, edge, bound, by_name, symbol_by_id)
+        resolved.append(replace(edge, target_symbol_id=target.symbol_id) if target else edge)
+    return tuple(resolved)
+
+
+def _bound_call(
+    reference: str,
+    edge: EdgeRecord,
+    bound: dict[str, dict[str, str]],
+    by_name: dict[str, list[SymbolRecord]],
+    symbol_by_id: dict[str, SymbolRecord],
+) -> SymbolRecord | None:
+    parts = reference.replace("::", ".").split(".")
+    head, rest = parts[0], parts[1:]
+
+    imported = bound.get(edge.source_path, {}).get(head)
+    if imported and imported in symbol_by_id:
+        anchor = symbol_by_id[imported]
+        if not rest:
+            return anchor
+        # `providers.ClaudeCliProvider` where the file imported `providers`.
+        # Only an exact hit counts: binding the call to the module because
+        # the member could not be found would report a call that never
+        # happened at a place that never made it.
+        deeper = by_name.get(f"{anchor.qualified_name}.{'.'.join(rest)}", [])
+        return deeper[0] if len(deeper) == 1 else None
+
+    caller = symbol_by_id.get(edge.source_symbol_id or "")
+    if caller is None:
+        return None
+    # Rust spells a qualified name `parser::parse_source` and Python spells it
+    # `parser.parse_source`. Splitting on `.` alone left every Rust caller's
+    # module equal to its own full name, so the same-module lookup could never
+    # hit and this reader resolved 163 of 36,898 calls in a Rust repository.
+    module, separator = _module_of(caller)
+    same_module = by_name.get(f"{module}{separator}{reference}", [])
+    return same_module[0] if len(same_module) == 1 else None
+
+
+def _module_of(caller: SymbolRecord) -> tuple[str, str]:
+    """The module a call written inside this symbol can see, and its separator.
+
+    A module's own module is itself. Taking the parent instead let the lookup
+    escape one level up and out of the file: a call to `new` inside
+    `warmboot_game::graphics_ui` searched `warmboot_game::` and bound to a
+    free function in `main.rs`. 254 of one repository's 262 resolved calls
+    were that, all of them wrong, and `new` is the name every Rust
+    constructor has -- which is exactly why a bare name may only ever be
+    looked up in the scope that can actually see it.
+    """
+
+    qualified = caller.qualified_name
+    separator = "::" if "::" in qualified else "."
+    if caller.kind == "module":
+        return qualified, separator
+    if separator in qualified:
+        return qualified.rsplit(separator, 1)[0], separator
+    return qualified, separator
 
 
 def _crate_roots(files: Iterable[FileRecord]) -> tuple[str, ...]:

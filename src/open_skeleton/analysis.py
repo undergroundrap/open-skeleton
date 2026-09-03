@@ -38,7 +38,7 @@ from open_skeleton.models import (
     utc_now,
 )
 from open_skeleton.policy import scoped_category
-from open_skeleton.resolution import resolve_import_targets
+from open_skeleton.resolution import resolve_call_targets, resolve_import_targets
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
 EXPONENTIAL_BASE_PATTERN = re.compile(
@@ -1089,9 +1089,15 @@ def analyze_snapshot(
         # is often satisfied by a symbol another reader declared: a TypeScript
         # module importing from a `.tsx` file crosses two analyzers, and
         # neither one alone holds both halves.
+        # Calls after imports, because a call is bound by what its file
+        # imported and that binding does not exist until the import edge
+        # names a symbol.
         edges=tuple(
             sorted(
-                resolve_import_targets(snapshot.files, symbols, edges),
+                resolve_call_targets(
+                    symbols,
+                    resolve_import_targets(snapshot.files, symbols, edges),
+                ),
                 key=lambda item: item.edge_id,
             )
         ),
