@@ -315,6 +315,24 @@ parse is a parse shortfall with a reason attached; only a language nothing is
 equipped to read is reported as unread. Stating one cause twice reads as two,
 which is a defect this document had to be corrected for separately.
 
+Every one of these answers from a stored snapshot, so every one first checks
+that the snapshot still describes the files on disk. It did not, and editing a
+repository then asking a question returned a confident report about a state
+that no longer existed -- one file counted where two were present, with a
+cheerful note that everything had been read. A stale answer is worse than no
+answer, because it looks like an answer.
+
+The check re-scans and compares snapshot identifiers, which is exact rather
+than a heuristic, and costs roughly what the query costs: a few hundred
+milliseconds. When the tree has moved, the answer is still given and is
+preceded by what changed, on standard output rather than standard error --
+a caveat a caller does not receive is decoration. The JSON form carries it as
+a `stale` field, null when the snapshot is current.
+
+Asking before any analysis names the command that fixes it rather than
+reporting an empty state directory, because whoever reaches that message has
+not read this file.
+
 The rule this follows is worth stating, because it is what keeps the command
 honest: it computes nothing the document does not already contain. The answer
 and the specification are two projections of one ledger, so they cannot drift

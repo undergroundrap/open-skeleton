@@ -490,6 +490,58 @@ def _analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _snapshot_drift(root: Path, ledger: EvidenceLedger, snapshot_id: str) -> str | None:
+    """How far the working tree has moved from the snapshot, or None if not at all.
+
+    Every query here answers from a stored snapshot. Nothing checked that the
+    snapshot still described the files on disk, so editing a repository and
+    asking a question returned a confident answer about a state that no longer
+    existed -- one file counted where two were present, and a cheerful report
+    that everything had been read.
+
+    That is the failure this whole project is built to prevent, arriving
+    through its own front door. A stale answer is worse than no answer,
+    because it looks like an answer.
+
+    The check re-scans, which costs about as much as the query itself and is
+    exact: the snapshot identifier is a digest of the file set, so equal
+    identifiers mean the answer still describes the repository.
+    """
+
+    try:
+        current = scan_repository(root)
+    except (OSError, ValueError):
+        # A repository that cannot be scanned cannot be compared. Say nothing
+        # rather than claim freshness this did not establish.
+        return None
+    if current.snapshot_id == snapshot_id:
+        return None
+
+    stored = {str(item["path"]): int(item["size_bytes"]) for item in ledger.list_files(snapshot_id)}
+    present = {item.path: item.size_bytes for item in current.files}
+    added = sorted(set(present) - set(stored))
+    removed = sorted(set(stored) - set(present))
+    changed = sorted(path for path in set(stored) & set(present) if stored[path] != present[path])
+    parts = [
+        f"{len(added):,} added" if added else "",
+        f"{len(removed):,} removed" if removed else "",
+        f"{len(changed):,} changed" if changed else "",
+    ]
+    summary = ", ".join(part for part in parts if part)
+    named = ", ".join((added + removed + changed)[:3])
+    if not summary:
+        # Same paths and sizes, different digest: an edit that kept the byte
+        # count. Still stale, and saying "0 changed" would be a worse answer
+        # than saying the contents moved.
+        summary = "content changed"
+        named = ""
+    detail = f": {named}" if named else ""
+    return (
+        f"This answer is from a snapshot that no longer matches the working tree "
+        f"({summary}{detail}). Re-run `open-skeleton analyze` to refresh it."
+    )
+
+
 def _ledger_and_snapshot(args: argparse.Namespace) -> tuple[EvidenceLedger, str]:
     root = _resolve_root(args.path)
     state_dir = _resolve_state_dir(root, args.state_dir)
@@ -498,7 +550,13 @@ def _ledger_and_snapshot(args: argparse.Namespace) -> tuple[EvidenceLedger, str]
         return ledger, args.snapshot
     latest = ledger.latest_snapshot()
     if latest is None:
-        raise ValueError(f"No snapshot found in {state_dir}")
+        # A dead end helps nobody. Name the command that produces what is
+        # missing, because whoever hit this has not read the README.
+        raise ValueError(
+            f"No snapshot found in {state_dir}. "
+            f"Run `open-skeleton analyze {root}` first; these commands answer "
+            "from a stored analysis rather than reading the repository."
+        )
     return ledger, str(latest["snapshot_id"])
 
 
@@ -515,6 +573,7 @@ def _contracts(args: argparse.Namespace) -> int:
     """
 
     ledger, snapshot_id = _ledger_and_snapshot(args)
+    drift = _snapshot_drift(_resolve_root(args.path), ledger, snapshot_id)
     symbols = tuple(_every_symbol(ledger, snapshot_id))
     value_sets, ambiguous = build_value_set_concordance(snapshot_id=snapshot_id, symbols=symbols)
     records = build_record_concordance(snapshot_id=snapshot_id, symbols=symbols)
@@ -544,6 +603,7 @@ def _contracts(args: argparse.Namespace) -> int:
             json.dumps(
                 {
                     "snapshot_id": snapshot_id,
+                    "stale": drift,
                     "value_sets": [item.to_dict() for item in value_sets],
                     "records": [item.to_dict() for item in records],
                     "ambiguous_labels": list(ambiguous),
@@ -554,6 +614,9 @@ def _contracts(args: argparse.Namespace) -> int:
         )
         return 0
 
+    if drift:
+        print(drift)
+        print()
     for item in value_sets:
         members = ", ".join(item.members)
         print(f"value set: {members}")
@@ -627,6 +690,7 @@ def _refusals(args: argparse.Namespace) -> int:
     """
 
     ledger, snapshot_id = _ledger_and_snapshot(args)
+    drift = _snapshot_drift(_resolve_root(args.path), ledger, snapshot_id)
     rows = _refusal_rows(_every_symbol(ledger, snapshot_id))
 
     term = (args.term or "").casefold()
@@ -651,9 +715,18 @@ def _refusals(args: argparse.Namespace) -> int:
 
     rows = rows[: args.limit]
     if args.json:
-        print(json.dumps({"snapshot_id": snapshot_id, "refusals": rows}, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {"snapshot_id": snapshot_id, "stale": drift, "refusals": rows},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
+    if drift:
+        print(drift)
+        print()
     for row in rows:
         print(f"{row['symbol']}  ({row['path']}:{row['start_line']})")
         for item in row["refusals"]:
@@ -741,6 +814,7 @@ def _coverage(args: argparse.Namespace) -> int:
     """Answer "can I trust an absence here?" before trusting one."""
 
     ledger, snapshot_id = _ledger_and_snapshot(args)
+    drift = _snapshot_drift(_resolve_root(args.path), ledger, snapshot_id)
     report = _coverage_report(
         list(ledger.list_files(snapshot_id)),
         list(ledger.list_exclusions(snapshot_id)),
@@ -749,9 +823,18 @@ def _coverage(args: argparse.Namespace) -> int:
         list(ledger.analysis_coverage(snapshot_id)),
     )
     if args.json:
-        print(json.dumps({"snapshot_id": snapshot_id, **report}, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {"snapshot_id": snapshot_id, "stale": drift, **report},
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
+    if drift:
+        print(drift)
+        print()
     print(f"included files: {report['included_files']:,}")
     print(f"excluded files: {report['excluded_files']:,}")
     for reason, count in list(report["exclusion_reasons"].items())[: args.limit]:

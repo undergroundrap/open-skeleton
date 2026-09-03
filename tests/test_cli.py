@@ -507,3 +507,103 @@ class CoverageReportTests(TestCase):
             output = captured.getvalue()
             self.assertIn("included files:", output)
             self.assertIn("read by an analyzer equipped for it", output)
+
+
+class SnapshotDriftTests(TestCase):
+    """An answer about a repository that has since moved on.
+
+    Every query answers from a stored snapshot, and nothing checked that the
+    snapshot still described the files on disk. Editing a repository and
+    asking a question returned a confident report about a state that no
+    longer existed. A stale answer is worse than no answer, because it looks
+    like an answer.
+    """
+
+    def _repo(self, workspace: Path) -> tuple[Path, Path]:
+        root = workspace / "repo"
+        state = workspace / "state"
+        root.mkdir()
+        (root / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            main(["analyze", str(root), "--state-dir", str(state)])
+        return root, state
+
+    def _ask(self, root: Path, state: Path, *argv: str) -> str:
+        captured = StringIO()
+        with redirect_stdout(captured), redirect_stderr(StringIO()):
+            main([argv[0], str(root), "--state-dir", str(state), *argv[1:]])
+        return captured.getvalue()
+
+    def test_a_fresh_snapshot_carries_no_warning(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            self.assertNotIn("no longer matches", self._ask(root, state, "coverage"))
+
+    def test_an_added_file_makes_the_answer_stale(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            (root / "b.py").write_text("def go():\n    pass\n", encoding="utf-8")
+            output = self._ask(root, state, "coverage")
+            self.assertIn("no longer matches", output)
+            self.assertIn("1 added", output)
+            self.assertIn("b.py", output)
+
+    def test_a_removed_file_makes_the_answer_stale(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            (root / "a.py").unlink()
+            self.assertIn("1 removed", self._ask(root, state, "coverage"))
+
+    def test_a_changed_file_makes_the_answer_stale(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            (root / "a.py").write_text("VALUE = 22222\n", encoding="utf-8")
+            self.assertIn("1 changed", self._ask(root, state, "coverage"))
+
+    def test_an_edit_that_keeps_the_byte_count_is_still_stale(self) -> None:
+        # Same paths and sizes, different digest. Reporting "0 changed"
+        # would be a worse answer than saying the contents moved.
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            (root / "a.py").write_text("VALUE = 9\n", encoding="utf-8")
+            output = self._ask(root, state, "coverage")
+            self.assertIn("no longer matches", output)
+            self.assertIn("content changed", output)
+
+    def test_the_warning_reaches_a_caller_capturing_the_answer(self) -> None:
+        # On stderr an agent piping stdout would never see it, which is how
+        # a caveat becomes decoration.
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            (root / "b.py").write_text("x = 1\n", encoding="utf-8")
+            captured, errors = StringIO(), StringIO()
+            with redirect_stdout(captured), redirect_stderr(errors):
+                main(["contracts", str(root), "--state-dir", str(state)])
+            self.assertIn("no longer matches", captured.getvalue())
+
+    def test_json_carries_the_warning_as_a_field(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            (root / "b.py").write_text("x = 1\n", encoding="utf-8")
+            payload = json.loads(self._ask(root, state, "refusals", "--json"))
+            self.assertIsNotNone(payload["stale"])
+            self.assertIn("no longer matches", payload["stale"])
+
+    def test_a_fresh_json_answer_says_so_explicitly(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, state = self._repo(Path(temporary))
+            payload = json.loads(self._ask(root, state, "contracts", "--json"))
+            self.assertIsNone(payload["stale"])
+
+    def test_a_cold_start_names_the_command_that_fixes_it(self) -> None:
+        # A dead end helps nobody, least of all something that has not read
+        # the README.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            root.mkdir()
+            (root / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+            errors = StringIO()
+            with redirect_stdout(StringIO()), redirect_stderr(errors):
+                code = main(["contracts", str(root), "--state-dir", str(Path(temporary) / "none")])
+            self.assertNotEqual(code, 0)
+            self.assertIn("analyze", errors.getvalue())
