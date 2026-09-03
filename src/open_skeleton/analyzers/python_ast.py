@@ -130,7 +130,11 @@ def _module_parts(path: str, packages: frozenset[str]) -> tuple[str, str]:
     it. Rewriting only on positive evidence is the whole rule.
     """
 
-    parts = path.removesuffix(".py").split("/")
+    # `.pyi` before `.py`, since stripping the shorter suffix first leaves a
+    # trailing `i` and names the module `exceptions.pyi`. A stub declares the
+    # same module as its implementation and must carry the same name, or an
+    # import of `attr.exceptions` resolves to neither.
+    parts = path.removesuffix(".pyi").removesuffix(".py").split("/")
     if parts[-1] == "__init__":
         parts = parts[:-1]
     if not parts:

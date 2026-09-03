@@ -165,6 +165,14 @@ LANGUAGES_BY_SUFFIX = {
     ".psm1": "PowerShell",
     ".proto": "Protocol Buffers",
     ".py": "Python",
+    # A stub is the exact declaration of a package's public interface, and in
+    # a package whose implementation is compiled it is the only declaration
+    # there is: `cryptography` ships 32 of them for Rust-backed modules, and
+    # every name in them was invisible. They are valid Python syntax, so the
+    # existing reader handles them and this is a classification gap rather
+    # than a missing analyzer. Found by the gap census, which reported
+    # `Unknown` as the most widely unread language across 28 repositories.
+    ".pyi": "Python",
     ".rb": "Ruby",
     ".rs": "Rust",
     ".scss": "SCSS",

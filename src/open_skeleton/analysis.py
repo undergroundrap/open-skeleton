@@ -91,7 +91,14 @@ def _append_orphan_candidates(
     python_modules = [
         item
         for item in symbols
-        if item.kind == "module" and item.analyzer.startswith("python-ast/")
+        if item.kind == "module"
+        and item.analyzer.startswith("python-ast/")
+        # A stub is read by a type checker, never imported by a module, so
+        # every one of them is unreachable by this census by construction.
+        # Reading `.pyi` files gained `attr` seven orphan candidates that were
+        # all its public type declarations -- a true statement about the
+        # import graph and a false one about dead code.
+        and not item.path.endswith(".pyi")
     ]
     imports = [item for item in edges if item.relationship == "imports"]
     evidence_by_symbol = {
