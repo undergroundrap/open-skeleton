@@ -37,6 +37,10 @@ CATEGORY_FAMILY: dict[str, str] = {
     "http_framework_behavior": "interface",
     "http_client_inventory": "interface",
     "test_route": "interface",
+    # A route in an example app is the same kind of thing as one in a test:
+    # an interface, and not the product's. Listed beside `test_route` so the
+    # two cannot be treated differently here by omission.
+    "harness_route": "interface",
     "process_local_state": "state",
     "storage_schema": "state",
     "state_reconciliation": "state",

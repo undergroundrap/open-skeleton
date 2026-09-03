@@ -334,6 +334,36 @@ TEST_SCOPED_CATEGORIES = {
     "caught_exception": "test_caught_exception",
     "exception_type": "test_exception_type",
     "collection_driven_workset": "test_collection_driven_workset",
+    # Measured before being added, each from a claim found filed as product
+    # behaviour while resting on nothing but a suite or a benchmark: a `fetch`
+    # in `rendered-html.test.mjs` stood as one repository's outbound HTTP
+    # surface, `localStorage` in a `.test.tsx` as another's browser state, and
+    # the only Rust in this repository is a differential reference
+    # implementation whose `expect` calls were reported as this engine's
+    # panic surface.
+    "http_client_inventory": "test_http_client_inventory",
+    "browser_storage": "test_browser_storage",
+    "panic_site": "test_panic_site",
+    "absorbed_failure": "test_absorbed_failure",
+}
+
+# A benchmark is not a test. `EXERCISING_ROLES` already warns that conflating
+# them misleads as much as calling a benchmark the application, so harness
+# evidence gets its own prefix rather than borrowing the suite's: a reader
+# seeing `harness_storage` learns something true, and `test_storage` on
+# `benchmarks/differential/run_sql_differential.py` would not.
+#
+# Derived from the test mapping rather than written out, so the two cannot
+# drift as categories are added, and so the one irregular name -- `http_route`
+# scopes to `route`, not `http_route` -- stays irregular in both.
+HARNESS_SCOPED_CATEGORIES = {
+    category: "harness_" + scoped.removeprefix("test_")
+    for category, scoped in TEST_SCOPED_CATEGORIES.items()
+}
+
+SCOPED_CATEGORIES_BY_ROLE: dict[str, dict[str, str]] = {
+    "test": TEST_SCOPED_CATEGORIES,
+    "harness": HARNESS_SCOPED_CATEGORIES,
 }
 
 # Re-filing belongs in one place per analyzer, not at each call site.
@@ -348,12 +378,11 @@ def scoped_category(category: str, role: str) -> str:
 
     A fixture's shape is a real fact about the suite and a false one about
     the system. Nothing is dropped; it is filed where a reader asking what
-    the system stores will not mistake it for an answer.
+    the system stores will not mistake it for an answer. The same holds for
+    a benchmark or an example, under its own name.
     """
 
-    if role != "test":
-        return category
-    return TEST_SCOPED_CATEGORIES.get(category, category)
+    return SCOPED_CATEGORIES_BY_ROLE.get(role, {}).get(category, category)
 
 
 def describes_the_product(role: str | None) -> bool:

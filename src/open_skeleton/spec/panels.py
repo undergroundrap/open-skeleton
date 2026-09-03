@@ -1007,9 +1007,9 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
             "or by a helper the handler calls is real and does not appear here. Response "
             "fields are the literal keys of dictionaries the handler returns, so a "
             "response assembled elsewhere shows none. Routes registered inside "
-            "test files are excluded: they exercise the framework rather than "
-            "forming part of the served surface, and they are reported "
-            "separately as `test_route` claims."
+            "test files, benchmarks or examples are excluded: they exercise the "
+            "framework rather than forming part of the served surface, and they "
+            "are reported separately as `test_route` and `harness_route` claims."
         ),
     )
 

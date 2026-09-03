@@ -37,6 +37,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import scoped_category
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
 EXPONENTIAL_BASE_PATTERN = re.compile(
@@ -822,6 +823,62 @@ def _attribute_claim_yield(
 AnalysisEventCallback = Callable[[str, int, int], None]
 
 
+def _scope_claims_by_evidence_role(
+    snapshot: Snapshot,
+    claims: Sequence[ClaimRecord],
+    evidence: Sequence[EvidenceRecord],
+) -> list[ClaimRecord]:
+    """File a claim by the role of the files it actually rests on.
+
+    Two analyzers did this internally and the rest did not, so the same defect
+    kept being found and fixed one reader at a time: routes, then schemas, then
+    durable storage, each corrected where it was noticed. The reader that
+    reported a suite's `fetch` as a product's outbound HTTP surface carries a
+    comment saying the rule exists elsewhere and never crossed over.
+
+    It belongs here because this is the only place that sees every claim
+    against every file's role, so an analyzer written next week inherits the
+    behaviour without knowing the rule exists. Deciding by the evidence rather
+    than by a file also reaches the aggregate claims, which name no single
+    path: the Rust panic census is one claim over many receipts, and in a
+    repository whose only Rust is a differential reference implementation,
+    every one of those receipts is a benchmark.
+
+    Conservative in three ways. A claim resting on any product source stays a
+    product claim, since one real site makes the statement true of the system.
+    A claim whose evidence spans two exercising roles at once is left alone
+    rather than assigned to whichever looks more likely. And a receipt that
+    resolves to no known file leaves the claim untouched, so a gap in
+    bookkeeping cannot silently demote a finding.
+    """
+
+    role_by_path = {str(item.path): str(item.role) for item in snapshot.files}
+    path_by_evidence = {str(item.evidence_id): str(item.path) for item in evidence}
+
+    scoped: list[ClaimRecord] = []
+    for claim in claims:
+        supporting = tuple(claim.supporting_evidence or ())
+        paths = {path_by_evidence.get(item) for item in supporting}
+        if not paths or None in paths:
+            scoped.append(claim)
+            continue
+        roles = {role_by_path.get(path or "") for path in paths}
+        if len(roles) != 1:
+            scoped.append(claim)
+            continue
+        role = str(next(iter(roles)) or "")
+        category = scoped_category(claim.category, role)
+        if category == claim.category:
+            scoped.append(claim)
+            continue
+        # A fixture's shape and a benchmark's error handling are worth
+        # recording and are not headlines about the system, so a re-filed
+        # claim does not keep a product finding's prominence.
+        importance = "medium" if claim.importance == "high" else claim.importance
+        scoped.append(replace(claim, category=category, importance=importance))
+    return scoped
+
+
 def _merge_duplicate_claims(claims: list[ClaimRecord]) -> list[ClaimRecord]:
     """Fold claims sharing an identifier into one, keeping every receipt.
 
@@ -1022,6 +1079,18 @@ def analyze_snapshot(
         ),
         edges=tuple(sorted(edges, key=lambda item: item.edge_id)),
         evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
-        claims=tuple(_merge_duplicate_claims(claims)),
+        # Merge first, then re-file. Merging folds claims that share an
+        # identifier and unions their receipts, so afterwards a claim's
+        # evidence is complete and the role behind it can be read once. Doing
+        # it the other way would ask the question of a partial answer, and
+        # could collapse a source-evidenced claim into a re-filed one, since
+        # the identifier was computed before the category changed.
+        claims=tuple(
+            _scope_claims_by_evidence_role(
+                snapshot,
+                _merge_duplicate_claims(claims),
+                evidence,
+            )
+        ),
         coverage=coverage,
     )
