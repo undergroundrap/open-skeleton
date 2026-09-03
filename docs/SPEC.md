@@ -269,6 +269,30 @@ rows: roughly a thousandth of the cost, with a path and line for every site.
 `--kind` selects vocabularies or record shapes, and `--term` narrows to one
 contract.
 
+`open-skeleton refusals` answers the other question a reader asks before
+touching a handler:
+
+```bash
+open-skeleton refusals . --term load_player
+```
+
+```
+backend.main.load_player  (backend/main.py:159)
+  HTTP 404 "Player not found"  :163
+  HTTP 404 "Zone not found - data may be corrupt"  :168
+```
+
+Eighteen words. A status code says a request failed; the message says which
+failure it was, and it is the string somebody searches for when it turns up in
+a log.
+
+Its scope is stated in its own empty answer rather than left to be discovered.
+Refusals come from the guard-and-exit trace, which is kept for route handlers
+and functions with at least two guards, so a plain function that raises once
+has no trace. "No refusal recorded" therefore means untraced, not known to
+refuse nothing -- the same distinction this document draws everywhere else
+between an absence that was checked and one that was never looked at.
+
 The rule this follows is worth stating, because it is what keeps the command
 honest: it computes nothing the document does not already contain. The answer
 and the specification are two projections of one ledger, so they cannot drift

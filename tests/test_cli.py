@@ -7,9 +7,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
-from open_skeleton.cli import main
+from open_skeleton.cli import _refusal_rows, main
 from tests.helpers import create_sample_repository
 
 
@@ -294,3 +295,109 @@ class ContractsCommandTests(TestCase):
         self.assertIn("records", payload)
         self.assertTrue(payload["snapshot_id"])
         self.assertEqual(payload["value_sets"][0]["members"], ["done", "queued"])
+
+
+class RefusalRowTests(TestCase):
+    """What a symbol refuses with, and the words it uses.
+
+    A status code says a request failed. The message says which failure it
+    was, and it is the string somebody searches for when it turns up in a
+    log. Both were in the ledger; reaching them meant reading a rendered
+    specification or the source.
+    """
+
+    def _rows(self, *symbols: dict[str, Any]) -> list[dict[str, Any]]:
+        return _refusal_rows(list(symbols))
+
+    def _symbol(self, name: str, *events: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "qualified_name": name,
+            "path": "main.py",
+            "start_line": 10,
+            "metadata": {"control_flow": list(events)},
+        }
+
+    def test_a_refusal_carries_its_status_and_message(self) -> None:
+        rows = self._rows(
+            self._symbol(
+                "load_player",
+                {"kind": "raise", "line": 12, "label": "HTTP 404", "message": "Player not found"},
+            )
+        )
+        self.assertEqual(rows[0]["symbol"], "load_player")
+        refusal = rows[0]["refusals"][0]
+        self.assertEqual(refusal["label"], "HTTP 404")
+        self.assertEqual(refusal["message"], "Player not found")
+        self.assertEqual(refusal["line"], 12)
+
+    def test_a_refusal_without_a_literal_message_still_reports_its_status(self) -> None:
+        rows = self._rows(self._symbol("go", {"kind": "raise", "line": 3, "label": "HTTP 400"}))
+        self.assertIsNone(rows[0]["refusals"][0]["message"])
+
+    def test_a_bare_reraise_is_not_a_refusal(self) -> None:
+        # It says the failure continues outward, which the caller already
+        # learns from the site that produced it.
+        rows = self._rows(self._symbol("go", {"kind": "raise", "line": 3, "label": "re-raise"}))
+        self.assertEqual(rows, [])
+
+    def test_guards_and_returns_are_not_refusals(self) -> None:
+        rows = self._rows(
+            self._symbol(
+                "go",
+                {"kind": "guard", "line": 2, "label": "if x"},
+                {"kind": "return", "line": 4, "label": "None"},
+            )
+        )
+        self.assertEqual(rows, [])
+
+    def test_a_symbol_with_no_control_flow_is_skipped(self) -> None:
+        self.assertEqual(self._rows({"qualified_name": "x", "path": "a.py"}), [])
+
+    def test_refusals_are_ordered_by_line(self) -> None:
+        rows = self._rows(
+            self._symbol(
+                "go",
+                {"kind": "raise", "line": 9, "label": "HTTP 500"},
+                {"kind": "raise", "line": 4, "label": "HTTP 404"},
+            )
+        )
+        self.assertEqual([item["line"] for item in rows[0]["refusals"]], [4, 9])
+
+
+class OutputEncodingTests(TestCase):
+    """Answers are written as UTF-8 whatever the console encoding is.
+
+    An em dash left as the single cp1252 byte `\\x97` made a quoted message
+    stop being the string it quoted, for any caller decoding as UTF-8 --
+    which is what a caller does. A message that arrives mangled is worse
+    than one that never arrived, because it looks usable.
+    """
+
+    def test_a_non_ascii_message_survives_the_round_trip(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            # A route handler, because the guard-and-exit trace is kept
+            # for those. A plain function raising once carries no trace,
+            # which is the command's real scope rather than a gap here.
+            (root / "api.py").write_text(
+                "from fastapi import FastAPI, HTTPException\n"
+                "app = FastAPI()\n"
+                "@app.get('/zone')\n"
+                "def load(zone_id: str):\n"
+                "    if not zone_id:\n"
+                '        raise HTTPException(status_code=400, detail="zone id required")\n'
+                "    if zone_id == 'missing':\n"
+                '        raise HTTPException(status_code=404, detail="zone not found \u2014 data may be corrupt")\n'
+                "    return {'zone': zone_id}\n",
+                encoding="utf-8",
+            )
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                main(["analyze", str(root), "--state-dir", str(state)])
+            captured = StringIO()
+            with redirect_stdout(captured), redirect_stderr(StringIO()):
+                main(["refusals", str(root), "--state-dir", str(state)])
+            output = captured.getvalue()
+            self.assertIn("\u2014", output)
+            self.assertEqual(output.encode("utf-8").decode("utf-8"), output)

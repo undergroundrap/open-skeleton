@@ -10,6 +10,7 @@ import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from open_skeleton import __version__
 from open_skeleton.analysis import analyze_snapshot
@@ -123,6 +124,28 @@ def _parser() -> argparse.ArgumentParser:
         help="State directory. Defaults to the OS-local state area for PATH.",
     )
     status.add_argument("--json", action="store_true", help="Print status as JSON.")
+
+    refusals = subparsers.add_parser(
+        "refusals",
+        help=(
+            "Show what each symbol refuses with, and the message it gives. "
+            "Read from the guard-and-exit trace, which covers route handlers "
+            "and functions with at least two guards."
+        ),
+    )
+    refusals.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    refusals.add_argument("--state-dir", type=Path, help="State directory.")
+    refusals.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
+    refusals.add_argument(
+        "--term", help="Only symbols, paths, statuses, or messages containing this text."
+    )
+    refusals.add_argument(
+        "--with-message",
+        action="store_true",
+        help="Only refusals carrying a literal message.",
+    )
+    refusals.add_argument("--limit", type=int, default=40)
+    refusals.add_argument("--json", action="store_true", help="Print complete rows as JSON.")
 
     contracts = subparsers.add_parser(
         "contracts",
@@ -542,6 +565,107 @@ def _contracts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _refusal_rows(symbols: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every raise a symbol can reach, with the text it gives the caller.
+
+    Kept out of the command body so the shape is testable without argparse.
+    A bare re-raise carries no label worth printing and is dropped: it says
+    the failure continues outward, which the caller already learns from the
+    site that produced it.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for symbol in symbols:
+        metadata = symbol.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        flow = metadata.get("control_flow")
+        if not isinstance(flow, list):
+            continue
+        refusals = [
+            {
+                "line": int(event.get("line", 0) or 0),
+                "label": str(event.get("label", "")),
+                "message": str(event["message"]) if event.get("message") else None,
+            }
+            for event in flow
+            if isinstance(event, dict)
+            and event.get("kind") == "raise"
+            and str(event.get("label", "")) not in {"", "re-raise"}
+        ]
+        if not refusals:
+            continue
+        rows.append(
+            {
+                "symbol": str(symbol.get("qualified_name", "")),
+                "path": str(symbol.get("path", "")),
+                "start_line": int(symbol.get("start_line", 1) or 1),
+                "refusals": sorted(refusals, key=lambda item: item["line"]),
+            }
+        )
+    rows.sort(key=lambda item: (item["path"], item["start_line"]))
+    return rows
+
+
+def _refusals(args: argparse.Namespace) -> int:
+    """Answer "what does this refuse with, and what does it say?"
+
+    A status code tells a caller a request failed. The message tells them
+    which failure it was, and it is the string they will search for when it
+    appears in a log. Both are already in the ledger; reaching them meant
+    reading a rendered specification or the source itself.
+    """
+
+    ledger, snapshot_id = _ledger_and_snapshot(args)
+    rows = _refusal_rows(_every_symbol(ledger, snapshot_id))
+
+    term = (args.term or "").casefold()
+    if term:
+        rows = [
+            row
+            for row in rows
+            if term in row["symbol"].casefold()
+            or term in row["path"].casefold()
+            or any(
+                term in item["label"].casefold()
+                or (item["message"] or "").casefold().find(term) >= 0
+                for item in row["refusals"]
+            )
+        ]
+    if args.with_message:
+        rows = [
+            {**row, "refusals": [item for item in row["refusals"] if item["message"]]}
+            for row in rows
+        ]
+        rows = [row for row in rows if row["refusals"]]
+
+    rows = rows[: args.limit]
+    if args.json:
+        print(json.dumps({"snapshot_id": snapshot_id, "refusals": rows}, indent=2, sort_keys=True))
+        return 0
+
+    for row in rows:
+        print(f"{row['symbol']}  ({row['path']}:{row['start_line']})")
+        for item in row["refusals"]:
+            quoted = f' "{item["message"]}"' if item["message"] else ""
+            print(f"  {item['label']}{quoted}  :{item['line']}")
+        print()
+    if not rows:
+        # "None found" and "none looked for" read identically, and the
+        # difference is the whole question. The guard-and-exit trace is kept
+        # only for route handlers and functions that actually branch, so a
+        # plain function raising once has no trace to report and must not be
+        # reported as refusing nothing.
+        scope = f" matching {args.term!r}" if args.term else ""
+        print(
+            f"No refusal recorded{scope}. Refusals are read from the guard-and-exit "
+            "trace, which is kept for route handlers and functions with at least two "
+            "guards; a symbol without one is untraced rather than known to refuse "
+            "nothing."
+        )
+    return 0
+
+
 def _claims(args: argparse.Namespace) -> int:
     ledger, snapshot_id = _ledger_and_snapshot(args)
     results = ledger.list_claims(
@@ -896,7 +1020,37 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _use_utf8_output() -> None:
+    """Write answers as UTF-8 whatever the console's own encoding is.
+
+    Every file this tool writes is UTF-8 already; standard output was not.
+    On a Windows console that meant an em dash left as the single cp1252 byte
+    `\x97`, so a caller decoding the output as UTF-8 -- which is what a caller
+    does -- got a decode error or a replacement character, and a quoted
+    message stopped being the string it quoted.
+
+    That matters more here than it looks. The point of these commands is to
+    hand an exact message to something that will search for it, and a message
+    that arrives mangled is worse than one that never arrived: it looks
+    usable. JSON output was always correct, because JSON escapes non-ASCII;
+    the text form is what needed fixing.
+
+    A redirected stream in a test has no `reconfigure`, and a closed or
+    detached one raises. Both are left alone.
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            continue
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _use_utf8_output()
     parser = _parser()
     args = parser.parse_args(argv)
     try:
@@ -906,6 +1060,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _analyze(args)
         if args.command == "status":
             return _status(args)
+        if args.command == "refusals":
+            return _refusals(args)
         if args.command == "contracts":
             return _contracts(args)
         if args.command == "claims":
