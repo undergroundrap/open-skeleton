@@ -228,11 +228,18 @@ def audit_claims(
                     )
                 )
 
-        if len(sourced) >= MIN_CLAIMS_FOR_SHAPE:
-            counts: Counter[str] = Counter()
-            for _claim, paths in sourced:
-                for path in paths:
-                    counts[path] += 1
+        # Only a claim resting on one file came *from* that file. A census
+        # spanning thirty files contributes a count to each of the thirty, so
+        # counting every mention made a file present in every aggregate score
+        # a perfect concentration -- and inverted the check. hum-lang's panic
+        # census is five claims over sixty-six files, resting on 1, 25, 28, 38
+        # and 54 of them; `src/ir_readiness.rs` appears in all five and was
+        # reported as "5 of 5 claims come from `src/ir_readiness.rs`". The
+        # most widely spread category in that repository was named its most
+        # concentrated one, and the sentence saying so was false.
+        anchored = [(claim, next(iter(paths))) for claim, paths in sourced if len(paths) == 1]
+        if len(anchored) >= MIN_CLAIMS_FOR_SHAPE:
+            counts: Counter[str] = Counter(path for _claim, path in anchored)
             path, hits = counts.most_common(1)[0]
             # Concentration alone is not suspicious. A monolithic service keeps
             # every route in one module, and flagging that would fire on most
@@ -240,20 +247,25 @@ def audit_claims(
             # suspicious is a category concentrated in a file that carries
             # little else — that is a pattern matching one file's idiom rather
             # than a property of the code.
+            #
+            # The breadth guard still counts every mention, including those in
+            # aggregates. A file cited across many claims is one the reader
+            # meets everywhere, which is the question this guard asks.
             share_of_repository = repository_wide.get(path, 0) / max(1, total_sourced)
-            if hits / len(sourced) >= SINGLE_FILE_SHARE and share_of_repository < BROAD_FILE_SHARE:
+            if hits / len(anchored) >= SINGLE_FILE_SHARE and share_of_repository < BROAD_FILE_SHARE:
                 findings.append(
                     Finding(
                         check="single-file-category",
                         category=category,
                         detail=(
-                            f"{hits:,} of {len(sourced):,} claims come from `{path}`, which "
-                            f"carries only {share_of_repository:.0%} of this repository's "
-                            "evidenced claims overall. A category concentrated in a file "
-                            "that carries little else is usually a pattern matching that "
-                            "file's idiom rather than a property of the code."
+                            f"{hits:,} of {len(anchored):,} claims that name a single file "
+                            f"come from `{path}`, which carries only "
+                            f"{share_of_repository:.0%} of this repository's evidenced "
+                            "claims overall. A category concentrated in a file that carries "
+                            "little else is usually a pattern matching that file's idiom "
+                            "rather than a property of the code."
                         ),
-                        claim_ids=tuple(str(item.get("claim_id", "")) for item, _ in sourced),
+                        claim_ids=tuple(str(item.get("claim_id", "")) for item, _ in anchored),
                     )
                 )
 

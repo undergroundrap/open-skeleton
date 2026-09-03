@@ -83,6 +83,42 @@ class AuditTests(TestCase):
         ]
         self.assertIn("single-file-category", self._checks(claims, evidence, files))
 
+    def test_a_category_spread_across_files_is_not_concentrated_in_any(self) -> None:
+        # A census names every file it surveyed, so counting mentions gave a
+        # file present in all of them a perfect score. hum-lang's panic census
+        # is five claims over sixty-six files, and the file appearing in each
+        # was reported as the one they all came from -- naming the most widely
+        # spread category in the repository as its most concentrated.
+        wide = [f"w{index}.rs" for index in range(20)]
+        claims = [
+            _claim(f"p{index}", "panic_site", *[f"e{index}_{name}" for name in wide])
+            for index in range(5)
+        ]
+        claims += [_claim(f"m{index}", "other", f"m{index}") for index in range(40)]
+        evidence = [
+            {"evidence_id": f"e{index}_{name}", "path": name} for index in range(5) for name in wide
+        ]
+        evidence += [{"evidence_id": f"m{index}", "path": "app/main.py"} for index in range(40)]
+        files = [{"path": name, "role": "source"} for name in [*wide, "app/main.py"]]
+        self.assertNotIn("single-file-category", self._checks(claims, evidence, files))
+
+    def test_a_claim_joining_two_files_came_from_neither_alone(self) -> None:
+        # Route reconciliation joins a server to its client by construction,
+        # so every claim names two files and none is concentrated anywhere.
+        claims = [
+            _claim(f"j{index}", "client_route_reconciliation", f"s{index}", f"c{index}")
+            for index in range(6)
+        ]
+        claims += [_claim(f"m{index}", "other", f"m{index}") for index in range(40)]
+        evidence = [{"evidence_id": f"s{index}", "path": "src/server.rs"} for index in range(6)]
+        evidence += [{"evidence_id": f"c{index}", "path": "web/app.js"} for index in range(6)]
+        evidence += [{"evidence_id": f"m{index}", "path": "app/main.py"} for index in range(40)]
+        files = [
+            {"path": path, "role": "source"}
+            for path in ("src/server.rs", "web/app.js", "app/main.py")
+        ]
+        self.assertNotIn("single-file-category", self._checks(claims, evidence, files))
+
     def test_one_claim_from_one_file_is_a_claim_not_a_pattern(self) -> None:
         checks = self._checks(
             [_claim("c1", "odd_category", "e1")],
