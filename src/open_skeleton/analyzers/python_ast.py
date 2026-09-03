@@ -309,12 +309,32 @@ def _sql_shape(node: ast.AST | None) -> str | None:
 
 
 def _literal_number(node: ast.AST | None) -> float | None:
+    # `bool` is a subclass of `int`, so `is_verified = False` was a numeric
+    # constant worth 0. Reading class bodies made that visible: urllib3's
+    # tunable index opened with six connection flags rendered as zeros and
+    # ones, which is not what "the numbers a maintainer changes to alter
+    # behaviour" means, and they crowded the real dials out of the page.
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        if isinstance(node.value, bool):
+            return None
         return float(node.value)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         value = _literal_number(node.operand)
         return -value if value is not None else None
     return None
+
+
+def _is_declared_constant(name: str) -> bool:
+    """Whether a name follows the language's own convention for a constant.
+
+    PEP 8 spells a constant in upper case, and the convention is followed
+    widely enough to separate a declaration from a default. It is a
+    convention rather than a guarantee, so it is used only to decide what a
+    class attribute is, never to drop a module-level constant.
+    """
+
+    stripped = name.lstrip("_")
+    return bool(stripped) and stripped.upper() == stripped and any(c.isalpha() for c in stripped)
 
 
 def _assigned_names(node: ast.AST) -> list[str]:
@@ -1307,20 +1327,31 @@ def _string_constants(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
+
+    def collect(body: list[ast.stmt], prefix: str) -> None:
+        for statement in body:
+            targets: list[ast.expr]
+            if isinstance(statement, ast.AnnAssign):
+                targets = [statement.target] if statement.value is not None else []
+                value: ast.expr | None = statement.value
+            elif isinstance(statement, ast.Assign):
+                targets, value = list(statement.targets), statement.value
+            else:
+                continue
+            literal = _literal_string(value)
+            if literal is None or "\n" in literal or len(literal) > 120:
+                continue
+            for name in (n for target in targets for n in _assigned_names(target)):
+                found.setdefault(f"{prefix}{name}", {"value": literal, "line": statement.lineno})
+
+    collect(tree.body, "")
+    # One level into class bodies, named `Class.NAME` so a reader can find it
+    # and so two classes declaring the same constant stay distinct. A library
+    # states its policy on a class as readily as beside one, and reading only
+    # module scope made every such declaration invisible.
     for statement in tree.body:
-        targets: list[ast.expr]
-        if isinstance(statement, ast.AnnAssign):
-            targets = [statement.target] if statement.value is not None else []
-            value: ast.expr | None = statement.value
-        elif isinstance(statement, ast.Assign):
-            targets, value = list(statement.targets), statement.value
-        else:
-            continue
-        literal = _literal_string(value)
-        if literal is None or "\n" in literal or len(literal) > 120:
-            continue
-        for name in (n for target in targets for n in _assigned_names(target)):
-            found.setdefault(name, {"value": literal, "line": statement.lineno})
+        if isinstance(statement, ast.ClassDef):
+            collect(statement.body, f"{statement.name}.")
     return found
 
 
@@ -1622,6 +1653,10 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         # false value pushed for functions prevents a nested ``do_GET`` helper
         # from inheriting the surrounding class's transport role.
         self.stdlib_http_handler_scopes: list[bool] = [False]
+        # One value per lexical scope, saying whether it is a class body. A
+        # constant declared there is a declaration; the same statement inside a
+        # function is a local, and calling one configuration would be false.
+        self.class_scopes: list[bool] = [False]
         self.test_evidence: list[str] = []
         self.route_evidence: list[str] = []
         self.route_path_literals: set[str] = set()
@@ -2011,7 +2046,9 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             for base in node.bases
         )
         self.stdlib_http_handler_scopes.append(handler_scope)
+        self.class_scopes.append(isinstance(node, ast.ClassDef))
         self.generic_visit(node)
+        self.class_scopes.pop()
         self.stdlib_http_handler_scopes.pop()
         self.scope_ids.pop()
         self.scope_names.pop()
@@ -2056,13 +2093,25 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             )
 
     def _module_assignment(self, node: ast.Assign | ast.AnnAssign) -> None:
-        if len(self.scope_names) != 1:
+        # Module scope, or the body of a class. Only the first was read, and a
+        # class body is where a library keeps its policy: urllib3 states its
+        # retry rules as `Retry.DEFAULT_BACKOFF_MAX`, `DEFAULT_ALLOWED_METHODS`
+        # and `RETRY_AFTER_STATUS_CODES`, and every one of them was invisible.
+        # A question set answered from that library's source scored 11 of 16,
+        # and four of the five misses were exactly this.
+        #
+        # Deeper scopes stay unread. A name bound inside a function is a local,
+        # not a declaration, and reporting one as configuration would be false.
+        depth = len(self.scope_names)
+        in_class_body = depth == 2 and bool(self.class_scopes) and self.class_scopes[-1]
+        if depth != 1 and not in_class_body:
             return
         value = node.value
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         names = [name for target in targets for name in _assigned_names(target)]
         if (
             "__all__" in names
+            and depth == 1
             and isinstance(value, (ast.List, ast.Tuple))
             and describes_the_product(getattr(self.file_record, "role", None))
         ):
@@ -2093,10 +2142,10 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     invalidation_keys=(f"file:{self.path}", f"symbol:{self.module}.__all__"),
                 )
         for name in names:
-            qualified = f"{self.module}.{name}"
+            qualified = f"{self.current_qualified_name}.{name}"
             symbol = self._symbol(
                 qualified_name=qualified,
-                kind="module_variable",
+                kind="class_variable" if in_class_body else "module_variable",
                 start_line=node.lineno,
                 end_line=node.end_lineno or node.lineno,
                 metadata={"mutable_initializer": _is_mutable_initializer(value)},
@@ -2117,8 +2166,27 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             call_name = _expr_name(value.func) if isinstance(value, ast.Call) else None
             numeric_value = _literal_number(value)
             if numeric_value is not None:
-                self.numeric_constants[name] = numeric_value
-                self.constant_lines.setdefault(name, node.lineno)
+                # A class constant is recorded as `Class.NAME`. The bare name
+                # is what expressions elsewhere resolve against, and a class
+                # constant is never referred to that way -- registering one
+                # under a bare name would let `Retry.DEFAULT_BACKOFF_MAX`
+                # answer for a module-level `DEFAULT_BACKOFF_MAX` somewhere
+                # else, which is the wrong number reported confidently.
+                recorded = f"{self.scope_names[-1]}.{name}" if in_class_body else name
+                # In a class body, only a conventionally named constant. A
+                # lowercase class attribute is the default value of instance
+                # state -- `num_connections = 0`, `is_verified = False` -- and
+                # listing it among "the numbers a maintainer changes to alter
+                # behaviour" is the same category error as calling a fixture a
+                # schema. Six of them opened urllib3's tunable index and
+                # pushed its actual retry policy off the page.
+                #
+                # Module scope keeps its existing rule, which is established
+                # and tested; the convention is applied only where the new
+                # reading needed a distinction that did not exist before.
+                if not in_class_body or _is_declared_constant(name):
+                    self.numeric_constants[recorded] = numeric_value
+                    self.constant_lines.setdefault(recorded, node.lineno)
             if (
                 call_name
                 and call_name.split(".")[-1] == "FastAPI"

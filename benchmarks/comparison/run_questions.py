@@ -80,7 +80,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--questions", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
-    parser.add_argument("--baseline", required=True, type=Path)
+    # Optional, because a second fixture has no commercial document to compare
+    # against. Scoring one document alone still answers the question that
+    # matters on an unseen repository -- did the specification answer what a
+    # maintainer asked -- and requiring a baseline would have confined this
+    # instrument to the single repository a baseline exists for.
+    parser.add_argument("--baseline", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--candidate-label", default="Open Skeleton")
     parser.add_argument("--baseline-label", default="Baseline")
@@ -88,12 +93,12 @@ def main() -> int:
 
     payload = json.loads(args.questions.read_text(encoding="utf-8"))
     candidate = args.candidate.read_text(encoding="utf-8")
-    baseline = args.baseline.read_text(encoding="utf-8")
+    baseline = args.baseline.read_text(encoding="utf-8") if args.baseline else ""
 
     rows: list[dict[str, Any]] = []
     for question in payload["questions"]:
         ours, our_cite = _score(candidate, question)
-        theirs, their_cite = _score(baseline, question)
+        theirs, their_cite = _score(baseline, question) if baseline else (False, False)
         rows.append(
             {
                 "id": question["id"],
@@ -118,11 +123,21 @@ def main() -> int:
             f"{total} questions a maintainer asks before changing this system. "
             "Ground truth came from the source, not from either document.\n\n"
         ),
-        f"| Measure | {args.candidate_label} | {args.baseline_label} |\n|---|---:|---:|\n",
-        f"| Answered | {ours_answered}/{total} | {theirs_answered}/{total} |\n",
-        f"| Answered with a nearby citation | {ours_cited}/{total} | {theirs_cited}/{total} |\n",
+        # Without a baseline the comparison columns are dropped rather than
+        # filled with dashes, which would read as a baseline that scored zero.
+        f"| Measure | {args.candidate_label} | {args.baseline_label} |\n|---|---:|---:|\n"
+        if baseline
+        else f"| Measure | {args.candidate_label} |\n|---|---:|\n",
+        f"| Answered | {ours_answered}/{total} | {theirs_answered}/{total} |\n"
+        if baseline
+        else f"| Answered | {ours_answered}/{total} |\n",
+        f"| Answered with a nearby citation | {ours_cited}/{total} | {theirs_cited}/{total} |\n"
+        if baseline
+        else f"| Answered with a nearby citation | {ours_cited}/{total} |\n",
         "\n## Per question\n\n",
-        f"| # | Question | {args.candidate_label} | {args.baseline_label} |\n|---|---|---|---|\n",
+        f"| # | Question | {args.candidate_label} | {args.baseline_label} |\n|---|---|---|---|\n"
+        if baseline
+        else f"| # | Question | {args.candidate_label} |\n|---|---|---|\n",
     ]
 
     def mark(answered: bool, cited: bool) -> str:
@@ -133,11 +148,13 @@ def main() -> int:
         return "—"
 
     for row in rows:
-        lines.append(
+        rendered = (
             f"| {row['id']} | {row['question']} | "
-            f"{mark(row['candidate_answered'], row['candidate_cited'])} | "
-            f"{mark(row['baseline_answered'], row['baseline_cited'])} |\n"
+            f"{mark(row['candidate_answered'], row['candidate_cited'])} |"
         )
+        if baseline:
+            rendered += f" {mark(row['baseline_answered'], row['baseline_cited'])} |"
+        lines.append(rendered + "\n")
 
     missed = [row["id"] for row in rows if not row["candidate_answered"]]
     if missed:

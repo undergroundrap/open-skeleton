@@ -46,6 +46,11 @@ DECLARED_KINDS = frozenset(
         "constant",
         "binding",
         "module_variable",
+        # A library states its policy in a class body as often as at module
+        # scope: urllib3 keeps its retry rules on `Retry` rather than beside
+        # it. Omitting the kind here would have captured those declarations
+        # and then declined to show them.
+        "class_variable",
     }
 )
 

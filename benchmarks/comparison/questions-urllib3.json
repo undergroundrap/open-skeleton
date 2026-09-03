@@ -1,0 +1,136 @@
+{
+  "fixture": "urllib3",
+  "fixture_version": "2.7.0",
+  "provenance": "Every answer below was read out of urllib3 2.7.0's own source and is cited to the file and line it came from. None of it came from a specification this engine produced, which is the only way this measures anything: a question set derived from our own extraction would be answered by construction.",
+  "shape": "A client library, deliberately unlike the AI-MUD fixture. It serves no HTTP routes, persists nothing, and has no application entry point, so a specification tuned to a web service has nothing here to lean on. Its subject matter is retry policy, connection pooling and an exception hierarchy.",
+  "questions": [
+    {
+      "id": "U01",
+      "question": "How many times does Retry retry by default?",
+      "answers": ["10"],
+      "subject": ["Retry", "total", "retries"],
+      "kind": "tunable",
+      "source": "urllib3/util/retry.py:221 total: bool | int | None = 10"
+    },
+    {
+      "id": "U02",
+      "question": "What is the maximum backoff between retries, in seconds?",
+      "answers": ["120"],
+      "subject": ["backoff", "DEFAULT_BACKOFF_MAX"],
+      "kind": "tunable",
+      "source": "urllib3/util/retry.py:210 DEFAULT_BACKOFF_MAX = 120"
+    },
+    {
+      "id": "U03",
+      "question": "What is the largest Retry-After value the client will honour, in seconds?",
+      "answers": ["21600"],
+      "subject": ["Retry-After", "retry_after_max", "DEFAULT_RETRY_AFTER_MAX"],
+      "kind": "tunable",
+      "source": "urllib3/util/retry.py:214 DEFAULT_RETRY_AFTER_MAX = 21600"
+    },
+    {
+      "id": "U04",
+      "question": "Which response statuses cause the client to honour Retry-After?",
+      "answers": ["429"],
+      "subject": ["RETRY_AFTER_STATUS_CODES", "retry", "status"],
+      "kind": "failure-surface",
+      "source": "urllib3/util/retry.py:202 frozenset([413, 429, 503])"
+    },
+    {
+      "id": "U05",
+      "question": "Which HTTP methods are retried by default?",
+      "answers": ["TRACE"],
+      "subject": ["allowed_methods", "DEFAULT_ALLOWED_METHODS", "retry"],
+      "kind": "policy",
+      "source": "urllib3/util/retry.py:197 frozenset(HEAD GET PUT DELETE OPTIONS TRACE)"
+    },
+    {
+      "id": "U06",
+      "question": "Which headers are stripped when a redirect crosses hosts?",
+      "answers": ["Proxy-Authorization"],
+      "subject": ["remove_headers_on_redirect", "redirect", "header"],
+      "kind": "policy",
+      "source": "urllib3/util/retry.py:205 frozenset(Cookie Authorization Proxy-Authorization)"
+    },
+    {
+      "id": "U07",
+      "question": "How many connection pools does a PoolManager keep by default?",
+      "answers": ["10"],
+      "subject": ["num_pools", "PoolManager", "pool"],
+      "kind": "tunable",
+      "source": "urllib3/poolmanager.py:201 num_pools: int = 10"
+    },
+    {
+      "id": "U08",
+      "question": "How many connections does a single pool hold by default?",
+      "answers": ["1"],
+      "subject": ["maxsize", "HTTPConnectionPool", "pool"],
+      "kind": "tunable",
+      "source": "urllib3/connectionpool.py:180 maxsize: int = 1"
+    },
+    {
+      "id": "U09",
+      "question": "What socket block size does the pool manager use by default?",
+      "answers": ["16384"],
+      "subject": ["blocksize", "_DEFAULT_BLOCKSIZE"],
+      "kind": "tunable",
+      "source": "urllib3/poolmanager.py:53 _DEFAULT_BLOCKSIZE = 16384"
+    },
+    {
+      "id": "U10",
+      "question": "Which environment variable does this library read?",
+      "answers": ["SSLKEYLOGFILE"],
+      "subject": ["environ", "environment", "SSLKEYLOGFILE"],
+      "kind": "configuration",
+      "source": "urllib3/util/ssl_.py:317 if \"SSLKEYLOGFILE\" in os.environ"
+    },
+    {
+      "id": "U11",
+      "question": "What is the base class of this library's error hierarchy?",
+      "answers": ["HTTPError"],
+      "subject": ["exception", "error", "HTTPError"],
+      "kind": "failure-surface",
+      "source": "urllib3/exceptions.py:18 class HTTPError(Exception)"
+    },
+    {
+      "id": "U12",
+      "question": "How many exception and warning classes does the library define?",
+      "answers": ["38"],
+      "subject": ["exception", "error"],
+      "kind": "inventory",
+      "source": "urllib3/exceptions.py holds 38 class definitions"
+    },
+    {
+      "id": "U13",
+      "question": "Which exception is raised when a request is made without a host?",
+      "answers": ["LocationValueError"],
+      "subject": ["host", "LocationValueError", "exception"],
+      "kind": "failure-surface",
+      "source": "urllib3/connectionpool.py:83 raise LocationValueError(\"No host specified.\")"
+    },
+    {
+      "id": "U14",
+      "question": "What version of the library is this?",
+      "answers": ["2.7.0"],
+      "subject": ["version"],
+      "kind": "inventory",
+      "source": "urllib3/_version.py:21 __version__ = version = '2.7.0'"
+    },
+    {
+      "id": "U15",
+      "question": "Which exception signals a failure to decode a response body?",
+      "answers": ["DecodeError"],
+      "subject": ["decode", "exception", "response"],
+      "kind": "failure-surface",
+      "source": "urllib3/exceptions.py:69 class DecodeError(HTTPError)"
+    },
+    {
+      "id": "U16",
+      "question": "Which exception covers a proxy-level failure?",
+      "answers": ["ProxyError"],
+      "subject": ["proxy", "exception"],
+      "kind": "failure-surface",
+      "source": "urllib3/exceptions.py:58 class ProxyError(HTTPError)"
+    }
+  ]
+}
