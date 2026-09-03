@@ -38,6 +38,7 @@ from open_skeleton.models import (
     utc_now,
 )
 from open_skeleton.policy import scoped_category
+from open_skeleton.resolution import resolve_import_targets
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
 EXPONENTIAL_BASE_PATTERN = re.compile(
@@ -1077,7 +1078,16 @@ def analyze_snapshot(
         symbols=tuple(
             sorted(symbols, key=lambda item: (item.path, item.start_line, item.symbol_id))
         ),
-        edges=tuple(sorted(edges, key=lambda item: item.edge_id)),
+        # Resolved after every analyzer has contributed, because a reference
+        # is often satisfied by a symbol another reader declared: a TypeScript
+        # module importing from a `.tsx` file crosses two analyzers, and
+        # neither one alone holds both halves.
+        edges=tuple(
+            sorted(
+                resolve_import_targets(snapshot.files, symbols, edges),
+                key=lambda item: item.edge_id,
+            )
+        ),
         evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
         # Merge first, then re-file. Merging folds claims that share an
         # identifier and unions their receipts, so afterwards a claim's
