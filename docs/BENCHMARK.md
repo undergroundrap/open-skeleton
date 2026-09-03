@@ -339,6 +339,36 @@ one arrived holding 8,707 claims.
 Exit status is non-zero when anything crashed or any document disagreed with
 itself, which makes this usable as a gate over a corpus a team already trusts.
 
+## Role differential: the same code in a different directory
+
+```
+python benchmarks/robustness/run_role_differential.py --source src/open_skeleton
+```
+
+A claim that describes the product while resting only on a suite, a benchmark
+or an example is this engine's most repeated defect, found and fixed five
+times in five readers. The audit detects it, but only where a repository
+already has the shape — and five of the twelve corpus repositories keep no
+example app and no reference implementation, so for those categories a silent
+audit means either that the rule is covered or that nothing has tested it.
+Those two look identical from outside.
+
+This asks instead of waiting. It copies real source under `benchmarks/` and
+again under `tests/`, runs the pipeline, and reports any claim in a production
+category whose every receipt is a file that exercises the system rather than
+being it. The content is known good and unchanged; only the role differs, so
+anything reported is a reader ignoring role.
+
+It found four such categories across three languages with no repository to
+reveal them: `hardcoded_endpoint`, `failure_surface`, `ui_state`, and a Rust
+`error_surface` guard that named the test role and let every benchmark
+through. That last one also showed why suppression is the weaker fix — it had
+dropped the claim rather than re-filing it, so a suite's own error handling
+was not wrong, it was missing. Nine claims came back when the guard was
+replaced by a name.
+
+Exit status is non-zero when anything is still filed as the product.
+
 ## Differential comparison against a real parser
 
 ```

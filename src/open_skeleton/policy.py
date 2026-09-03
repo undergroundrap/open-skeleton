@@ -345,6 +345,15 @@ TEST_SCOPED_CATEGORIES = {
     "browser_storage": "test_browser_storage",
     "panic_site": "test_panic_site",
     "absorbed_failure": "test_absorbed_failure",
+    # Found by relocation rather than by waiting for a repository to have the
+    # shape: `benchmarks/robustness/run_role_differential.py` copies a real
+    # crate or package under `benchmarks/` and asks which claims still call
+    # themselves the product. These four did, on three languages, and none of
+    # them had a repository in the corpus to reveal it.
+    "hardcoded_endpoint": "test_hardcoded_endpoint",
+    "failure_surface": "test_failure_surface",
+    "ui_state": "test_ui_state",
+    "error_surface": "test_error_surface",
 }
 
 # A benchmark is not a test. `EXERCISING_ROLES` already warns that conflating

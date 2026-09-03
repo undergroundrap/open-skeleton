@@ -809,11 +809,38 @@ class TestRoleErrorSurfaceTests(TestCase):
             result = RustLexicalAnalyzer().analyze(scan_repository(root))
         return {item.category for item in result.claims}
 
+    def _pipeline_categories(self, name: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self.SOURCE, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return {item.category for item in result.claims}
+
     def test_application_code_declares_an_error_surface(self) -> None:
         self.assertIn("error_surface", self._categories("src/lib.rs"))
+        self.assertIn("error_surface", self._pipeline_categories("src/lib.rs"))
 
-    def test_an_integration_test_does_not(self) -> None:
-        self.assertNotIn("error_surface", self._categories("tests/compat.rs"))
+    def test_a_suite_s_error_handling_is_reported_as_the_suite_s(self) -> None:
+        # This reader used to drop the claim, which fixed the wrong half of
+        # the problem twice: it named the test role only, so a benchmark's
+        # error surface was still the crate's, and it lost a true fact, since
+        # what a suite absorbs is worth knowing under the suite's name.
+        #
+        # The reader now states what it sees and `analyze_snapshot` files it
+        # by the role of the evidence. What must not happen -- warmboot
+        # appearing to describe its failure handling out of `tests/compat.rs`
+        # -- still does not.
+        self.assertIn("error_surface", self._categories("tests/compat.rs"))
+        categories = self._pipeline_categories("tests/compat.rs")
+        self.assertIn("test_error_surface", categories)
+        self.assertNotIn("error_surface", categories)
+
+    def test_a_benchmark_s_error_surface_is_not_the_crate_s(self) -> None:
+        categories = self._pipeline_categories("benchmarks/reference.rs")
+        self.assertIn("harness_error_surface", categories)
+        self.assertNotIn("error_surface", categories)
 
 
 class ClapCommandLineTests(TestCase):

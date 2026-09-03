@@ -16,10 +16,12 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from open_skeleton.analysis import _scope_claims_by_evidence_role, analyze_snapshot
+from open_skeleton.audit import PRODUCTION_CATEGORIES
 from open_skeleton.models import ClaimRecord, EvidenceRecord, utc_now
 from open_skeleton.policy import (
     HARNESS_SCOPED_CATEGORIES,
     TEST_SCOPED_CATEGORIES,
+    exercises_the_product,
     scoped_category,
 )
 from open_skeleton.scanner import scan_repository
@@ -206,3 +208,67 @@ class AnalyzedRepositoryScopingTests(TestCase):
                 "benchmarks/run_bench.py",
                 by_category.get("harness_caught_exception", set()),
             )
+
+
+class RelocatedSourceTests(TestCase):
+    """The miniature of `benchmarks/robustness/run_role_differential.py`.
+
+    That instrument relocates a real package to find readers that ignore
+    role; this keeps a small version of the same question in the gate, so a
+    reader added later fails here rather than in a sweep nobody ran.
+    """
+
+    SOURCE = (
+        "import os\n"
+        "import sqlite3\n"
+        "\n"
+        "ENDPOINT = 'https://api.example.com/v1/items'\n"
+        "\n"
+        "def load(path):\n"
+        "    token = os.environ.get('SERVICE_TOKEN')\n"
+        "    try:\n"
+        "        connection = sqlite3.connect(path)\n"
+        "        return connection.execute('SELECT 1').fetchone()\n"
+        "    except sqlite3.Error:\n"
+        "        return None\n"
+    )
+
+    def _claims_describing_the_product(self, location: str) -> tuple[int, set[str]]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / location
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(self.SOURCE, encoding="utf-8")
+            snapshot = scan_repository(root)
+            result = analyze_snapshot(snapshot)
+
+        role_by_path = {item.path: item.role for item in snapshot.files}
+        path_by_evidence = {item.evidence_id: item.path for item in result.evidence}
+        describing: set[str] = set()
+        for claim in result.claims:
+            if claim.category not in PRODUCTION_CATEGORIES:
+                continue
+            paths = {path_by_evidence.get(item) for item in claim.supporting_evidence}
+            paths.discard(None)
+            if not paths:
+                continue
+            if all(exercises_the_product(role_by_path.get(path or "")) for path in paths):
+                describing.add(claim.category)
+        return len(result.claims), describing
+
+    def test_the_same_file_as_product_source_is_read_as_the_product(self) -> None:
+        # Guards the rest of this class against passing because nothing was
+        # read at all. A comparison between two empty answers proves nothing,
+        # and this suite has been fooled that way before.
+        total, _ = self._claims_describing_the_product("src/service.py")
+        self.assertGreater(total, 3)
+
+    def test_nothing_relocated_under_a_benchmark_describes_the_product(self) -> None:
+        total, describing = self._claims_describing_the_product("benchmarks/service.py")
+        self.assertGreater(total, 3)
+        self.assertEqual(describing, set())
+
+    def test_nothing_relocated_under_a_suite_describes_the_product(self) -> None:
+        total, describing = self._claims_describing_the_product("tests/test_service.py")
+        self.assertGreater(total, 3)
+        self.assertEqual(describing, set())
