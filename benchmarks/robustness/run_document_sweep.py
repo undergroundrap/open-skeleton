@@ -33,10 +33,12 @@ itself, so this is usable as a gate over a corpus a team already trusts.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 import traceback
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -67,6 +69,29 @@ def targets(root: Path | None, repos: list[Path]) -> list[Path]:
     return found
 
 
+def _undeliverable(document: Any, markdown: str) -> tuple[str, ...]:
+    """Whether the document that was built could actually be written out.
+
+    This sweep proved a specification agreed with itself and never proved it
+    could be delivered, so `pygments` passed it while producing an empty
+    `spec.json`: the Unicode category of surrogates is spelled with
+    surrogates, which UTF-8 cannot encode. Every file was read correctly and
+    the run still ended with nothing, and a coherence check on a document
+    nobody can save is a check on the wrong thing.
+    """
+
+    findings: list[str] = []
+    for label, text in (
+        ("spec.md", markdown),
+        ("spec.json", json.dumps(document.to_dict(), ensure_ascii=False)),
+    ):
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            findings.append(f"{label} cannot be written as UTF-8: {exc.reason} at {exc.start}")
+    return tuple(findings)
+
+
 def sweep(paths: list[Path], state: Path, show: int) -> tuple[int, int, int]:
     analyzed = incoherent = crashed = 0
     for index, target in enumerate(paths):
@@ -78,14 +103,17 @@ def sweep(paths: list[Path], state: Path, show: int) -> tuple[int, int, int]:
             ledger.save_snapshot(snapshot)
             ledger.save_analysis(analyze_snapshot(snapshot))
             document = build_spec(ledger, load_profile())
-            findings = check_coherence(
-                document, render_spec_markdown(document)
-            ) + check_conservation(
-                document,
-                {
-                    kind: ledger.count_rows(document.snapshot_id, kind)
-                    for kind in ("claims", "symbols", "edges")
-                },
+            markdown = render_spec_markdown(document)
+            findings = (
+                check_coherence(document, markdown)
+                + check_conservation(
+                    document,
+                    {
+                        kind: ledger.count_rows(document.snapshot_id, kind)
+                        for kind in ("claims", "symbols", "edges")
+                    },
+                )
+                + _undeliverable(document, markdown)
             )
             analyzed += 1
             if findings:

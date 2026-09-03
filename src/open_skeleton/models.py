@@ -16,6 +16,65 @@ def utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
+def writable_text(value: str) -> str:
+    """The same text, in a form a UTF-8 document can actually hold.
+
+    `pygments/unistring.py` names the Unicode categories, and the category of
+    surrogates is spelled with surrogates: `Cs = '\\ud800-\\udbff...'`. Those
+    code points cannot be encoded as UTF-8 by definition. Read out of the
+    source and carried into a claim, one of them ended the run at the last
+    step -- `spec.json` failed to write and the entire specification for a
+    339-file repository was lost, after every file had been read correctly.
+
+    A repository is not wrong to contain them. Unicode tables, text
+    processors and fuzzing corpora all do, so a specification generator that
+    dies on them is not general. The escape spelling is also the truer
+    rendering: the source writes `\\ud800`, and printing the code point was
+    already a transformation this engine chose to make.
+
+    The check is a fast path -- almost every string passes on the first try
+    -- so this costs an encode on text that was about to be encoded anyway.
+    """
+
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "".join(
+            character if _encodable(character) else f"\\u{ord(character):04x}"
+            for character in value
+        )
+    return value
+
+
+def _encodable(character: str) -> bool:
+    try:
+        character.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def writable_structure(value: Any) -> Any:
+    """`writable_text` through the nested metadata a symbol carries.
+
+    The first attempt at this fixed claim text alone and the run still died
+    at the same character. The constant was recorded twice -- once in prose a
+    reader sees and once in `SymbolRecord.metadata`, which is what the
+    constants panel is actually built from. Fixing the visible half and
+    declaring victory is how the same defect gets found twice.
+    """
+
+    if isinstance(value, str):
+        return writable_text(value)
+    if isinstance(value, dict):
+        return {writable_text(str(key)): writable_structure(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [writable_structure(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(writable_structure(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class FileRecord:
     path: str
@@ -121,6 +180,10 @@ class SymbolRecord:
     analyzer: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "qualified_name", writable_text(self.qualified_name))
+        object.__setattr__(self, "metadata", writable_structure(self.metadata))
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -159,6 +222,7 @@ class ClaimRecord:
     verified_at: str | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "claim", writable_text(self.claim))
         if self.status not in {"verified", "inferred", "conflict", "unknown", "stale"}:
             raise ValueError(f"Unsupported claim status: {self.status}")
         if self.importance not in {"critical", "high", "medium", "low"}:
