@@ -293,6 +293,28 @@ has no trace. "No refusal recorded" therefore means untraced, not known to
 refuse nothing -- the same distinction this document draws everywhere else
 between an absence that was checked and one that was never looked at.
 
+`open-skeleton coverage` answers the question that has to come before
+trusting any absence:
+
+```
+included files: 588
+excluded files: 20,739
+    15,912  gitignored:/target/
+     4,827  excluded-directory
+
+hum-semantic-index/v1: 249 of 249 Hum file(s) eligible but not parsed
+  249 Hum files require a pre-generated hum.semantic_graph.v0 index ...
+```
+
+Seventy-one words. "This repository does not authenticate" and "the files that
+would have shown it were never opened" produce the same silence, and the
+difference is the whole question an auditor is asking.
+
+Each shortfall is reported once. A language an analyzer claimed and failed to
+parse is a parse shortfall with a reason attached; only a language nothing is
+equipped to read is reported as unread. Stating one cause twice reads as two,
+which is a defect this document had to be corrected for separately.
+
 The rule this follows is worth stating, because it is what keeps the command
 honest: it computes nothing the document does not already contain. The answer
 and the specification are two projections of one ledger, so they cannot drift

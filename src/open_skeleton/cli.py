@@ -49,7 +49,7 @@ from open_skeleton.spec.concordance import (
     build_record_concordance,
     build_value_set_concordance,
 )
-from open_skeleton.spec.render import _every_symbol
+from open_skeleton.spec.render import _every_symbol, _languages_no_analyzer_read
 from open_skeleton.state import resolve_state_dir
 from open_skeleton.synthesis_assembly import assemble_synthesis
 from open_skeleton.synthesis_plan import build_synthesis_plan
@@ -124,6 +124,16 @@ def _parser() -> argparse.ArgumentParser:
         help="State directory. Defaults to the OS-local state area for PATH.",
     )
     status.add_argument("--json", action="store_true", help="Print status as JSON.")
+
+    coverage = subparsers.add_parser(
+        "coverage",
+        help="Show what this analysis read and what it did not, so an absence can be judged.",
+    )
+    coverage.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
+    coverage.add_argument("--state-dir", type=Path, help="State directory.")
+    coverage.add_argument("--snapshot", help="Snapshot ID. Defaults to the latest snapshot.")
+    coverage.add_argument("--limit", type=int, default=8, help="Exclusion reasons to name.")
+    coverage.add_argument("--json", action="store_true", help="Print the complete report as JSON.")
 
     refusals = subparsers.add_parser(
         "refusals",
@@ -666,6 +676,103 @@ def _refusals(args: argparse.Namespace) -> int:
     return 0
 
 
+def _coverage_report(
+    files: list[dict[str, Any]],
+    exclusions: list[dict[str, Any]],
+    symbols: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """What this analysis saw, and what it did not.
+
+    Every absence in a specification is only as strong as the read it rests
+    on. "This repository does not authenticate" and "the files that would
+    have shown it were never opened" produce the same silence, and the
+    difference is the whole question an auditor is asking. Assembled here so
+    it can be asked directly instead of inferred from a document.
+    """
+
+    touched = {str(item["path"]) for item in symbols}
+    touched.update(str(item["path"]) for item in evidence if item.get("path"))
+
+    reasons: dict[str, int] = {}
+    for item in exclusions:
+        reason = str(item.get("reason", "unknown"))
+        reasons[reason] = reasons.get(reason, 0) + max(1, int(item.get("contained_files") or 0))
+
+    thin: list[dict[str, Any]] = []
+    for record in coverage:
+        eligible = int(record.get("eligible_files", 0) or 0)
+        analyzed = int(record.get("analyzed_files", 0) or 0)
+        if eligible > analyzed:
+            thin.append(
+                {
+                    "analyzer": str(record.get("analyzer", "")),
+                    "language": str(record.get("language", "")),
+                    "eligible_files": eligible,
+                    "analyzed_files": analyzed,
+                    "failures": list(record.get("failures") or []),
+                }
+            )
+
+    # A language an analyzer declared eligible and then failed to parse is
+    # already reported as a parse shortfall, with the reason attached. Naming
+    # it again as unread states one cause twice and reads as two, which is the
+    # defect this same distinction had to be corrected for in the document.
+    claimed = {record["language"] for record in thin}
+    unread = [
+        {"language": language, "files": count}
+        for language, count in _languages_no_analyzer_read(
+            tuple(files), tuple(symbols), tuple(evidence)
+        )
+        if language not in claimed
+    ]
+
+    return {
+        "included_files": len(files),
+        "excluded_files": sum(reasons.values()),
+        "exclusion_reasons": dict(sorted(reasons.items(), key=lambda pair: (-pair[1], pair[0]))),
+        "languages_no_analyzer_read": unread,
+        "eligible_but_unparsed": thin,
+    }
+
+
+def _coverage(args: argparse.Namespace) -> int:
+    """Answer "can I trust an absence here?" before trusting one."""
+
+    ledger, snapshot_id = _ledger_and_snapshot(args)
+    report = _coverage_report(
+        list(ledger.list_files(snapshot_id)),
+        list(ledger.list_exclusions(snapshot_id)),
+        _every_symbol(ledger, snapshot_id),
+        list(ledger.list_evidence(snapshot_id)),
+        list(ledger.analysis_coverage(snapshot_id)),
+    )
+    if args.json:
+        print(json.dumps({"snapshot_id": snapshot_id, **report}, indent=2, sort_keys=True))
+        return 0
+
+    print(f"included files: {report['included_files']:,}")
+    print(f"excluded files: {report['excluded_files']:,}")
+    for reason, count in list(report["exclusion_reasons"].items())[: args.limit]:
+        print(f"  {count:>8,}  {reason}")
+    unread = report["languages_no_analyzer_read"]
+    if unread:
+        named = ", ".join(f"{item['language']} ({item['files']:,})" for item in unread)
+        print(f"\nno analyzer is equipped to read: {named}")
+    for record in report["eligible_but_unparsed"]:
+        missed = record["eligible_files"] - record["analyzed_files"]
+        print(
+            f"\n{record['analyzer']}: {missed:,} of {record['eligible_files']:,} "
+            f"{record['language']} file(s) eligible but not parsed"
+        )
+        for failure in record["failures"][:3]:
+            print(f"  {failure}")
+    if not unread and not report["eligible_but_unparsed"]:
+        print("\nEvery included file was read by an analyzer equipped for it.")
+    return 0
+
+
 def _claims(args: argparse.Namespace) -> int:
     ledger, snapshot_id = _ledger_and_snapshot(args)
     results = ledger.list_claims(
@@ -1060,6 +1167,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _analyze(args)
         if args.command == "status":
             return _status(args)
+        if args.command == "coverage":
+            return _coverage(args)
         if args.command == "refusals":
             return _refusals(args)
         if args.command == "contracts":

@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import TestCase
 
-from open_skeleton.cli import _refusal_rows, main
+from open_skeleton.cli import _coverage_report, _refusal_rows, main
 from tests.helpers import create_sample_repository
 
 
@@ -401,3 +401,109 @@ class OutputEncodingTests(TestCase):
             output = captured.getvalue()
             self.assertIn("\u2014", output)
             self.assertEqual(output.encode("utf-8").decode("utf-8"), output)
+
+
+class CoverageReportTests(TestCase):
+    """Whether an absence can be trusted.
+
+    "This repository does not authenticate" and "the files that would have
+    shown it were never opened" produce the same silence. The difference is
+    the whole question an auditor is asking, and it was only answerable by
+    reading a rendered document.
+    """
+
+    def _report(
+        self,
+        files: list[dict[str, Any]],
+        exclusions: list[dict[str, Any]] | None = None,
+        symbols: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        coverage: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return _coverage_report(
+            files, exclusions or [], symbols or [], evidence or [], coverage or []
+        )
+
+    def test_a_directory_exclusion_counts_the_files_it_took(self) -> None:
+        # One row for a build cache is one row, and thousands of files.
+        report = self._report(
+            [{"path": "a.py", "language": "Python"}],
+            exclusions=[{"reason": "gitignored:target/", "contained_files": 15912}],
+        )
+        self.assertEqual(report["excluded_files"], 15912)
+        self.assertEqual(report["exclusion_reasons"]["gitignored:target/"], 15912)
+
+    def test_a_single_excluded_file_counts_as_one(self) -> None:
+        report = self._report(
+            [],
+            exclusions=[{"reason": "known-binary-type", "contained_files": 0}],
+        )
+        self.assertEqual(report["excluded_files"], 1)
+
+    def test_a_language_nothing_touched_is_named(self) -> None:
+        report = self._report(
+            [
+                {"path": "a.py", "language": "Python"},
+                {"path": "run.sh", "language": "Shell"},
+            ],
+            symbols=[{"path": "a.py"}],
+        )
+        self.assertEqual(report["languages_no_analyzer_read"], [{"language": "Shell", "files": 1}])
+
+    def test_a_file_reached_only_by_a_receipt_counts_as_read(self) -> None:
+        report = self._report(
+            [{"path": "a.md", "language": "Markdown"}],
+            evidence=[{"path": "a.md"}],
+        )
+        self.assertEqual(report["languages_no_analyzer_read"], [])
+
+    def test_an_eligible_but_unparsed_language_is_reported_once(self) -> None:
+        # Its analyzer claimed it and failed, which is a parse shortfall with
+        # a reason attached. Naming it again as unread states one cause
+        # twice and reads as two.
+        report = self._report(
+            [{"path": "a.hum", "language": "Hum"}],
+            coverage=[
+                {
+                    "analyzer": "hum-semantic-index/v1",
+                    "language": "Hum",
+                    "eligible_files": 1,
+                    "analyzed_files": 0,
+                    "failures": ["needs a pre-generated index"],
+                }
+            ],
+        )
+        self.assertEqual(report["languages_no_analyzer_read"], [])
+        self.assertEqual(len(report["eligible_but_unparsed"]), 1)
+        self.assertEqual(report["eligible_but_unparsed"][0]["analyzed_files"], 0)
+
+    def test_a_fully_parsed_analyzer_is_not_a_shortfall(self) -> None:
+        report = self._report(
+            [{"path": "a.py", "language": "Python"}],
+            symbols=[{"path": "a.py"}],
+            coverage=[
+                {
+                    "analyzer": "python-ast/v2",
+                    "language": "Python",
+                    "eligible_files": 1,
+                    "analyzed_files": 1,
+                    "failures": [],
+                }
+            ],
+        )
+        self.assertEqual(report["eligible_but_unparsed"], [])
+
+    def test_the_command_reports_a_clean_read_rather_than_saying_nothing(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            (root / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                main(["analyze", str(root), "--state-dir", str(state)])
+            captured = StringIO()
+            with redirect_stdout(captured), redirect_stderr(StringIO()):
+                main(["coverage", str(root), "--state-dir", str(state)])
+            output = captured.getvalue()
+            self.assertIn("included files:", output)
+            self.assertIn("read by an analyzer equipped for it", output)

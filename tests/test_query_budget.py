@@ -66,6 +66,12 @@ class QueryBudgetTests(TestCase):
     def test_audit_is_a_query(self) -> None:
         self._assert_bounded("audit", self._run("audit"))
 
+    def test_coverage_is_a_query(self) -> None:
+        self._assert_bounded("coverage", self._run("coverage"))
+
+    def test_refusals_is_a_query(self) -> None:
+        self._assert_bounded("refusals", self._run("refusals"))
+
     def test_a_narrowed_question_costs_less_than_an_open_one(self) -> None:
         """The property that makes the surface worth having.
 
