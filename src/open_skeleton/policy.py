@@ -314,6 +314,48 @@ PRODUCT_ROLES = frozenset({"source"})
 EXERCISING_ROLES = frozenset({"test", "harness"})
 
 
+# Categories that describe the system when the evidence is source and describe
+# the suite when it is a test. Nothing is dropped: a fixture's shape is a real
+# fact about the suite, and a reader deciding what the system stores needs to
+# know which of the two they are looking at.
+TEST_SCOPED_CATEGORIES = {
+    "storage": "test_storage",
+    "storage_schema": "test_storage_schema",
+    "configuration_read": "test_configuration_read",
+    "schema_migration": "test_schema_migration",
+    "http_route": "test_route",
+    "external_call": "test_external_call",
+    # What a suite absorbs is not the program's error contract. This
+    # repository reported "1 handler(s) catch `OSError, ValueError`"
+    # from a test's own `except` around a file it was deliberately
+    # failing to write, and the audit flagged it as production error
+    # handling evidenced only by tests. The audit was right; the claim
+    # should never have carried that category in the first place.
+    "caught_exception": "test_caught_exception",
+    "exception_type": "test_exception_type",
+    "collection_driven_workset": "test_collection_driven_workset",
+}
+
+# Re-filing belongs in one place per analyzer, not at each call site.
+# Doing it per category is how the same mistake kept reappearing: routes
+# were fixed, then schemas, and durable storage was still six-sevenths test
+# fixtures. A category added later inherits the behaviour instead of having
+# to remember it.
+
+
+def scoped_category(category: str, role: str) -> str:
+    """The category a claim belongs under, given the role of its evidence.
+
+    A fixture's shape is a real fact about the suite and a false one about
+    the system. Nothing is dropped; it is filed where a reader asking what
+    the system stores will not mistake it for an answer.
+    """
+
+    if role != "test":
+        return category
+    return TEST_SCOPED_CATEGORIES.get(category, category)
+
+
 def describes_the_product(role: str | None) -> bool:
     """Whether a claim sourced from this file is about the system itself.
 

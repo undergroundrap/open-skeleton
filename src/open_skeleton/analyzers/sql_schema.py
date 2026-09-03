@@ -53,6 +53,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
+from open_skeleton.policy import scoped_category
 
 ANALYZER_VERSION = "sql-schema/v1"
 
@@ -721,6 +722,7 @@ class SqlSchemaAnalyzer:
                         supporting=(mark.evidence_id,),
                         importance="high",
                         path=path,
+                        role=role,
                     )
                 )
                 # A virtual table is excluded rather than merely unkeyed: its
@@ -739,6 +741,7 @@ class SqlSchemaAnalyzer:
                             supporting=(mark.evidence_id,),
                             importance="high",
                             path=path,
+                            role=role,
                         )
                     )
                 for reference in table.foreign_keys:
@@ -802,6 +805,7 @@ class SqlSchemaAnalyzer:
                         supporting=(mark.evidence_id,),
                         importance="medium",
                         path=path,
+                        role=role,
                     )
                 )
                 edges.append(
@@ -852,6 +856,7 @@ class SqlSchemaAnalyzer:
                         supporting=(receipt(path, lines, 1, "sql_statements", None).evidence_id,),
                         importance="high",
                         path=path,
+                        role=role,
                     )
                 )
 
@@ -890,6 +895,7 @@ class SqlSchemaAnalyzer:
                         ),
                         importance="high",
                         path=path,
+                        role=role,
                     )
                 )
 
@@ -913,6 +919,7 @@ class SqlSchemaAnalyzer:
                             ),
                             importance="medium",
                             path=path,
+                            role=role,
                         )
                     )
 
@@ -947,7 +954,20 @@ class SqlSchemaAnalyzer:
         supporting: tuple[str, ...],
         importance: str,
         path: str,
+        role: str = "source",
     ) -> ClaimRecord:
+        # A table declared in a test fixture is a real fact about the suite and
+        # a false one about the system. This reader already said so in prose --
+        # "It is created as a test fixture" -- and still filed the claim under
+        # `storage_schema`, so a reader asking what this engine stores got 31
+        # of 61 answers from `tests/`, and a query by category got them too.
+        # Prose a reader may skip is not the same as a category they cannot.
+        #
+        # Re-filed here rather than at each call site, which is how the same
+        # mistake kept reappearing elsewhere in this engine.
+        category = scoped_category(category, role)
+        if category.startswith("test_") and importance == "high":
+            importance = "medium"
         return ClaimRecord(
             claim_id=stable_id("claim", (snapshot.snapshot_id, category, text, ANALYZER_VERSION)),
             snapshot_id=snapshot.snapshot_id,

@@ -22,12 +22,14 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.sql_schema import (
     ANALYZER_VERSION,
+    SqlSchemaAnalyzer,
     parse_indexes,
     parse_statements,
     parse_tables,
     split_definitions,
     strip_comments,
 )
+from open_skeleton.policy import scoped_category
 from open_skeleton.scanner import scan_repository
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks" / "differential"))
@@ -332,3 +334,57 @@ class DifferentialTests(TestCase):
         statements = _executable_statements(source)
         self.assertEqual(len(statements), 1)
         self.assertTrue(statements[0].endswith(");"))
+
+
+class TestScopedSqlTests(TestCase):
+    """A fixture's tables are a fact about the suite, not about the system.
+
+    This reader already said so in prose -- "It is created as a test
+    fixture" -- and still filed the claim under `storage_schema`. Asking
+    this engine what it stores returned 31 of 61 answers from `tests/`, and
+    a query by category returned them too. Prose a reader may skip is not
+    the same as a category they cannot.
+    """
+
+    DDL = (
+        'SCHEMA = "CREATE TABLE job (id TEXT PRIMARY KEY, '
+        'state TEXT NOT NULL, owner TEXT NOT NULL);"\n'
+    )
+
+    def _categories(self, name: str) -> set[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(self.DDL, encoding="utf-8")
+            result = SqlSchemaAnalyzer().analyze(scan_repository(root))
+            return {item.category for item in result.claims}
+
+    def test_source_ddl_describes_the_system(self) -> None:
+        self.assertIn("storage_schema", self._categories("store.py"))
+
+    def test_fixture_ddl_describes_the_suite(self) -> None:
+        categories = self._categories("tests/test_store.py")
+        self.assertIn("test_storage_schema", categories)
+        self.assertNotIn("storage_schema", categories)
+
+    def test_a_refiled_claim_is_not_high_importance(self) -> None:
+        # A fixture's shape is worth recording and is not a headline about
+        # the system.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_store.py").write_text(self.DDL, encoding="utf-8")
+            result = SqlSchemaAnalyzer().analyze(scan_repository(root))
+            for claim in result.claims:
+                if claim.category.startswith("test_"):
+                    self.assertNotEqual(claim.importance, "high")
+
+    def test_the_policy_maps_only_test_evidence(self) -> None:
+        self.assertEqual(scoped_category("storage_schema", "source"), "storage_schema")
+        self.assertEqual(scoped_category("storage_schema", "test"), "test_storage_schema")
+
+    def test_an_unmapped_category_keeps_its_name(self) -> None:
+        # The table is a list of categories that change meaning with role,
+        # not a rule that everything gains a prefix.
+        self.assertEqual(scoped_category("public_api", "test"), "public_api")
