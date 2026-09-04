@@ -55,7 +55,7 @@ DEEP_LIMIT = 200
 CHARACTERS_PER_TOKEN = 4
 
 
-def _answered(text: str, question: dict[str, Any]) -> bool:
+def answered_by(text: str, question: dict[str, Any]) -> bool:
     """The same proximity rule the document scorer uses, on a query result."""
 
     haystack = text.casefold()
@@ -114,7 +114,7 @@ def _depth(lines: list[str], question: dict[str, Any]) -> int | None:
     """
 
     for index in range(1, len(lines) + 1):
-        if _answered("\n".join(lines[:index]), question):
+        if answered_by("\n".join(lines[:index]), question):
             return index
     return None
 
@@ -201,7 +201,7 @@ def main() -> int:
                 for line in symbol["declares"].splitlines()
             ]
         )
-        if _answered(deep, question):
+        if answered_by(deep, question):
             ranked_out.append(str(question["id"]))
         else:
             unanswered.append(str(question["id"]))
