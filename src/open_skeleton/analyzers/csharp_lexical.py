@@ -38,6 +38,7 @@ import re
 import time
 from pathlib import Path
 
+from open_skeleton.analyzers.base import declares_a_number
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -180,6 +181,73 @@ def declared_types(clean: str) -> list[tuple[str, str, str, int]]:
                 _line_of(clean, match.start("name")),
             )
         )
+    return found
+
+
+# The value is captured with its surrounding space rather than trimmed by the
+# pattern. Blanking replaces a string body *and its quotes* with spaces, so a
+# trimming `\s*` consumed the whole value on the blanked text and left the
+# group holding one character -- which read back from the source as a lone
+# quote instead of `checkout`.
+CONSTANT = re.compile(r"\b(?:const|static\s+readonly)\s+[\w.<>\[\],\s]+?\s(\w+)\s*=([^;]*);")
+ENUM = re.compile(r"\benum\s+(\w+)\s*(?::\s*[\w.]+\s*)?\{([^}]*)\}")
+MEMBER = re.compile(r"[A-Za-z_]\w*")
+MAX_ENUM_MEMBERS = 64
+
+
+def declared_constants(source: str, clean: str) -> dict[str, dict[str, object]]:
+    """`const` and `static readonly` fields holding a literal, with the value.
+
+    Every other language this engine reads records these and C# recorded
+    nothing at all -- no numbers, no strings, no vocabularies -- which a
+    reader-parity check found in one run after four fixtures had each found
+    the same gap one language at a time.
+
+    Matching runs against the blanked text so a constant mentioned in a
+    comment is not read as one, and the value is taken from the original at
+    the same offsets, because blanking removes the body of a string and the
+    body is exactly what a reader wants.
+    """
+
+    found: dict[str, dict[str, object]] = {}
+    for match in CONSTANT.finditer(clean):
+        # A match landing on blanked text came from a comment or a string.
+        if clean[match.start()].isspace():
+            continue
+        raw = source[match.start(2) : match.end(2)].strip()
+        if not raw:
+            continue
+        value = raw
+        if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+            value = raw[1:-1]
+        elif not raw.replace("_", "").lstrip("-").replace(".", "", 1).isdigit():
+            # Anything that is neither a quoted string nor a plain number is
+            # computed, and naming its first token would state a value the
+            # program never holds.
+            continue
+        found[match.group(1)] = {"value": value, "line": _line_of(clean, match.start())}
+    return found
+
+
+def declared_enums(clean: str) -> dict[str, dict[str, object]]:
+    """Enum members, which are how C# declares a closed set of values."""
+
+    found: dict[str, dict[str, object]] = {}
+    for match in ENUM.finditer(clean):
+        if clean[match.start()].isspace():
+            continue
+        members: list[str] = []
+        for entry in match.group(2).split(","):
+            # `Get = 1` names one member; the assigned value is its ordinal.
+            name = entry.split("=", 1)[0].strip()
+            found_name = MEMBER.match(name)
+            if found_name:
+                members.append(found_name.group(0))
+        if 2 <= len(members) <= MAX_ENUM_MEMBERS:
+            found[match.group(1)] = {
+                "members": members,
+                "line": _line_of(clean, match.start()),
+            }
     return found
 
 
@@ -328,6 +396,18 @@ class CSharpLexicalAnalyzer:
             for name, line in imports.items():
                 names.setdefault(name, line)
 
+            file_values = declared_constants(source, clean)
+            file_numbers = {
+                name: entry
+                for name, entry in file_values.items()
+                if declares_a_number(entry.get("value"))
+            }
+            file_strings = {
+                name: entry
+                for name, entry in file_values.items()
+                if "value" in entry and not declares_a_number(entry["value"])
+            }
+            file_enums = declared_enums(clean)
             module_symbol = stable_id(
                 "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
             )
@@ -345,6 +425,9 @@ class CSharpLexicalAnalyzer:
                     metadata={
                         "analysis_level": "lexical",
                         **({"name_index": names} if names else {}),
+                        **({"tunables": file_numbers} if file_numbers else {}),
+                        **({"string_constants": file_strings} if file_strings else {}),
+                        **({"collection_constants": file_enums} if file_enums else {}),
                     },
                 )
             )

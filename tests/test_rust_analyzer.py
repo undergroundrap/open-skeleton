@@ -942,3 +942,26 @@ class PublicSurfaceRoleTests(TestCase):
 
     def test_a_test_file_does_not(self) -> None:
         self.assertNotIn("public_api", self._categories("tests/skeletons.rs"))
+
+
+class ValuelessConstantTests(TestCase):
+    """A constant whose value was never seen must not reach the value panel.
+
+    A Rust `static` can be declared in one place and assigned in another, so
+    this reader records the name and the site without a value. The string
+    panel subscripts the value directly, and routing such an entry there
+    crashed the whole document for one repository -- a case the panel's own
+    comment had warned about.
+    """
+
+    def test_a_constant_without_a_value_stays_out_of_the_value_panel(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lib.rs").write_text(
+                'pub static LATE: &str;\npub const NAME: &str = "pool";\npub const MAX: u32 = 7;\n',
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        for symbol in result.symbols:
+            for entry in (symbol.metadata.get("string_constants") or {}).values():
+                self.assertIn("value", entry)

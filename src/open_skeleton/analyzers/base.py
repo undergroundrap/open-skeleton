@@ -37,3 +37,31 @@ class Analyzer(Protocol):
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         """Analyze an immutable snapshot without executing target code."""
+
+
+def declares_a_number(value: object) -> bool:
+    """Whether a recorded constant's value is a number rather than a string.
+
+    The tunable index is titled for numbers and three readers were filing
+    strings into it, so `SERVICE_NAME = "checkout"` appeared in a table of
+    dials a maintainer would turn. TypeScript was corrected for this and Rust
+    and Java were not, which is the shape of a rule that lives in one reader
+    instead of in one place.
+
+    Suffixes and separators are stripped because every language spells a
+    literal number its own way: `10u32`, `1_000`, `1L`, `0x7fff`.
+    """
+
+    text = str(value).strip().replace("_", "")
+    if not text:
+        return False
+    if text.lower().startswith(("0x", "0b", "0o")):
+        return len(text) > 2
+    stripped = text.rstrip("uUlLfFdD")
+    for suffix in ("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "usize"):
+        stripped = stripped.removesuffix(suffix)
+    try:
+        float(stripped)
+    except ValueError:
+        return False
+    return True

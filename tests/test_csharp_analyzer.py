@@ -13,12 +13,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.csharp_lexical import (
     CSharpLexicalAnalyzer,
     blank_noise,
+    declared_constants,
+    declared_enums,
     declared_namespace,
     declared_types,
     imported_namespaces,
@@ -195,3 +198,58 @@ class CSharpPipelineTests(TestCase):
             self.assertEqual(result.coverage[0].eligible_files, 2)
             self.assertEqual(result.coverage[0].analyzed_files, 2)
             self.assertFalse(result.coverage[0].failures)
+
+
+class CSharpDeclaredValueTests(TestCase):
+    """C# recorded no declared values at all, in any of the three surfaces.
+
+    A reader-parity check found it in one run, after four fixtures had each
+    found the same gap one language at a time. C# is most of .NET and all of
+    Unity scripting, so a repository written in it stated no constants and no
+    vocabularies anywhere in its specification.
+    """
+
+    SOURCE = (
+        "public static class Policy {\n"
+        "    public const int MaxRetries = 10;\n"
+        '    public const string ServiceName = "checkout";\n'
+        "    public static readonly int Timeout = 30;\n"
+        "    public const int Computed = MaxRetries * 2;\n"
+        "}\n"
+        "// const int Commented = 5;\n"
+        "public enum Method { Get, Put, Head }\n"
+        "public enum Ordered { A = 1, B = 2 }\n"
+        "public enum One { Only }\n"
+    )
+
+    def _constants(self) -> dict[str, Any]:
+        return declared_constants(self.SOURCE, blank_noise(self.SOURCE))
+
+    def test_a_const_literal_is_recorded_with_its_value(self) -> None:
+        self.assertEqual(self._constants()["MaxRetries"]["value"], "10")
+
+    def test_a_string_constant_survives_the_blanking(self) -> None:
+        # Blanking removes a string body and its quotes, so the value has to
+        # come from the original text at the same offsets. Trimming the match
+        # on the blanked text left the group holding a lone quote.
+        self.assertEqual(self._constants()["ServiceName"]["value"], "checkout")
+
+    def test_static_readonly_counts_as_a_declared_value(self) -> None:
+        self.assertEqual(self._constants()["Timeout"]["value"], "30")
+
+    def test_a_computed_value_is_not_recorded(self) -> None:
+        self.assertNotIn("Computed", self._constants())
+
+    def test_a_constant_in_a_comment_is_not_a_constant(self) -> None:
+        self.assertNotIn("Commented", self._constants())
+
+    def test_enum_members_are_a_vocabulary(self) -> None:
+        found = declared_enums(blank_noise(self.SOURCE))
+        self.assertEqual(found["Method"]["members"], ["Get", "Put", "Head"])
+
+    def test_an_assigned_ordinal_does_not_become_a_member(self) -> None:
+        found = declared_enums(blank_noise(self.SOURCE))
+        self.assertEqual(found["Ordered"]["members"], ["A", "B"])
+
+    def test_one_member_is_not_a_vocabulary(self) -> None:
+        self.assertNotIn("One", declared_enums(blank_noise(self.SOURCE)))

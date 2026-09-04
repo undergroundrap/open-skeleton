@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from open_skeleton.analyzers.base import declares_a_number
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -985,6 +986,16 @@ class JavaLexicalAnalyzer:
                 imports = imported_types(tokens)
                 file_enums = declared_enums(tokens)
                 file_constants = declared_constants(tokens)
+                file_strings = {
+                    name: entry
+                    for name, entry in file_constants.items()
+                    if "value" in entry and not declares_a_number(entry["value"])
+                }
+                file_constants = {
+                    name: entry
+                    for name, entry in file_constants.items()
+                    if name not in file_strings
+                }
             except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
                 failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
                 continue
@@ -1001,7 +1012,7 @@ class JavaLexicalAnalyzer:
             # One symbol per file to carry what the file declares. Every other
             # reader has one and this did not, so a Java package's vocabularies
             # and constants had nowhere to live even once they were read.
-            if file_enums or file_constants:
+            if file_enums or file_constants or file_strings:
                 symbols.append(
                     SymbolRecord(
                         symbol_id=stable_id(
@@ -1019,6 +1030,7 @@ class JavaLexicalAnalyzer:
                             "analysis_level": "lexical",
                             **({"tunables": file_constants} if file_constants else {}),
                             **({"collection_constants": file_enums} if file_enums else {}),
+                            **({"string_constants": file_strings} if file_strings else {}),
                         },
                     )
                 )

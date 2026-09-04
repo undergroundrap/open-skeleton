@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from open_skeleton.analyzers.base import declares_a_number
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -1465,6 +1466,23 @@ class RustLexicalAnalyzer:
             declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
             file_constants = _constants(tokens)
             file_enums = _declared_enums(tokens)
+            # Numbers to the tunable index, strings to the value panel.
+            # Both were arriving in the first, which put `SERVICE_NAME`
+            # in a table titled for numbers a maintainer would tune.
+            # A constant whose value this reader never saw stays in the
+            # tunable index, which renders a missing value as a dash. The
+            # string panel subscripts the value directly, and a Rust `static`
+            # declared in one place and assigned in another has none -- which
+            # is the case that panel's own comment warned about and this split
+            # walked straight into.
+            file_strings = {
+                name: entry
+                for name, entry in file_constants.items()
+                if "value" in entry and not declares_a_number(entry["value"])
+            }
+            file_constants = {
+                name: entry for name, entry in file_constants.items() if name not in file_strings
+            }
             file_structs = _struct_fields(tokens)
             if file_flags and describes_the_product(file_record.role):
                 first_flag_line = min(file_flags.values())
@@ -1516,6 +1534,7 @@ class RustLexicalAnalyzer:
                         **({"tunables": file_constants} if file_constants else {}),
                         **({"model_fields": file_structs} if file_structs else {}),
                         **({"collection_constants": file_enums} if file_enums else {}),
+                        **({"string_constants": file_strings} if file_strings else {}),
                     },
                 )
             )
