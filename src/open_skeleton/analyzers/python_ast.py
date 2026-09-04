@@ -406,6 +406,54 @@ def _raise_summary(node: ast.Raise) -> str | None:
     return name or "raise"
 
 
+MAX_RAISED_MESSAGE_CHARS = 60
+
+
+def _quoted_message(text: str) -> str:
+    """A raised message, quoted as written and short enough to read inline.
+
+    Quoted rather than paraphrased, for the reason `_raise_message` gives: the
+    value of the string is that somebody can search for it, and a rewritten
+    message finds nothing. The TypeScript reader states this the same way.
+    """
+
+    folded = " ".join(text.split())
+    if len(folded) <= MAX_RAISED_MESSAGE_CHARS:
+        return f'"{folded}"'
+    return f'"{folded[: MAX_RAISED_MESSAGE_CHARS - 1]}…"'
+
+
+def _raised_types(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Exception types a module raises, with a literal message where there is one.
+
+    Four other readers state this and Python did not. Its raises were recorded
+    only inside a route handler or a function carrying at least two guards --
+    the right rule for drawing a decision trace, and the wrong one for the
+    question a caller asks, which is what comes out of this module when it
+    refuses.
+
+    A bare `raise` is a re-raise and names no type of its own, so it is
+    counted where it appears and not named here. Only a literal message is
+    kept, for the reason `_raise_message` gives: a message quoted wrongly is
+    worse than one omitted, because a reader searches for the words this
+    document gave them.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or node.exc is None:
+            continue
+        name = (_expr_name(node.exc) or "").split(".")[-1]
+        if not name or not name[0].isupper():
+            continue
+        entry = found.setdefault(name, {"count": 0, "line": node.lineno})
+        entry["count"] += 1
+        message = _raise_message(node)
+        if message and "message" not in entry:
+            entry["message"] = message
+    return found
+
+
 def _raise_message(node: ast.Raise) -> str | None:
     """The literal text a raise gives the caller, when it gives one.
 
@@ -2835,8 +2883,51 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 self.symbols[index] = replace(symbol, metadata={**symbol.metadata, **payload})
                 return
 
+    def _state_failure_surface(self) -> None:
+        """Say what this module raises, which four other readers already say.
+
+        TypeScript, Rust, C# and PowerShell each report the types a file
+        throws. Python reported none, because its raises were recorded only
+        inside a route handler or a function carrying at least two guards --
+        the right rule for drawing a decision trace, and the wrong one for the
+        question a caller asks.
+
+        Worded as the TypeScript reader words it, and filed under the same
+        category, so a reader asks one question rather than one per language.
+        """
+
+        raised = _raised_types(self.tree)
+        if not raised or not describes_the_product(getattr(self.file_record, "role", None)):
+            return
+        ordered = sorted(raised.items(), key=lambda pair: (-pair[1]["count"], pair[0]))
+        named = ", ".join(
+            f"{name} ({_quoted_message(str(entry['message']))})" if entry.get("message") else name
+            for name, entry in ordered[:8]
+        )
+        first_line = min(entry["line"] for _name, entry in ordered)
+        receipt = self._evidence(
+            start_line=first_line,
+            end_line=first_line,
+            symbol=self.module,
+            evidence_kind="failure_surface",
+        )
+        self._claim(
+            text=(
+                f"{self.module} raises {len(raised)} distinct type(s): {named}"
+                f"{', and more' if len(ordered) > 8 else ''}. A caller that does not catch "
+                "them sees them propagate."
+            ),
+            category="failure_surface",
+            status="verified",
+            confidence=1.0,
+            importance="medium",
+            supporting=(receipt.evidence_id,),
+            invalidation_keys=(f"file:{self.path}",),
+        )
+
     def finalize(self) -> None:
         self._attach_module_metadata()
+        self._state_failure_surface()
         if (self.cli_options or self.cli_positionals) and describes_the_product(
             getattr(self.file_record, "role", None)
         ):

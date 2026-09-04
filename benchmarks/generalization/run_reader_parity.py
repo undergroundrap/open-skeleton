@@ -48,33 +48,47 @@ SNIPPETS: dict[str, tuple[str, str]] = {
     "Python": (
         "policy.py",
         (
+            "import json\n"
+            "\n"
             "MAX_RETRIES = 10\n"
             'SERVICE_NAME = "checkout"\n'
             'ALLOWED_METHODS = frozenset(["GET", "PUT", "HEAD"])\n'
+            '__all__ = ["run"]\n'
+            "\n"
+            "def run(path):\n"
+            '    raise ValueError("bad path")\n'
         ),
     ),
     "TypeScript": (
         "policy.ts",
         (
+            'import fs from "node:fs";\n'
             "export const MAX_RETRIES: number = 10;\n"
             'export const SERVICE_NAME: string = "checkout";\n'
             'export type Method = "GET" | "PUT" | "HEAD";\n'
+            'export function run(p: string) { throw new Error("bad path"); }\n'
         ),
     ),
     "Rust": (
         "policy.rs",
         (
+            "use std::io;\n"
             "pub const MAX_RETRIES: u32 = 10;\n"
             'pub const SERVICE_NAME: &str = "checkout";\n'
             "pub enum Method { Get, Put, Head }\n"
+            'pub fn run() -> Result<(), io::Error> { panic!("bad path") }\n'
         ),
     ),
     "Java": (
         "Policy.java",
         (
+            "import java.util.List;\n"
             "public class Policy {\n"
             "    public static final int MAX_RETRIES = 10;\n"
             '    public static final String SERVICE_NAME = "checkout";\n'
+            "    public void run() {\n"
+            '        throw new IllegalStateException("bad path");\n'
+            "    }\n"
             "}\n"
             "enum Method { GET, PUT, HEAD }\n"
         ),
@@ -82,10 +96,14 @@ SNIPPETS: dict[str, tuple[str, str]] = {
     "C#": (
         "Policy.cs",
         (
+            "using System;\n"
             "namespace Service;\n"
-            "public static class Policy {\n"
+            "public class Policy {\n"
             "    public const int MaxRetries = 10;\n"
             '    public const string ServiceName = "checkout";\n'
+            "    public void Run() {\n"
+            '        throw new InvalidOperationException("bad path");\n'
+            "    }\n"
             "}\n"
             "public enum Method { Get, Put, Head }\n"
         ),
@@ -100,6 +118,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
     "PowerShell": (
         "policy.ps1",
         (
+            "Import-Module Foo\n"
             "$script:MaxRetries = 10\n"
             "$script:ServiceName = 'checkout'\n"
             "function Set-Thing {\n"
@@ -107,12 +126,36 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "        [ValidateSet('GET', 'PUT', 'HEAD')]\n"
             "        [String] $Method\n"
             "    )\n"
+            "    throw 'bad path'\n"
             "}\n"
+            "Export-ModuleMember -Function Set-Thing\n"
         ),
     ),
 }
 
-SURFACES = ("tunables", "string_constants", "collection_constants")
+VALUE_SURFACES = ("tunables", "string_constants", "collection_constants")
+
+# A module exposes something, fails somehow, and depends on something. Each is
+# as universal as a named constant, and each is reported by some readers and
+# not others. The failure family is a set because the readers name it
+# differently and that difference is not itself a gap: a Rust `panic!` and a
+# Python `raise` are the same question answered in each language's own words.
+FAILURE_CATEGORIES = frozenset(
+    {
+        "failure_surface",
+        "error_surface",
+        "exception_type",
+        "panic_site",
+        "caught_exception",
+        "absorbed_failure",
+    }
+)
+CLAIM_SURFACES = {
+    "public surface": frozenset({"public_api"}),
+    "failure surface": FAILURE_CATEGORIES,
+}
+EDGE_SURFACES = {"imports": "imports"}
+SURFACES = (*VALUE_SURFACES, *CLAIM_SURFACES, *EDGE_SURFACES)
 
 
 def surfaces_for(name: str, source: str) -> tuple[set[str], int]:
@@ -131,9 +174,19 @@ def surfaces_for(name: str, source: str) -> tuple[set[str], int]:
         metadata = symbol.metadata or {}
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
-        for surface in SURFACES:
+        for surface in VALUE_SURFACES:
             if metadata.get(surface):
                 found.add(surface)
+
+    categories = {claim.category for claim in result.claims}
+    for surface, wanted in CLAIM_SURFACES.items():
+        if categories & wanted:
+            found.add(surface)
+
+    relationships = {edge.relationship for edge in result.edges}
+    for surface, wanted_edge in EDGE_SURFACES.items():
+        if wanted_edge in relationships:
+            found.add(surface)
     return found, len(result.symbols)
 
 
@@ -158,14 +211,13 @@ def main() -> int:
         return 0
 
     print("\n## Declared-value surfaces, by reader\n")
-    header = (
-        f"| {'Language':12} | " + " | ".join(f"{item:20}" for item in SURFACES) + " | symbols |"
-    )
+    header = f"| {'Language':12} | " + " | ".join(f"{item[:18]:18}" for item in SURFACES) + " |"
     print(header)
     print("|" + "|".join("-" * (len(part) + 2) for part in header.split("|")[1:-1]) + "|")
     for language, found, symbols in rows:
-        cells = " | ".join(f"{'yes' if item in found else 'no':20}" for item in SURFACES)
-        print(f"| {language:12} | {cells} | {symbols:7} |")
+        cells = " | ".join(f"{'yes' if item in found else 'no':18}" for item in SURFACES)
+        print(f"| {language:12} | {cells} |")
+        _ = symbols
 
     missing = [
         (language, surface)
