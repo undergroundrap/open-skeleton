@@ -239,13 +239,18 @@ def _tokens(source: str) -> list[Token]:
         if character == "/" and _regex_may_start(result):
             end = _read_regex(source, index)
             if end > index:
-                # The body is deliberately not kept. A regex is a pattern, not
-                # a name or a value this engine reports, and the only thing
-                # that matters is consuming it so its contents stop being read
-                # as code. `/^[^\s@"]+$/` contains a quote, and treating that
-                # quote as a string opener swallowed the rest of the file --
-                # every declaration after the first such regex disappeared.
+                # Consuming it is what keeps the rest of the file readable:
+                # `/^[^\s@"]+$/` contains a quote, and treating that quote as
+                # a string opener swallowed every declaration after it. The
+                # body used to be discarded as well, on the grounds that a
+                # pattern is not a value this engine reports. It is one -- a
+                # named pattern states which inputs a program will accept, and
+                # a validation library says almost everything it has to say
+                # that way. So it is now emitted, and consumed exactly as
+                # before.
+                started = line
                 line += source[index:end].count("\n")
+                result.append(Token("regex", source[index:end], started, line))
                 index = end
                 continue
         if character in {'"', "'", "`"}:
@@ -1071,8 +1076,8 @@ def _assignment_after_annotation(tokens: list[Token], start: int) -> int:
     return -1
 
 
-def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
-    """Named literal constants: the numbers a reader would change to retune.
+def _named_literals(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Every named constant whose value is written out as a literal.
 
     The Rust analyzer has carried these since it was written and this one did
     not, which showed up the first time both ran against a physics-heavy game.
@@ -1122,7 +1127,7 @@ def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
         sign = ""
         if value.value == "-" and assignment + 2 < total:
             sign, value = "-", tokens[assignment + 2]
-        if value.kind not in {"number", "string"}:
+        if value.kind not in {"number", "string", "regex"}:
             continue
         found[name.value] = {
             "line": name.line,
@@ -1131,6 +1136,38 @@ def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
             "literal": value.kind,
         }
     return found
+
+
+def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """The numbers a reader would change to retune behaviour.
+
+    Numbers only, because the panel this feeds is the numeric tunable index.
+    Strings and patterns were arriving here too and being rendered under that
+    heading, which put `MODE = "surf"` in a table of dials.
+    """
+
+    return {
+        name: entry
+        for name, entry in _named_literals(tokens).items()
+        if entry.get("literal") == "number"
+    }
+
+
+def _value_constants(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Named strings and patterns, with the value the module states outright.
+
+    A named pattern is a policy: it says which inputs a program will accept,
+    and a validation library says almost everything it has to say that way.
+    zod declares `nanoid`, `ksuid`, `ulid` and two dozen more as regular
+    expressions, and a question set scored against its source could not find
+    the length of any of them.
+    """
+
+    return {
+        name: {"value": entry["value"], "line": entry["line"], "literal": entry["literal"]}
+        for name, entry in _named_literals(tokens).items()
+        if entry.get("literal") in {"string", "regex"}
+    }
 
 
 def _server_receivers(tokens: list[Token]) -> set[str]:
@@ -1742,6 +1779,7 @@ class TypeScriptLexicalAnalyzer:
             file_aliases = _import_aliases(file_tokens)
             file_servers = _server_receivers(file_tokens)
             file_tunables = _tunables(file_tokens)
+            file_values = _value_constants(file_tokens)
             file_exports = _exported_names(file_tokens)
             file_clients = {
                 name
@@ -1798,6 +1836,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"external_origins": file_origins} if file_origins else {}),
                         **({"object_keys": file_object_keys} if file_object_keys else {}),
                         **({"tunables": file_tunables} if file_tunables else {}),
+                        **({"string_constants": file_values} if file_values else {}),
                         **({"name_index": file_name_index} if file_name_index else {}),
                     },
                 )

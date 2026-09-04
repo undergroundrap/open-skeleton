@@ -27,6 +27,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _throw_sites,
     _tokens,
     _tunables,
+    _value_constants,
 )
 from open_skeleton.scanner import scan_repository
 
@@ -387,8 +388,12 @@ class TunableTests(TestCase):
     def test_a_negative_constant_keeps_its_sign(self) -> None:
         self.assertEqual(_tunables(_tokens("const FLOOR = -9.8;\n"))["FLOOR"]["value"], "-9.8")
 
-    def test_a_string_constant_is_recorded(self) -> None:
-        found = _tunables(_tokens('const MODE = "surf";\n'))
+    def test_a_string_constant_is_recorded_as_a_value_not_a_dial(self) -> None:
+        # Strings used to arrive in the tunable index and render under the
+        # heading "Numeric tunables", which put `MODE = "surf"` in a table of
+        # numbers a maintainer would retune.
+        self.assertEqual(_tunables(_tokens('const MODE = "surf";\n')), {})
+        found = _value_constants(_tokens('const MODE = "surf";\n'))
         self.assertEqual(found["MODE"]["value"], "surf")
 
     def test_a_function_local_is_not_a_tunable(self) -> None:
@@ -811,8 +816,27 @@ class AnnotatedConstantTests(TestCase):
         self.assertEqual(found["LIMIT"]["value"], "9")
 
     def test_an_annotated_string_is_recorded(self) -> None:
-        found = _tunables(_tokens('export const MODE: string = "surf";\n'))
+        found = _value_constants(_tokens('export const MODE: string = "surf";\n'))
         self.assertEqual(found["MODE"]["value"], "surf")
+
+    def test_a_named_pattern_is_recorded_as_written(self) -> None:
+        # A named pattern is a policy: it states which inputs the program
+        # accepts. The tokenizer consumed regex literals without emitting
+        # them, so a validation library declared two dozen of these and the
+        # specification could not report the length of any of them.
+        found = _value_constants(_tokens("export const nanoid: RegExp = /^[a-z0-9_-]{21}$/;\n"))
+        self.assertEqual(found["nanoid"]["value"], "/^[a-z0-9_-]{21}$/")
+        self.assertEqual(found["nanoid"]["literal"], "regex")
+
+    def test_a_pattern_holding_a_quote_does_not_swallow_the_file(self) -> None:
+        # The reason the body was discarded in the first place: a quote inside
+        # a pattern, read as a string opener, once deleted every declaration
+        # after it. Emitting the token must not reintroduce that.
+        source = 'const q = /^"[a-z]+$/;\nexport const AFTER: number = 5;\n'
+        self.assertEqual(_tunables(_tokens(source))["AFTER"]["value"], "5")
+
+    def test_division_is_not_read_as_a_pattern(self) -> None:
+        self.assertEqual(_value_constants(_tokens("const half = total / 2;\n")), {})
 
     def test_a_union_annotation_is_stepped_over(self) -> None:
         found = _tunables(_tokens("const RETRIES: number | null = 5;\n"))

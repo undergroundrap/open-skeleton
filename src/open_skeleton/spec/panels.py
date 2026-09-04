@@ -601,14 +601,17 @@ def _string_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
     rows.sort(key=lambda row: (row[2], row[0]))
     return Panel(
         name="string_constants",
-        title="Declared string constants",
+        title="Declared string and pattern constants",
         columns=("Name", "Value", "Declared at"),
         alignments=("left", "left", "left"),
         rows=tuple(rows[:MAX_TUNABLES]),
         note=(
-            "Module-level string assignments only. A value built at runtime, "
-            "a multi-line string and a docstring are all excluded, so this is "
-            "what the module states outright rather than what it computes."
+            "Module-level assignments only, and where a reader records them, "
+            "regular-expression literals shown as written. A named pattern is "
+            "a policy: it states which inputs the program will accept. A value "
+            "built at runtime, a multi-line string and a docstring are all "
+            "excluded, so this is what the module states outright rather than "
+            "what it computes."
         ),
     )
 

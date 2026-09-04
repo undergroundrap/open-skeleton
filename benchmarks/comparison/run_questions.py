@@ -86,6 +86,13 @@ def main() -> int:
     # maintainer asked -- and requiring a baseline would have confined this
     # instrument to the single repository a baseline exists for.
     parser.add_argument("--baseline", type=Path)
+    # The rendered document is what a person reads and it is deliberately
+    # bounded: a panel prints its first rows and says how many more are
+    # carried in the exports. The exports are what an agent reads. Scoring
+    # only the first understates what the engine delivers, and scoring only
+    # the second would hide that a reader cannot see it -- so both are
+    # reported, and neither replaces the other.
+    parser.add_argument("--structured", type=Path, help="spec.json, scored alongside.")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--candidate-label", default="Open Skeleton")
     parser.add_argument("--baseline-label", default="Baseline")
@@ -94,11 +101,13 @@ def main() -> int:
     payload = json.loads(args.questions.read_text(encoding="utf-8"))
     candidate = args.candidate.read_text(encoding="utf-8")
     baseline = args.baseline.read_text(encoding="utf-8") if args.baseline else ""
+    structured = args.structured.read_text(encoding="utf-8") if args.structured else ""
 
     rows: list[dict[str, Any]] = []
     for question in payload["questions"]:
         ours, our_cite = _score(candidate, question)
         theirs, their_cite = _score(baseline, question) if baseline else (False, False)
+        exported, _exported_cite = _score(structured, question) if structured else (False, False)
         rows.append(
             {
                 "id": question["id"],
@@ -108,6 +117,7 @@ def main() -> int:
                 "candidate_cited": our_cite,
                 "baseline_answered": theirs,
                 "baseline_cited": their_cite,
+                "structured_answered": exported,
             }
         )
 
@@ -155,6 +165,27 @@ def main() -> int:
         if baseline:
             rendered += f" {mark(row['baseline_answered'], row['baseline_cited'])} |"
         lines.append(rendered + "\n")
+
+    if structured:
+        exported_total = sum(row["structured_answered"] for row in rows)
+        only_exported = [
+            row["id"]
+            for row in rows
+            if row["structured_answered"] and not row["candidate_answered"]
+        ]
+        lines.append(
+            f"\nThe rendered document answered {ours_answered}/{total}. "
+            f"The structured export answered {exported_total}/{total}"
+        )
+        if only_exported:
+            lines.append(
+                f", carrying {', '.join(only_exported)} that the document bounded "
+                "away. A panel prints its first rows and names how many more it "
+                "holds, so these are reachable by an agent reading `spec.json` and "
+                "not by a reader of the page.\n"
+            )
+        else:
+            lines.append(". Nothing was reachable in one and not the other.\n")
 
     missed = [row["id"] for row in rows if not row["candidate_answered"]]
     if missed:
