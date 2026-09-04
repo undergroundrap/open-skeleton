@@ -24,11 +24,13 @@ from open_skeleton.analyzers.java_lexical import (
     declared_constants,
     declared_enums,
     declared_members,
+    declared_throws,
     declared_types,
     enum_constants,
     imported_types,
     package_name,
     record_components,
+    throw_sites,
     tokenize,
 )
 from open_skeleton.models import AnalysisResult
@@ -458,3 +460,94 @@ class JavaDeclaredValueTests(TestCase):
     def test_a_string_constant_keeps_its_value(self) -> None:
         found = declared_constants(tokenize('class P { static final String NAME = "pool"; }\n'))
         self.assertEqual(found["NAME"]["value"], "pool")
+
+
+class JavaFailureSurfaceTests(TestCase):
+    """What a file throws, and what its signatures say it may throw.
+
+    Read out of `java.util.concurrent`, where 551 of 657 throws are `throw new
+    X(...)`, 13 re-raise a caught variable, and `BlockingQueue` declares
+    `InterruptedException` on six methods while containing no `throw` at all.
+    """
+
+    def test_a_thrown_type_is_named(self) -> None:
+        found = throw_sites(tokenize("class P { void f() { throw new IllegalStateException(); } }"))
+        self.assertEqual(
+            [(name, message) for name, message, _ in found], [("IllegalStateException", None)]
+        )
+
+    def test_a_literal_message_is_quoted(self) -> None:
+        found = throw_sites(
+            tokenize('class P { void f() { throw new IllegalArgumentException("Queue full"); } }')
+        )
+        self.assertEqual(found[0][1], "Queue full")
+
+    def test_a_built_message_is_not_quoted(self) -> None:
+        # `"bad " + name` has no fixed text, and quoting its first half would
+        # give a reader words to search for that the program never prints.
+        found = throw_sites(
+            tokenize('class P { void f() { throw new IllegalArgumentException("bad " + n); } }')
+        )
+        self.assertEqual(found[0], ("IllegalArgumentException", None, 1))
+
+    def test_a_rethrow_names_no_type(self) -> None:
+        found = throw_sites(tokenize("class P { void f() { throw ex; } }"))
+        self.assertEqual(found, [(None, None, 1)])
+
+    def test_a_qualified_name_is_the_same_type_as_its_import(self) -> None:
+        # `ArrayBlockingQueue` writes both spellings three methods apart.
+        found = declared_throws(
+            tokenize(
+                "class P {\n"
+                "  void a() throws IOException {}\n"
+                "  void b() throws java.io.IOException {}\n"
+                "}\n"
+            )
+        )
+        self.assertEqual(sorted(found), ["IOException"])
+        self.assertEqual(found["IOException"]["count"], 2)
+
+    def test_a_throws_clause_lists_every_type(self) -> None:
+        found = declared_throws(
+            tokenize("interface Q { void take() throws InterruptedException, TimeoutException; }")
+        )
+        self.assertEqual(sorted(found), ["InterruptedException", "TimeoutException"])
+
+    def test_javadoc_throws_is_not_a_declaration(self) -> None:
+        # `@throws` outnumbers the real clause three to one in that package.
+        # The tokenizer drops comments, so what is counted is the compiler's
+        # copy rather than the prose beside it.
+        found = declared_throws(
+            tokenize("/** @throws NullPointerException if null */\nclass P { void f() {} }\n")
+        )
+        self.assertEqual(found, {})
+
+    def test_a_file_that_only_declares_still_reports_a_failure_surface(self) -> None:
+        result = _analyze(
+            {"Q.java": "public interface Q { void take() throws InterruptedException; }\n"}
+        )
+        claims = [item for item in result.claims if item.category == "failure_surface"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("InterruptedException", claims[0].claim)
+        self.assertIn("throws", claims[0].claim)
+
+    def test_a_thrown_file_reports_count_and_types(self) -> None:
+        result = _analyze(
+            {
+                "P.java": (
+                    "public class P {\n"
+                    '  void a() { throw new IllegalStateException("no"); }\n'
+                    "  void b() { throw new IllegalStateException(); }\n"
+                    "  void c() { throw new NullPointerException(); }\n"
+                    "}\n"
+                )
+            }
+        )
+        claims = [item for item in result.claims if item.category == "failure_surface"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("throws in 3 place(s), of 2 distinct type(s)", claims[0].claim)
+        self.assertIn('"no"', claims[0].claim)
+
+    def test_a_file_that_cannot_fail_claims_nothing(self) -> None:
+        result = _analyze({"P.java": "public class P { int f() { return 1; } }\n"})
+        self.assertEqual([item for item in result.claims if item.category == "failure_surface"], [])

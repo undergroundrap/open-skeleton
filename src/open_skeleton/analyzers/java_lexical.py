@@ -356,6 +356,8 @@ def declared_types(tokens: list[Token]) -> list[JavaType]:
     return found
 
 
+MAX_NAMED = 12
+MAX_MESSAGE_CHARS = 60
 MAX_ENUM_CONSTANTS = 64
 
 
@@ -904,6 +906,133 @@ TEST_ANNOTATIONS = frozenset({"Test", "ParameterizedTest", "RepeatedTest", "Test
 PUBLIC_KINDS = frozenset({"class", "interface", "enum", "record", "annotation_type"})
 
 
+def _dotted_name(tokens: list[Token], start: int) -> tuple[str, int]:
+    """A `java.io.IOException`-shaped name from `start`, and the index after it."""
+
+    parts: list[str] = []
+    cursor = start
+    while cursor < len(tokens) and tokens[cursor].kind == "identifier":
+        parts.append(tokens[cursor].value)
+        cursor += 1
+        if (
+            cursor < len(tokens)
+            and tokens[cursor].kind == "punctuation"
+            and tokens[cursor].value == "."
+        ):
+            cursor += 1
+            continue
+        break
+    return ".".join(parts), cursor
+
+
+def _simple_name(name: str) -> str:
+    """`java.io.IOException` and `IOException` are one type, so name it once.
+
+    `ArrayBlockingQueue` writes the clause both ways, three methods apart, and
+    counting them separately reported a file failing with two types where it
+    fails with one. Java forbids two imports sharing a simple name, so the
+    last segment identifies the type within a file.
+    """
+
+    return name.rsplit(".", 1)[-1]
+
+
+def _literal_argument(tokens: list[Token], cursor: int) -> str | None:
+    """The message, when the whole constructor argument is one string literal.
+
+    `throw new IllegalArgumentException("bad " + name)` has no fixed text, and
+    taking the first literal would quote half a sentence. A message quoted
+    wrongly is worse than one omitted, because a reader searches for the words
+    this document gave them -- so a literal counts only when a `)` closes the
+    call directly behind it. A text block is skipped for the same reason: the
+    tokenizer keeps its delimiters, and its text is a paragraph rather than a
+    message.
+    """
+
+    if cursor + 2 >= len(tokens):
+        return None
+    opening, literal, closing = tokens[cursor], tokens[cursor + 1], tokens[cursor + 2]
+    if opening.kind != "punctuation" or opening.value != "(":
+        return None
+    if literal.kind != "string" or literal.value.startswith('"""'):
+        return None
+    if closing.kind != "punctuation" or closing.value != ")":
+        return None
+    return literal.value.strip() or None
+
+
+def throw_sites(tokens: list[Token]) -> list[tuple[str | None, str | None, int]]:
+    """`(exception type, literal message, line)` for every `throw` in a file.
+
+    `throw` is reserved, and comments and string bodies never reach the token
+    stream, so a match here is a throw rather than the word inside a sentence.
+
+    `throw ex` re-raises something caught elsewhere and names no type of its
+    own. It is counted where it appears and left unnamed, the way the Python
+    reader treats a bare `raise`: the file does fail there, and saying which
+    type would mean guessing.
+    """
+
+    found: list[tuple[str | None, str | None, int]] = []
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "throw":
+            continue
+        following = tokens[index + 1] if index + 1 < len(tokens) else None
+        if following is None or following.kind != "identifier" or following.value != "new":
+            found.append((None, None, token.line))
+            continue
+        name, cursor = _dotted_name(tokens, index + 2)
+        if not name:
+            found.append((None, None, token.line))
+            continue
+        found.append((_simple_name(name), _literal_argument(tokens, cursor), token.line))
+    return found
+
+
+def declared_throws(tokens: list[Token]) -> dict[str, dict[str, int]]:
+    """Exception types named in `throws` clauses, by count and first line.
+
+    Java is the only language this engine reads whose signatures declare what
+    a call may fail with and whose compiler holds callers to it, so this is a
+    surface the other readers have nothing to match. It is also the only way
+    to see the failure of a file that throws nothing itself: `BlockingQueue`
+    declares `InterruptedException` on six methods and contains no `throw`.
+
+    Javadoc states the same thing with `@throws`, and states it more often --
+    in `java.util.concurrent`, three times as often. The tokenizer drops
+    comments, so what is counted here is the compiler's copy rather than the
+    prose beside it, which is the copy that is checked.
+    """
+
+    found: dict[str, dict[str, int]] = {}
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "throws":
+            continue
+        cursor = index + 1
+        while cursor < len(tokens):
+            name, cursor = _dotted_name(tokens, cursor)
+            if not name:
+                break
+            entry = found.setdefault(_simple_name(name), {"count": 0, "line": token.line})
+            entry["count"] += 1
+            if (
+                cursor < len(tokens)
+                and tokens[cursor].kind == "punctuation"
+                and tokens[cursor].value == ","
+            ):
+                cursor += 1
+                continue
+            break
+    return found
+
+
+def _quote(text: str) -> str:
+    folded = " ".join(text.split())
+    if len(folded) <= MAX_MESSAGE_CHARS:
+        return f'"{folded}"'
+    return f'"{folded[: MAX_MESSAGE_CHARS - 1]}\u2026"'
+
+
 def _is_public(member: JavaMember, owner_kind: str) -> bool:
     """Whether a member is part of its owner's public surface.
 
@@ -1221,6 +1350,50 @@ class JavaLexicalAnalyzer:
                             path=path,
                         )
                     )
+
+            throws = throw_sites(tokens)
+            declared = declared_throws(tokens)
+            if (throws or declared) and describes_the_product(file_record.role):
+                kinds = sorted({name for name, _, _ in throws if name})
+                messages = [message for _, message, _ in throws if message]
+                first = min(
+                    [line for _, _, line in throws]
+                    + [int(entry["line"]) for entry in declared.values()]
+                )
+                sentences: list[str] = []
+                if throws:
+                    detail = (
+                        f": {', '.join(f'`{item}`' for item in kinds[:MAX_NAMED])}" if kinds else ""
+                    )
+                    quoted = (
+                        " Including " + ", ".join(_quote(item) for item in messages[:3]) + "."
+                        if messages
+                        else ""
+                    )
+                    sentences.append(
+                        f"{path} throws in {len(throws):,} place(s), of "
+                        f"{len(kinds):,} distinct type(s){detail}. A caller that does not "
+                        f"catch them sees them propagate.{quoted}"
+                    )
+                if declared:
+                    named = ", ".join(f"`{item}`" for item in sorted(declared)[:MAX_NAMED])
+                    sentences.append(
+                        f"{path} declares {len(declared):,} exception type(s) in `throws` "
+                        f"clauses: {named}. Where the declared type is a checked one, the "
+                        "compiler requires every caller to catch it or redeclare it."
+                    )
+                claims.append(
+                    self._claim(
+                        snapshot,
+                        created_at,
+                        text=" ".join(sentences),
+                        category="failure_surface",
+                        supporting=(
+                            receipt(path, first, "failure_surface", None, line_text(first)),
+                        ),
+                        path=path,
+                    )
+                )
 
             for target, line in imports:
                 edges.append(
