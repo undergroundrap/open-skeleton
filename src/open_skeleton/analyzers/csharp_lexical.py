@@ -340,6 +340,17 @@ def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
     regex's point of view. Without the depth, every `var count = 0` in every
     method would be reported as part of the type.
 
+    Parentheses are counted too, because braces alone do not separate a field
+    from a parameter. A parameter list written across several lines --
+
+        public static object SetAtlas(
+            [CliArg("open", "...")] bool open = true,
+            [CliArg("region", "...")] string region = null)
+
+    -- puts an attribute, a type, a name and an `=` on a line of its own, and
+    the brace enclosing it is still the class body. `WarpWritPipelineCommands`
+    was reported as holding `enable`, `open` and `region`.
+
     A `static` or `const` member is excluded. It belongs to the type rather
     than to any instance, is already reported as a constant or as shared
     state, and listing it here would describe a shape nobody constructs.
@@ -362,6 +373,7 @@ def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
     stack: list[tuple[str, int]] = []
     pending: str | None = None
     depth = 0
+    parens = 0
     position = 0
     length = len(clean)
     while position < length:
@@ -375,7 +387,7 @@ def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
             continue
 
         member = members.get(position)
-        if member is not None and stack and depth == stack[-1][1]:
+        if member is not None and not parens and stack and depth == stack[-1][1]:
             modifiers = set(member.group("modifiers").split())
             declared = member.group("type")
             if not (modifiers & EXCLUDED_MODIFIERS) and declared not in NOT_A_TYPE_NAME:
@@ -393,7 +405,11 @@ def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
             continue
 
         character = clean[position]
-        if character == "{":
+        if character == "(":
+            parens += 1
+        elif character == ")":
+            parens = max(0, parens - 1)
+        elif character == "{":
             depth += 1
             if pending is not None:
                 stack.append((pending, depth))

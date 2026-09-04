@@ -420,16 +420,26 @@ def declared_enums(tokens: list[Token]) -> dict[str, dict[str, object]]:
 
 
 def declared_constants(tokens: list[Token]) -> dict[str, dict[str, object]]:
-    """`static final` fields whose value is written out as a literal.
+    """`static final` fields, with the value where one is written out.
 
     These are the numbers and strings a reader changes to alter behaviour, and
     the equivalent index exists for Python, TypeScript and Rust.
     `ForkJoinPool` states its worker ceiling and its default spare count this
     way, and neither was recorded.
 
-    A value that is computed -- `Integer.SIZE - 3` -- is not a literal, and
-    reporting the first token of an expression as the value would state a
-    number the program never uses.
+    A computed value -- `Integer.SIZE - 3` -- is not a literal, and reporting
+    the first token of an expression as the value would state a number the
+    program never uses. It is recorded under `expression` instead, with no
+    `value`, so nothing downstream can mistake one for the other.
+
+    Dropping it entirely was the previous behaviour and it cost more than it
+    saved: `ThreadPoolExecutor` writes its whole state vocabulary as
+    arithmetic and reported one constant, and across `java.base` this reader
+    kept 1,424 declarations of 2,886. The name and the site are facts about
+    the source whether or not the value can be read.
+
+    The `declared_type` decides which index an entry belongs to, since a
+    computed `String` is no more a numeric tunable than a literal one.
     """
 
     found: dict[str, dict[str, object]] = {}
@@ -460,14 +470,52 @@ def declared_constants(tokens: list[Token]) -> dict[str, dict[str, object]]:
             scan += 1
         if name_index < 0 or name_index + 2 >= total:
             continue
+        declared = render_declared_type(
+            [tokens[position].value for position in range(cursor + 1, name_index)]
+        )
         value = tokens[name_index + 2]
         after = tokens[name_index + 3] if name_index + 3 < total else None
-        if after is None or after.value != ";":
-            continue
-        if value.kind not in {"number", "string"}:
-            continue
-        found[tokens[name_index].value] = {"value": value.value, "line": value.line}
+        entry: dict[str, object]
+        if after is not None and after.value == ";" and value.kind in {"number", "string"}:
+            entry = {"value": value.value, "line": value.line}
+        else:
+            expression = _initializer_text(tokens, name_index + 2)
+            if not expression:
+                continue
+            entry = {"expression": expression, "line": value.line}
+        if declared:
+            entry["declared_type"] = declared
+        found[tokens[name_index].value] = entry
     return found
+
+
+MAX_EXPRESSION_TOKENS = 24
+
+
+def _initializer_text(tokens: list[Token], start: int) -> str:
+    """The initializer as written, from `=` to the `;` that ends it.
+
+    Only the text, never a computed result: this reader does not run the
+    program, and `Integer.SIZE - 3` is a fact about the source in a way that
+    `29` would not be.
+
+    A string token has lost its quotes by the time it reaches here, so it is
+    given them back -- otherwise `PREFIX + "x"` would read as `PREFIX+x`, and
+    a reader could not tell the literal from the name.
+    """
+
+    values: list[str] = []
+    cursor = start
+    while cursor < len(tokens) and len(values) <= MAX_EXPRESSION_TOKENS:
+        token = tokens[cursor]
+        if token.value == ";" and token.kind == "punctuation":
+            break
+        values.append(f'"{token.value}"' if token.kind == "string" else token.value)
+        cursor += 1
+    if not values:
+        return ""
+    rendered = render_declared_type(values, limit=120)
+    return rendered + (" ..." if len(values) > MAX_EXPRESSION_TOKENS else "")
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,6 +536,58 @@ class JavaMember:
     # `Map<String,Integer>`, `int[]`, `java.io.File`. Empty for a method,
     # whose return type this reader has no use for yet.
     declared_type: str = ""
+
+
+# The types a numeric tunable is declared with, boxed and unboxed. `char` is
+# absent: it is a character, and a reader scanning a numeric index for a limit
+# would be misled by one.
+NUMERIC_TYPES = frozenset(
+    {
+        "byte",
+        "short",
+        "int",
+        "long",
+        "float",
+        "double",
+        "Byte",
+        "Short",
+        "Integer",
+        "Long",
+        "Float",
+        "Double",
+        "BigInteger",
+        "BigDecimal",
+    }
+)
+TEXT_TYPES = frozenset({"String", "CharSequence"})
+
+
+def constant_index(entry: dict[str, object]) -> str:
+    """Which index a constant belongs to: `number`, `text`, or neither.
+
+    Decided by the declared type where there is one, because a constant whose
+    value is computed has no value to inspect and Java wrote the type down
+    anyway. The value is the fallback, which is how this was decided before
+    computed constants were recorded at all.
+
+    A `static final` of any other type belongs to neither index. A
+    `Map<String,Integer>` behind a final reference is a shared mutable
+    container, which is a different fact from a tunable and reported as one
+    would make the numeric index untrustworthy.
+    """
+
+    declared = str(entry.get("declared_type", ""))
+    base = declared.split("<", maxsplit=1)[0].replace("[]", "").rsplit(".", 1)[-1]
+    if base in NUMERIC_TYPES:
+        return "number"
+    if base in TEXT_TYPES:
+        return "text"
+    if base:
+        return ""
+    value = entry.get("value")
+    if value is None:
+        return ""
+    return "number" if declares_a_number(value) else "text"
 
 
 def declared_members(tokens: list[Token]) -> list[JavaMember]:
@@ -1233,15 +1333,14 @@ class JavaLexicalAnalyzer:
                 file_enums = declared_enums(tokens)
                 file_shapes = declared_shapes(tokens)
                 file_constants = declared_constants(tokens)
+                indexed = {name: constant_index(entry) for name, entry in file_constants.items()}
                 file_strings = {
-                    name: entry
-                    for name, entry in file_constants.items()
-                    if "value" in entry and not declares_a_number(entry["value"])
+                    name: entry for name, entry in file_constants.items() if indexed[name] == "text"
                 }
                 file_constants = {
                     name: entry
                     for name, entry in file_constants.items()
-                    if name not in file_strings
+                    if indexed[name] == "number"
                 }
             except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
                 failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")

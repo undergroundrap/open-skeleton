@@ -23,6 +23,7 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.java_lexical import (
     JavaMember,
+    constant_index,
     declared_constants,
     declared_enums,
     declared_members,
@@ -452,13 +453,47 @@ class JavaDeclaredValueTests(TestCase):
         found = declared_constants(tokenize("class P { static final int MAX_CAP = 32767; }\n"))
         self.assertEqual(found["MAX_CAP"]["value"], "32767")
 
-    def test_a_computed_value_is_not_a_literal(self) -> None:
+    def test_a_computed_value_is_kept_as_an_expression_not_a_number(self) -> None:
         # `Integer.SIZE - 3` has no literal value to report, and naming the
-        # first token of the expression would state a number the program
-        # never uses.
+        # first token of the expression would state a number the program never
+        # uses. Dropping the declaration outright was the previous behaviour
+        # and cost more: `ThreadPoolExecutor` writes its whole state
+        # vocabulary as arithmetic and reported one constant, and across
+        # `java.base` this reader kept 1,424 declarations of 2,886.
+        found = declared_constants(
+            tokenize("class P { static final int BITS = Integer.SIZE - 3; }\n")
+        )
+        self.assertNotIn("value", found["BITS"])
+        self.assertEqual(found["BITS"]["expression"], "Integer.SIZE-3")
+
+    def test_an_expression_is_read_from_the_source_not_evaluated(self) -> None:
+        found = declared_constants(
+            tokenize("class P { static final int CAP = (1 << BITS) - 1; }\n")
+        )
+        self.assertEqual(found["CAP"]["expression"], "(1<<BITS)-1")
+
+    def test_a_quoted_part_of_an_expression_keeps_its_quotes(self) -> None:
+        # Without them `PREFIX + "x"` reads as `PREFIX+x`, and a reader cannot
+        # tell the literal from the name.
+        found = declared_constants(tokenize('class P { static final String L = PREFIX + "x"; }\n'))
+        self.assertEqual(found["L"]["expression"], 'PREFIX+"x"')
+
+    def test_a_constant_is_indexed_by_its_declared_type(self) -> None:
+        # A computed constant has no value to inspect, and Java wrote the type
+        # down anyway. A `Map` behind a final reference belongs to neither
+        # index: it is a shared mutable container, not a tunable.
+        found = declared_constants(
+            tokenize(
+                "class P {\n"
+                "  static final int A = Integer.SIZE - 3;\n"
+                '  static final String B = PREFIX + "x";\n'
+                "  static final Map<String, Integer> C = new HashMap<>();\n"
+                "}\n"
+            )
+        )
         self.assertEqual(
-            declared_constants(tokenize("class P { static final int BITS = Integer.SIZE - 3; }\n")),
-            {},
+            {name: constant_index(entry) for name, entry in found.items()},
+            {"A": "number", "B": "text", "C": ""},
         )
 
     def test_a_string_constant_keeps_its_value(self) -> None:

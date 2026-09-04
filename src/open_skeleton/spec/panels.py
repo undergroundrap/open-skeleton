@@ -357,6 +357,27 @@ def _consequences(
     )
 
 
+def _constant_value(entry: dict[str, Any]) -> str:
+    """What to print for a constant: its value, its expression, or a dash.
+
+    A reader may know a constant's name and site without its value -- a Rust
+    `static` can be declared in one place and assigned in another, and a Java
+    `static final` is often arithmetic over other constants. A missing
+    optional field must not take the whole document down, which is the
+    contract every contributed analyzer gets to rely on, and reading
+    `entry["value"]` outright is how one panel lost a document already.
+
+    An expression is backticked so nobody scanning a column of numbers reads
+    `Integer.SIZE-3` as one.
+    """
+
+    if "value" in entry:
+        value = entry["value"]
+        return f"{value:g}" if isinstance(value, (int, float)) else str(value)
+    expression = entry.get("expression")
+    return f"`{expression}`" if expression else "—"
+
+
 def _tunable_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Every module-level numeric constant, with its value and definition line.
 
@@ -373,8 +394,7 @@ def _tunable_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
             # another. A missing optional field must not take the whole
             # document down, which is the contract every contributed analyzer
             # gets to rely on.
-            value = entry.get("value", "—")
-            rendered = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+            rendered = _constant_value(entry)
             rows.append((name, rendered, f"{symbol['path']}:{entry.get('line', 1)}"))
     rows.sort(key=lambda row: (row[2], row[0]))
     return Panel(
@@ -384,8 +404,13 @@ def _tunable_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
         alignments=("left", "right", "left"),
         rows=tuple(rows[:MAX_TUNABLES]),
         note=(
-            "Module-level numeric assignments only. A value computed at import "
-            "time or read from configuration is not a literal and does not appear."
+            "Module-level numeric declarations. A literal is shown as itself; a "
+            "value the program computes is shown as the expression in backticks, "
+            "since this engine reads source and does not run it -- so no computed "
+            "number appears here, only the arithmetic that produces it. A value "
+            "read from configuration is not here either; it is in the "
+            "configuration panel. Half the named constants in the Java standard "
+            "library are computed, and omitting them lost the names as well."
         ),
     )
 
@@ -594,8 +619,8 @@ def _string_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
             rows.append(
                 (
                     name,
-                    f"`{entry['value']}`",
-                    f"{symbol['path']}:{entry['line']}",
+                    _constant_value(entry),
+                    f"{symbol['path']}:{entry.get('line', 1)}",
                 )
             )
     rows.sort(key=lambda row: (row[2], row[0]))

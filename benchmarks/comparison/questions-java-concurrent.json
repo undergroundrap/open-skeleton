@@ -1,8 +1,8 @@
 {
   "fixture": "java.util.concurrent",
-  "fixture_version": "JDK 17.0.16",
+  "fixture_version": "JDK 26.0.2.1",
   "fixture_root": "java.base/java/util/concurrent, extracted from the JDK's own lib/src.zip",
-  "provenance": "Every answer was read out of the JDK's own source and is cited to the file and line it came from. None came from a specification this engine produced. The source ships with any JDK installation, so the fixture needs nothing downloaded and nobody here wrote a line of it.",
+  "provenance": "Every answer was read out of the JDK's own source and is cited to the file and line it came from. None came from a specification this engine produced. The source ships with any JDK installation, so the fixture needs nothing downloaded and nobody here wrote a line of it. Re-read in full on 2026-09-04, when the JDK on this machine moved from 17.0.16 to 26.0.2.1: ten of the twelve answers were unchanged, and the two that changed are recorded below with what they were and why.",
   "shape": "The fifth fixture and the first in Java, which this engine has an analyzer for and has never scored. It is a standard-library package rather than an application or a dependency: no entry point, no routes, no manifest, no tests. What it declares is a time-unit vocabulary, executor state constants, and an exception family, which is exactly the kind of thing a caller needs and a reader must extract without any framework to recognise.",
   "questions": [
     {
@@ -80,18 +80,18 @@
     {
       "id": "J10",
       "question": "How many exception types does the package define?",
-      "answers": ["6"],
+      "answers": ["7"],
       "subject": ["exception"],
       "kind": "inventory",
-      "source": "Six files ending in Exception.java: BrokenBarrier, Cancellation, Completion, Execution, RejectedExecution, Timeout"
+      "source": "Seven files ending in Exception.java: BrokenBarrier, Cancellation, Completion, Execution, RejectedExecution, StructureViolation, Timeout. Was 6 under JDK 17.0.16, before StructureViolationException arrived with structured concurrency."
     },
     {
       "id": "J11",
       "question": "How many Java source files does the package hold?",
-      "answers": ["91"],
+      "answers": ["97"],
       "subject": ["Java", "file", "source"],
       "kind": "inventory",
-      "source": "91 .java files under java/util/concurrent"
+      "source": "97 .java files under java/util/concurrent, counting the atomic and locks subpackages; 68 sit directly in the package. Was 91 under JDK 17.0.16."
     },
     {
       "id": "J12",

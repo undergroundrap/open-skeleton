@@ -379,6 +379,41 @@ class CSharpShapeTests(TestCase):
             ["Get", "Put", "Head"],
         )
 
+    def test_a_parameter_on_its_own_line_is_not_a_field(self) -> None:
+        # Found by rendering a document rather than by reading the reader:
+        # `WarpWritPipelineCommands` came back holding `enable`, `open` and
+        # `region`, which are parameters of three of its methods. Each line
+        # has the exact shape of a field, and the brace enclosing it is still
+        # the class body -- a parameter list is parentheses.
+        source = (
+            "public class Commands {\n"
+            "    public Vector3 position;\n"
+            '    [CliCommand("x", "y")]\n'
+            "    public static object SetAtlas(\n"
+            '        [CliArg("open", "True opens.")] bool open = true,\n'
+            '        [CliArg("region", "Optional.")] string region = null)\n'
+            "    { var game = Runtime(); }\n"
+            "}\n"
+        )
+        found = self._shapes(source)
+        self.assertEqual([item["name"] for item in found["Commands"]["fields"]], ["position"])
+
+    def test_a_field_initialized_with_a_call_survives(self) -> None:
+        # The parenthesis guard must not swallow the field it follows.
+        found = self._shapes("class P { public List<Item> Items = new List<Item>(); }\n")
+        self.assertEqual(
+            [(item["name"], item["annotation"]) for item in found["P"]["fields"]],
+            [("Items", "List<Item>")],
+        )
+
+    def test_a_primary_constructor_still_states_the_shape(self) -> None:
+        # A parameter list on a type declaration is the shape, not a method's
+        # arguments, and it is read from the header rather than by the walk.
+        found = self._shapes("public class Order(string Identifier, int Total);\n")
+        self.assertEqual(
+            [item["name"] for item in found["Order"]["fields"]], ["Identifier", "Total"]
+        )
+
     def test_shapes_reach_the_module_symbol(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
