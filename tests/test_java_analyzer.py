@@ -21,6 +21,8 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.java_lexical import (
     JavaMember,
+    declared_constants,
+    declared_enums,
     declared_members,
     declared_types,
     enum_constants,
@@ -404,3 +406,55 @@ public record Point(int x, int y) {
         result = _analyze({"Color.java": self.ENUM})
         methods = [item for item in result.symbols if item.qualified_name.endswith(".RED")]
         self.assertEqual(methods, [])
+
+
+class JavaDeclaredValueTests(TestCase):
+    """Java states a vocabulary the way Rust does, and none of it was read.
+
+    Python states a closed set with a frozenset, TypeScript with a union of
+    literals, Rust with an enum; all three are recorded. Java states one the
+    same way Rust does, and `java.util.concurrent` could declare every unit of
+    time it understands without a specification naming one.
+    """
+
+    def test_enum_constants_are_a_vocabulary(self) -> None:
+        found = declared_enums(
+            tokenize(
+                "public enum TimeUnit {\n"
+                "    NANOSECONDS(TimeUnit.NANO_SCALE),\n"
+                "    DAYS(TimeUnit.DAY_SCALE);\n"
+                "    private static final long NANO_SCALE = 1L;\n"
+                "}\n"
+            )
+        )
+        self.assertEqual(found["TimeUnit"]["members"], ["NANOSECONDS", "DAYS"])
+
+    def test_constants_stop_at_the_semicolon_that_ends_them(self) -> None:
+        # Fields and methods follow the constants in an enum body. Reading
+        # past the `;` would report a field name as a member of the set.
+        found = declared_enums(tokenize("enum E { A, B; static final int X = 1; void run() {} }\n"))
+        self.assertEqual(found["E"]["members"], ["A", "B"])
+
+    def test_a_supertype_list_does_not_hide_the_body(self) -> None:
+        found = declared_enums(tokenize("enum Simple implements Runnable { A, B }\n"))
+        self.assertEqual(found["Simple"]["members"], ["A", "B"])
+
+    def test_one_constant_is_not_a_vocabulary(self) -> None:
+        self.assertEqual(declared_enums(tokenize("enum One { ONLY }\n")), {})
+
+    def test_a_static_final_literal_is_a_tunable(self) -> None:
+        found = declared_constants(tokenize("class P { static final int MAX_CAP = 32767; }\n"))
+        self.assertEqual(found["MAX_CAP"]["value"], "32767")
+
+    def test_a_computed_value_is_not_a_literal(self) -> None:
+        # `Integer.SIZE - 3` has no literal value to report, and naming the
+        # first token of the expression would state a number the program
+        # never uses.
+        self.assertEqual(
+            declared_constants(tokenize("class P { static final int BITS = Integer.SIZE - 3; }\n")),
+            {},
+        )
+
+    def test_a_string_constant_keeps_its_value(self) -> None:
+        found = declared_constants(tokenize('class P { static final String NAME = "pool"; }\n'))
+        self.assertEqual(found["NAME"]["value"], "pool")

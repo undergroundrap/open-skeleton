@@ -1,0 +1,105 @@
+{
+  "fixture": "java.util.concurrent",
+  "fixture_version": "JDK 17.0.16",
+  "fixture_root": "java.base/java/util/concurrent, extracted from the JDK's own lib/src.zip",
+  "provenance": "Every answer was read out of the JDK's own source and is cited to the file and line it came from. None came from a specification this engine produced. The source ships with any JDK installation, so the fixture needs nothing downloaded and nobody here wrote a line of it.",
+  "shape": "The fifth fixture and the first in Java, which this engine has an analyzer for and has never scored. It is a standard-library package rather than an application or a dependency: no entry point, no routes, no manifest, no tests. What it declares is a time-unit vocabulary, executor state constants, and an exception family, which is exactly the kind of thing a caller needs and a reader must extract without any framework to recognise.",
+  "questions": [
+    {
+      "id": "J01",
+      "question": "How many time units does TimeUnit define?",
+      "answers": ["7"],
+      "subject": ["TimeUnit", "time unit"],
+      "kind": "inventory",
+      "source": "TimeUnit.java:79-106 declares NANOSECONDS through DAYS, seven constants"
+    },
+    {
+      "id": "J02",
+      "question": "What is the coarsest time unit available?",
+      "answers": ["DAYS"],
+      "subject": ["TimeUnit", "time unit"],
+      "kind": "policy",
+      "source": "TimeUnit.java:106 DAYS(TimeUnit.DAY_SCALE)"
+    },
+    {
+      "id": "J03",
+      "question": "What is the finest time unit available?",
+      "answers": ["NANOSECONDS"],
+      "subject": ["TimeUnit", "time unit"],
+      "kind": "policy",
+      "source": "TimeUnit.java:79 NANOSECONDS(TimeUnit.NANO_SCALE)"
+    },
+    {
+      "id": "J04",
+      "question": "How many spare threads may the common ForkJoinPool create by default?",
+      "answers": ["256"],
+      "subject": ["ForkJoinPool", "spares", "common"],
+      "kind": "tunable",
+      "source": "ForkJoinPool.java:1363 DEFAULT_COMMON_MAX_SPARES = 256"
+    },
+    {
+      "id": "J05",
+      "question": "What is the maximum worker capacity of a ForkJoinPool?",
+      "answers": ["0x7fff", "32767"],
+      "subject": ["ForkJoinPool", "MAX_CAP", "capacity"],
+      "kind": "tunable",
+      "source": "ForkJoinPool.java:853 MAX_CAP = 0x7fff"
+    },
+    {
+      "id": "J06",
+      "question": "Which exception reports that a task was cancelled?",
+      "answers": ["CancellationException"],
+      "subject": ["cancel", "exception"],
+      "kind": "failure-surface",
+      "source": "CancellationException.java"
+    },
+    {
+      "id": "J07",
+      "question": "Which exception reports that a bounded wait expired?",
+      "answers": ["TimeoutException"],
+      "subject": ["timeout", "exception"],
+      "kind": "failure-surface",
+      "source": "TimeoutException.java"
+    },
+    {
+      "id": "J08",
+      "question": "Which exception reports that an executor refused a task?",
+      "answers": ["RejectedExecutionException"],
+      "subject": ["reject", "execution", "exception"],
+      "kind": "failure-surface",
+      "source": "RejectedExecutionException.java"
+    },
+    {
+      "id": "J09",
+      "question": "Which exception carries the cause of a failed asynchronous computation?",
+      "answers": ["ExecutionException"],
+      "subject": ["execution", "exception", "cause"],
+      "kind": "failure-surface",
+      "source": "ExecutionException.java"
+    },
+    {
+      "id": "J10",
+      "question": "How many exception types does the package define?",
+      "answers": ["6"],
+      "subject": ["exception"],
+      "kind": "inventory",
+      "source": "Six files ending in Exception.java: BrokenBarrier, Cancellation, Completion, Execution, RejectedExecution, Timeout"
+    },
+    {
+      "id": "J11",
+      "question": "How many Java source files does the package hold?",
+      "answers": ["91"],
+      "subject": ["Java", "file", "source"],
+      "kind": "inventory",
+      "source": "91 .java files under java/util/concurrent"
+    },
+    {
+      "id": "J12",
+      "question": "How many bits does ThreadPoolExecutor reserve for its worker count?",
+      "answers": ["COUNT_BITS"],
+      "subject": ["ThreadPoolExecutor", "count", "bits"],
+      "kind": "tunable",
+      "source": "ThreadPoolExecutor.java:386 COUNT_BITS = Integer.SIZE - 3"
+    }
+  ]
+}

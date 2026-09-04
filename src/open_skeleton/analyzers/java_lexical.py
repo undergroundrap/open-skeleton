@@ -355,6 +355,117 @@ def declared_types(tokens: list[Token]) -> list[JavaType]:
     return found
 
 
+MAX_ENUM_CONSTANTS = 64
+
+
+def declared_enums(tokens: list[Token]) -> dict[str, dict[str, object]]:
+    """Enum constants, which are how Java declares a closed set of values.
+
+    Python states a vocabulary with a frozenset, TypeScript with a union of
+    string literals and Rust with an enum; all three are read. Java states one
+    the same way Rust does and none of it was read, so `java.util.concurrent`
+    could declare every unit of time it understands and a specification of it
+    would name none of them.
+
+    Constants come before the first `;` in an enum body, which is what
+    separates them from the fields and methods that may follow. A constant
+    carrying arguments -- `NANOSECONDS(TimeUnit.NANO_SCALE)` -- is still one
+    constant, and the arguments are its construction rather than more members.
+    """
+
+    found: dict[str, dict[str, object]] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "enum" or index + 2 >= total:
+            continue
+        name = tokens[index + 1]
+        if name.kind != "identifier":
+            continue
+        cursor = index + 2
+        while cursor < total and tokens[cursor].value != "{":
+            # `enum X implements Y {` puts a supertype list before the body.
+            if tokens[cursor].value in {";", "}"}:
+                break
+            cursor += 1
+        if cursor >= total or tokens[cursor].value != "{":
+            continue
+
+        constants: list[str] = []
+        depth = 0
+        expecting = True
+        while cursor < total:
+            current = tokens[cursor]
+            if current.kind == "punctuation" and current.value in {"{", "(", "["}:
+                depth += 1
+            elif current.kind == "punctuation" and current.value in {"}", ")", "]"}:
+                depth -= 1
+                if depth == 0:
+                    break
+            elif depth == 1 and current.kind == "punctuation" and current.value == ";":
+                # The constants are done; fields and methods follow.
+                break
+            elif depth == 1 and current.kind == "punctuation" and current.value == ",":
+                expecting = True
+            elif depth == 1 and current.kind == "identifier" and expecting:
+                constants.append(current.value)
+                expecting = False
+            cursor += 1
+        if 2 <= len(constants) <= MAX_ENUM_CONSTANTS:
+            found[name.value] = {"members": constants, "line": name.line}
+    return found
+
+
+def declared_constants(tokens: list[Token]) -> dict[str, dict[str, object]]:
+    """`static final` fields whose value is written out as a literal.
+
+    These are the numbers and strings a reader changes to alter behaviour, and
+    the equivalent index exists for Python, TypeScript and Rust.
+    `ForkJoinPool` states its worker ceiling and its default spare count this
+    way, and neither was recorded.
+
+    A value that is computed -- `Integer.SIZE - 3` -- is not a literal, and
+    reporting the first token of an expression as the value would state a
+    number the program never uses.
+    """
+
+    found: dict[str, dict[str, object]] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "static":
+            continue
+        cursor = index + 1
+        if cursor >= total or tokens[cursor].value != "final":
+            continue
+        # Step over the type, which may be qualified or generic, to the name.
+        name_index = -1
+        scan = cursor + 1
+        depth = 0
+        while scan < total:
+            current = tokens[scan]
+            if current.value in {"<", "["}:
+                depth += 1
+            elif current.value in {">", "]"}:
+                depth -= 1
+            elif depth == 0 and current.kind == "identifier":
+                following = tokens[scan + 1] if scan + 1 < total else None
+                if following is not None and following.value == "=":
+                    name_index = scan
+                    break
+            elif depth == 0 and current.value in {";", "{", "("}:
+                break
+            scan += 1
+        if name_index < 0 or name_index + 2 >= total:
+            continue
+        value = tokens[name_index + 2]
+        after = tokens[name_index + 3] if name_index + 3 < total else None
+        if after is None or after.value != ";":
+            continue
+        if value.kind not in {"number", "string"}:
+            continue
+        found[tokens[name_index].value] = {"value": value.value, "line": value.line}
+    return found
+
+
 @dataclass(frozen=True, slots=True)
 class JavaMember:
     """A method or field declared directly in a type body."""
@@ -872,6 +983,8 @@ class JavaLexicalAnalyzer:
                 ]
                 package = package_name(tokens)
                 imports = imported_types(tokens)
+                file_enums = declared_enums(tokens)
+                file_constants = declared_constants(tokens)
             except (OSError, UnicodeDecodeError, ValueError, RecursionError) as exc:
                 failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
                 continue
@@ -884,6 +997,31 @@ class JavaLexicalAnalyzer:
 
             def qualify(name: str, owner: str = package) -> str:
                 return f"{owner}.{name}" if owner else name
+
+            # One symbol per file to carry what the file declares. Every other
+            # reader has one and this did not, so a Java package's vocabularies
+            # and constants had nowhere to live even once they were read.
+            if file_enums or file_constants:
+                symbols.append(
+                    SymbolRecord(
+                        symbol_id=stable_id(
+                            "symbol", (snapshot.snapshot_id, path, "compilation-unit")
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        path=path,
+                        qualified_name=qualify(Path(path).stem),
+                        kind="module",
+                        start_line=1,
+                        end_line=max(1, file_record.line_count),
+                        language="Java",
+                        analyzer=ANALYZER_VERSION,
+                        metadata={
+                            "analysis_level": "lexical",
+                            **({"tunables": file_constants} if file_constants else {}),
+                            **({"collection_constants": file_enums} if file_enums else {}),
+                        },
+                    )
+                )
 
             for item in types:
                 qualified = qualify(item.name)
