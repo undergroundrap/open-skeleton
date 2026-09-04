@@ -339,6 +339,56 @@ one arrived holding 8,707 claims.
 Exit status is non-zero when anything crashed or any document disagreed with
 itself, which makes this usable as a gate over a corpus a team already trusts.
 
+## Reader parity: which readers record what the others record
+
+```
+python benchmarks/generalization/run_reader_parity.py
+```
+
+Four languages gained a declared-value reader one at a time, and each gap was
+found only once a fixture in that language existed: Python had one, TypeScript
+did not until zod was added, Rust did not until clap was added, Java did not
+until `java.util.concurrent` was added. Each time the finding was the same
+sentence with a different language in it, and each time it waited on a fixture
+being written by hand.
+
+This asks all six readers at once. It writes a few lines of ordinary source
+per language, runs the pipeline, and reports which surfaces came back. The
+surfaces are the ones every language has: what a file declares as a named
+number, a named string, a vocabulary and a data shape; what it exposes, how it
+fails, what it needs from its environment, and what it loads.
+
+The snippets are plain but they are not invented. Every line is a spelling
+counted in shipped code, because the first version was not, and the difference
+mattered every time:
+
+- PowerShell's row first used `Set-Variable -Option Constant` and an `enum`.
+  `PSDesiredStateConfiguration` contains zero of either across 25 files; it
+  states limits as `$script:MaxComponentDepth = 1024` and vocabularies as
+  `ValidateSet`. A reader built to satisfy the first version would have read
+  nothing real.
+- Java's environment row uses `System.getProperty`, which outnumbers
+  `System.getenv` fifty to nine across the 1,600 files of `java.base` — and
+  every one of those nine passes a variable rather than a literal.
+- PowerShell's import row uses `Import-Module` and a dot-source. Across the
+  155 PowerShell files Windows ships there are 59 of the first and 10 of the
+  second, and zero uses of either `using module` or `#Requires -Modules`,
+  which any manual leads with.
+
+A blank cell is a question rather than a verdict: a language may genuinely
+lack the concept, and the row says which reader to ask. Every blank so far has
+turned out to be a gap, and closing each one has been checked against a real
+corpus rather than against the snippet — `java.base`, zod, the 687 C# files on
+this machine, the modules Windows ships.
+
+It also catches regressions, which was not what it was built for. A new regex
+in the C# reader was called `MEMBER`, shadowing the identifier pattern the
+enum reader splits its members with. Every C# enum vanished. No test failed
+and nothing crashed; a column that had read `yes` for weeks read `no` on the
+next run.
+
+Exit status is zero. This measures where readers disagree; it is not a gate.
+
 ## Role differential: the same code in a different directory
 
 ```
