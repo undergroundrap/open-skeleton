@@ -62,7 +62,7 @@ def _answered(text: str, question: dict[str, Any]) -> bool:
     positions = [
         found
         for subject in (item.casefold() for item in question["subject"])
-        for found in _occurrences(haystack, subject)
+        for found in _occurrences(haystack, subject, whole_word=False)
     ]
     if not positions:
         return False
@@ -73,15 +73,30 @@ def _answered(text: str, question: dict[str, Any]) -> bool:
     return False
 
 
-def _occurrences(haystack: str, needle: str) -> list[int]:
-    """Where a needle appears as its own word, not inside a longer one.
+def _occurrences(haystack: str, needle: str, *, whole_word: bool = True) -> list[int]:
+    """Where a needle appears, optionally as its own word.
 
-    A raw substring search answered "which exception signals a decode
-    failure" with `UnicodeDecodeError`, and would answer "how many retries"
-    with any number containing 10. The boundary is only applied where the
-    needle actually has one: a needle starting or ending in punctuation, like
-    a regular expression or a dotted version, keeps that end open.
+    An answer is bounded. It is a value being asserted, and a raw substring
+    search answered "which exception signals a decode failure" with
+    `UnicodeDecodeError` and would answer "how many retries" with any number
+    containing 10. The boundary is applied only where the needle has one, so a
+    pattern or a dotted version keeps its punctuation end open.
+
+    A subject is not bounded. It only anchors where to look, and requiring an
+    exact word there made `ascension` fail to find `ascensions` -- scoring a
+    claim that held the answer two rows down as unreachable, which sent me
+    looking for a reader that was not missing.
     """
+
+    if not whole_word:
+        found: list[int] = []
+        start = 0
+        while True:
+            index = haystack.find(needle, start)
+            if index < 0:
+                return found
+            found.append(index)
+            start = index + 1
 
     left = r"(?<!\w)" if needle[:1].isalnum() or needle[:1] == "_" else ""
     right = r"(?!\w)" if needle[-1:].isalnum() or needle[-1:] == "_" else ""

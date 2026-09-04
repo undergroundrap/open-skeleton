@@ -29,6 +29,31 @@ DECLARED_VALUE_KEYS = ("tunables", "string_constants", "collection_constants")
 MAX_DECLARED_LINES = 12
 
 
+def _search_terms(text: str) -> str:
+    """The words inside the identifiers in some text, so a question reaches it.
+
+    FTS tokenizes `exceptions.DecodeError` as `exceptions` and `decodeerror`,
+    and `decode` is the word someone asks with. The claim saying
+    `exceptions.DecodeError extends HTTPError, so it is part of this package's
+    error contract` was therefore reachable only by the common word
+    `exception`, and sat at rank 56 of 200 behind everything else that
+    mentioned one.
+
+    Splitting is mechanical: on the separators every language already uses and
+    on case boundaries. The original spelling is indexed too, so an exact name
+    still matches exactly.
+    """
+
+    words: set[str] = set()
+    for part in re.split(r"[^\w]+|_", text):
+        if not part:
+            continue
+        words.add(part.casefold())
+        for word in re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|\d+", part):
+            words.add(word.casefold())
+    return " ".join(sorted(words))
+
+
 def _declared_text(metadata: dict[str, Any]) -> str:
     """The declarations a symbol carries, as text a query can match.
 
@@ -352,7 +377,8 @@ class EvidenceLedger:
                         claim_id UNINDEXED,
                         claim,
                         category,
-                        status
+                        status,
+                        terms
                     )
                     """
                 )
@@ -844,8 +870,10 @@ class EvidenceLedger:
                 )
                 connection.executemany(
                     """
-                    INSERT INTO claim_search(snapshot_id, claim_id, claim, category, status)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO claim_search(
+                        snapshot_id, claim_id, claim, category, status, terms
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         (
@@ -854,6 +882,7 @@ class EvidenceLedger:
                             claim.claim,
                             claim.category,
                             claim.status,
+                            _search_terms(claim.claim),
                         )
                         for claim in result.claims
                     ),
