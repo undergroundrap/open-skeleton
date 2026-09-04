@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
@@ -22,6 +23,8 @@ from open_skeleton.analyzers.powershell_lexical import (
     PowerShellLexicalAnalyzer,
     _blank_noise,
     declared_functions,
+    declared_value_sets,
+    declared_values,
     parameter_blocks,
     publishes_a_module,
     throw_sites,
@@ -186,3 +189,56 @@ class PowerShellPipelineTests(TestCase):
                 index.update(symbol.metadata.get("name_index", {}))
             self.assertIn("Resolve-Tool", index)
             self.assertIn("EvidenceTier", index)
+
+
+class PowerShellDeclaredValueTests(TestCase):
+    """Written against what PowerShell code does, not what the language allows.
+
+    The conformance snippet for this reader first used `Set-Variable -Option
+    Constant` and an `enum`. `PSDesiredStateConfiguration`, which ships with
+    Windows, contains zero of either across 25 files: it states limits as
+    `$script:MaxComponentDepth = 1024` and vocabularies as `ValidateSet`.
+    Building for the manual would have passed my own test and read nothing.
+    """
+
+    SOURCE = (
+        "$script:MaxComponentDepth = 1024\n"
+        '$script:PsDscCompatibleVersion = "2.0.0"\n'
+        "$script:Cache = @{}\n"
+        "# $script:Commented = 5\n"
+        "function Set-Thing {\n"
+        "    param(\n"
+        '        [ValidateSet("Present", "Absent")]\n'
+        "        [String] $Ensure,\n"
+        '        [ValidateSet("", "SHA-1", "SHA-256")]\n'
+        "        [String] $Checksum\n"
+        "    )\n"
+        "}\n"
+    )
+
+    def _values(self) -> dict[str, Any]:
+        return declared_values(self.SOURCE, _blank_noise(self.SOURCE))
+
+    def test_a_numeric_limit_is_recorded(self) -> None:
+        self.assertEqual(self._values()["MaxComponentDepth"]["value"], "1024")
+
+    def test_a_string_value_survives_the_blanking(self) -> None:
+        # Blanking removes a string body and its quotes, so the value comes
+        # from the original at the same offsets. Trimming the match on the
+        # blanked text left the group holding a lone quote.
+        self.assertEqual(self._values()["PsDscCompatibleVersion"]["value"], "2.0.0")
+
+    def test_a_computed_value_is_not_recorded(self) -> None:
+        # `@{}` is a hashtable this reader would have to run a shell to know.
+        self.assertNotIn("Cache", self._values())
+
+    def test_a_variable_in_a_comment_is_not_a_declaration(self) -> None:
+        self.assertNotIn("Commented", self._values())
+
+    def test_validate_set_is_a_vocabulary_named_for_its_parameter(self) -> None:
+        found = declared_value_sets(self.SOURCE, _blank_noise(self.SOURCE))
+        self.assertEqual(found["Ensure"]["members"], ["Present", "Absent"])
+
+    def test_an_empty_member_is_not_a_value(self) -> None:
+        found = declared_value_sets(self.SOURCE, _blank_noise(self.SOURCE))
+        self.assertEqual(found["Checksum"]["members"], ["SHA-1", "SHA-256"])

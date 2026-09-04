@@ -90,12 +90,24 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "public enum Method { Get, Put, Head }\n"
         ),
     ),
+    # Written the way the module Windows ships writes it, not the way the
+    # language permits. The first version of this row used `Set-Variable
+    # -Option Constant` and an `enum`, and `PSDesiredStateConfiguration`
+    # contains zero of either across 25 files: it states limits as
+    # `$script:MaxComponentDepth = 1024` and vocabularies as `ValidateSet`.
+    # A conformance snippet written from the manual would have been satisfied
+    # by a reader that finds nothing real.
     "PowerShell": (
         "policy.ps1",
         (
-            "Set-Variable -Name MaxRetries -Value 10 -Option Constant\n"
-            "$ServiceName = 'checkout'\n"
-            "enum Method { Get; Put; Head }\n"
+            "$script:MaxRetries = 10\n"
+            "$script:ServiceName = 'checkout'\n"
+            "function Set-Thing {\n"
+            "    param(\n"
+            "        [ValidateSet('GET', 'PUT', 'HEAD')]\n"
+            "        [String] $Method\n"
+            "    )\n"
+            "}\n"
         ),
     ),
 }

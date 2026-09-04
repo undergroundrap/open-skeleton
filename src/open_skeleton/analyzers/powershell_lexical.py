@@ -43,6 +43,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from open_skeleton.analyzers.base import declares_a_number
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -163,6 +164,82 @@ def _matching_paren(text: str, opener: int) -> int:
             if not depth:
                 return index + 1
     return -1
+
+
+# The value is captured with its surrounding space rather than trimmed by the
+# pattern. Blanking replaces a string body and its quotes with spaces, so a
+# trimming `\s*` eats the whole value on the blanked text and leaves the group
+# holding one character -- which reads back from the source as a lone quote.
+# The C# reader hit this exact trap an hour earlier; the shape is the same
+# wherever a reader matches on blanked text and reads values from the original.
+SCRIPT_VARIABLE = re.compile(r"\$(?:script|global):(\w+)\s*=([^\r\n#]*)")
+VALIDATE_SET = re.compile(r"\[ValidateSet\(([^)]*)\)\]", re.IGNORECASE)
+SET_MEMBER = re.compile(r"""['"]([^'"]*)['"]""")
+MAX_SET_MEMBERS = 64
+
+
+def declared_values(source: str, clean: str) -> dict[str, dict[str, object]]:
+    """Script-scoped variables holding a literal, with the value.
+
+    Written against what PowerShell code actually does rather than what the
+    language allows. A conformance snippet I wrote for this reader used
+    `Set-Variable -Option Constant` and an `enum`, and the Microsoft module
+    that ships with Windows contains zero of either: it declares its limits as
+    `$script:MaxComponentDepth = 1024` and its vocabularies as `ValidateSet`.
+    Building for the first pair would have satisfied my own test and read
+    nothing real.
+
+    Matching runs against the blanked text so a variable named in a comment is
+    not read as one, and the value is taken from the original at the same
+    offsets, because blanking removes a string's body.
+    """
+
+    found: dict[str, dict[str, object]] = {}
+    for match in SCRIPT_VARIABLE.finditer(clean):
+        if clean[match.start()].isspace():
+            continue
+        raw = source[match.start(2) : match.end(2)].strip().rstrip(";")
+        if not raw:
+            continue
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
+            value = raw[1:-1]
+        elif raw.lstrip("-").replace(".", "", 1).isdigit():
+            value = raw
+        else:
+            # `$script:Cache = @{}` and `$x = Get-Thing` are computed, and a
+            # value this reader would have to run the shell to know is not one
+            # it can state.
+            continue
+        found.setdefault(match.group(1), {"value": value, "line": _line_of(clean, match.start())})
+    return found
+
+
+def declared_value_sets(source: str, clean: str) -> dict[str, dict[str, object]]:
+    """`ValidateSet` vocabularies, which is how PowerShell states a closed set.
+
+    A parameter constrained to `Present` or `Absent` is a declared vocabulary
+    in the same sense as a Rust enum or a Python frozenset, and it is the form
+    every DSC resource in the shipped module uses.
+
+    Named for the parameter the set constrains where that is visible, since a
+    reader wants to know which knob the values belong to rather than that some
+    set exists.
+    """
+
+    found: dict[str, dict[str, object]] = {}
+    for match in VALIDATE_SET.finditer(clean):
+        if clean[match.start()].isspace():
+            continue
+        body = source[match.start(1) : match.end(1)]
+        members = [item for item in SET_MEMBER.findall(body) if item]
+        if not 2 <= len(members) <= MAX_SET_MEMBERS:
+            continue
+        # The parameter this constrains is the next `$Name` in the source.
+        tail = source[match.end() : match.end() + 200]
+        parameter = re.search(r"\$(\w+)", tail)
+        name = parameter.group(1) if parameter else f"ValidateSet@{_line_of(clean, match.start())}"
+        found.setdefault(name, {"members": members, "line": _line_of(clean, match.start())})
+    return found
 
 
 def declared_functions(clean: str) -> dict[str, int]:
@@ -339,6 +416,16 @@ class PowerShellLexicalAnalyzer:
             analyzed += 1
             clean = _blank_noise(source)
             functions = declared_functions(clean)
+            file_values = declared_values(source, clean)
+            file_numbers = {
+                name: entry
+                for name, entry in file_values.items()
+                if declares_a_number(entry["value"])
+            }
+            file_strings = {
+                name: entry for name, entry in file_values.items() if name not in file_numbers
+            }
+            file_sets = declared_value_sets(source, clean)
             blocks = parameter_blocks(clean)
             throws = throw_sites(source, clean)
             lines = source.splitlines()
@@ -365,6 +452,9 @@ class PowerShellLexicalAnalyzer:
                     metadata={
                         "analysis_level": "lexical",
                         **({"name_index": names} if names else {}),
+                        **({"tunables": file_numbers} if file_numbers else {}),
+                        **({"string_constants": file_strings} if file_strings else {}),
+                        **({"collection_constants": file_sets} if file_sets else {}),
                     },
                 )
             )
