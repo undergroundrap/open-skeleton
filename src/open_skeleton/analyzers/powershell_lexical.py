@@ -49,6 +49,7 @@ from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
     CoverageRecord,
+    EdgeRecord,
     EvidenceRecord,
     Snapshot,
     SymbolRecord,
@@ -306,6 +307,84 @@ def throw_sites(source: str, clean: str) -> list[tuple[int, str | None]]:
     return found
 
 
+IMPORT_MODULE = re.compile(r"(?i)(?<![\w-])Import-Module\b(?P<rest>[^\r\n]*)")
+# A dot-source runs another file in this scope, which is what an import is.
+# `.\build.ps1` invokes a script and is a different thing, so the space after
+# the dot is load-bearing rather than formatting.
+# The separator is inside the capture on purpose. `_blank_noise` turns
+# `. "$here\Add-Numbers.ps1"` into a dot followed by a line of spaces, and
+# a greedy `[ \t]+` outside the group then ate the blanked argument whole
+# and reported no import at all. That is the same mistake as trimming a
+# value on the blanked copy, which this reader and the C# one each made
+# once already: the blanking decides where a match is, and the source
+# decides what it says.
+DOT_SOURCE = re.compile(r"(?m)^[ \t]*\.(?P<rest>[ \t][^\r\n]*)")
+PATH_SEPARATORS = ("\\", "/")
+
+
+def _import_target(rest: str) -> str | None:
+    r"""The module or file an `Import-Module` or dot-source names, if it names one.
+
+    Shipped PowerShell writes the argument every way the syntax allows, so
+    each rejection below is a line that exists in Microsoft's own modules:
+    `} | Import-Module -Force` names nothing and is piped its module, and
+    `Import-Module -Name $provpackageapidll` names a variable whose value this
+    reader would have to run the shell to learn. A name is recorded only when
+    the file states one.
+
+    `$PSScriptRoot\..\RunAsHelper.psm1` is kept as written -- it is the most
+    common form in that corpus, and it does name one specific file, relative
+    to a directory the shell fixes rather than computes.
+    """
+
+    parts = rest.strip().split()
+    if not parts:
+        return None
+    if parts[0].lower() == "-name":
+        parts = parts[1:]
+    if not parts or parts[0].startswith("-"):
+        return None
+    candidate = parts[0].strip("'\"").rstrip(";)}").strip("'\"")
+    if not candidate:
+        return None
+    # A bare `$module` is a name held in a variable. A path built on
+    # `$PSScriptRoot` is not: the prefix is fixed and the rest is literal.
+    if candidate.startswith("$") and not any(sep in candidate for sep in PATH_SEPARATORS):
+        return None
+    return candidate
+
+
+def imported_modules(source: str, clean: str) -> list[tuple[str, int]]:
+    """`(target, line)` for every module or file this one loads.
+
+    Matching runs on the blanked copy, so `import-module` inside a sentence of
+    documentation is not a load -- Microsoft's own `Pester` help text contains
+    exactly that sentence. The argument is then read from the original at the
+    same offsets, because blanking empties a quoted path.
+    """
+
+    found: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for pattern in (IMPORT_MODULE, DOT_SOURCE):
+        for match in pattern.finditer(clean):
+            rest = source[match.start("rest") : match.end("rest")]
+            target = _import_target(rest)
+            if target is None:
+                continue
+            if pattern is DOT_SOURCE and not any(
+                target.lower().endswith(suffix) for suffix in (".ps1", ".psm1")
+            ):
+                # A dot followed by anything else is arithmetic, a range or a
+                # method call at the start of a line. Only a script file is a
+                # load, and a dot-source of one always names it.
+                continue
+            entry = (target, _line_of(clean, match.start()))
+            if entry not in seen:
+                seen.add(entry)
+                found.append(entry)
+    return sorted(found, key=lambda item: (item[1], item[0]))
+
+
 EXPORT_MEMBER = re.compile(r"(?i)\bExport-ModuleMember\b")
 
 
@@ -353,6 +432,7 @@ class PowerShellLexicalAnalyzer:
         started = time.perf_counter()
         created_at = utc_now()
         symbols: list[SymbolRecord] = []
+        edges: list[EdgeRecord] = []
         evidence: list[EvidenceRecord] = []
         claims: list[ClaimRecord] = []
         failures: list[str] = []
@@ -477,6 +557,24 @@ class PowerShellLexicalAnalyzer:
                     )
                 )
 
+            for target, line in imported_modules(source, clean):
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge",
+                            (snapshot.snapshot_id, file_record.path, "imports", target, line),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=None,
+                        source_path=file_record.path,
+                        relationship="imports",
+                        target_ref=target,
+                        target_symbol_id=None,
+                        evidence_id=None,
+                        analyzer=ANALYZER_VERSION,
+                    )
+                )
+
             if not describes_the_product(file_record.role):
                 continue
 
@@ -577,7 +675,7 @@ class PowerShellLexicalAnalyzer:
             created_at=created_at,
             duration_ms=round((time.perf_counter() - started) * 1000),
             symbols=tuple(symbols),
-            edges=(),
+            edges=tuple(edges),
             evidence=tuple(evidence),
             claims=tuple(claims),
             coverage=(coverage,),

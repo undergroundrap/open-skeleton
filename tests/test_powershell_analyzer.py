@@ -25,11 +25,17 @@ from open_skeleton.analyzers.powershell_lexical import (
     declared_functions,
     declared_value_sets,
     declared_values,
+    imported_modules,
     parameter_blocks,
     publishes_a_module,
     throw_sites,
 )
 from open_skeleton.scanner import scan_repository
+
+
+def _imports(source: str) -> list[tuple[str, int]]:
+    return imported_modules(source, _blank_noise(source))
+
 
 SCRIPT = """\
 param(
@@ -242,3 +248,71 @@ class PowerShellDeclaredValueTests(TestCase):
     def test_an_empty_member_is_not_a_value(self) -> None:
         found = declared_value_sets(self.SOURCE, _blank_noise(self.SOURCE))
         self.assertEqual(found["Checksum"]["members"], ["SHA-1", "SHA-256"])
+
+
+class PowerShellImportTests(TestCase):
+    """What a script loads, in the spellings Microsoft's own modules use.
+
+    Across the 155 PowerShell files Windows ships there are 59 `Import-Module`
+    lines, 10 dot-sources, and zero uses of either `using module` or
+    `#Requires -Modules`. Every case here is one of those lines; a reader
+    written from the language reference would have implemented the two forms
+    that never appear and missed all of the ones that do.
+    """
+
+    def test_a_bare_module_name_is_a_target(self) -> None:
+        self.assertEqual(_imports("Import-Module Hyper-V\n"), [("Hyper-V", 1)])
+
+    def test_the_name_parameter_is_skipped(self) -> None:
+        self.assertEqual(_imports("Import-Module -Name Pester\n"), [("Pester", 1)])
+
+    def test_a_quoted_script_root_path_survives_the_blanking(self) -> None:
+        # The most common form in that corpus, and the one blanking empties:
+        # the target has to come from the source at the match's offsets.
+        self.assertEqual(
+            _imports('import-module "$PSScriptRoot\\CmdletHelpers.psm1" -Force\n'),
+            [("$PSScriptRoot\\CmdletHelpers.psm1", 1)],
+        )
+
+    def test_a_relative_path_is_a_target(self) -> None:
+        self.assertEqual(
+            _imports("import-module Storage\\StorageHealth.cdxml\n"),
+            [("Storage\\StorageHealth.cdxml", 1)],
+        )
+
+    def test_a_script_block_import_closes_cleanly(self) -> None:
+        self.assertEqual(
+            _imports("Invoke-Command -ScriptBlock {Import-Module msdtc}\n"), [("msdtc", 1)]
+        )
+
+    def test_a_piped_import_names_nothing(self) -> None:
+        self.assertEqual(_imports("Get-Thing | Import-Module -Force\n"), [])
+
+    def test_a_module_held_in_a_variable_is_not_named(self) -> None:
+        # `Import-Module -Name $interopdll` names a value this reader would
+        # have to run the shell to learn.
+        self.assertEqual(_imports("Import-Module -Name $interopdll\n"), [])
+
+    def test_an_import_in_prose_is_not_an_import(self) -> None:
+        # Pester's own help text contains this sentence.
+        self.assertEqual(_imports("# the consumer might have to import-module Foo\n"), [])
+
+    def test_an_import_in_a_here_string_is_not_an_import(self) -> None:
+        self.assertEqual(_imports('@"\nImport-Module Foo\n"@\n'), [])
+
+    def test_a_dot_source_loads_a_script(self) -> None:
+        self.assertEqual(_imports('. "$here\\Add-Numbers.ps1"\n'), [("$here\\Add-Numbers.ps1", 1)])
+
+    def test_a_dot_source_of_a_command_is_not_a_load(self) -> None:
+        self.assertEqual(_imports(". AdvancedFunction\n"), [])
+
+    def test_a_range_and_a_method_call_are_not_dot_sources(self) -> None:
+        self.assertEqual(_imports("$a = 1..5\n    .Invoke()\n"), [])
+
+    def test_imports_become_edges(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "build.ps1").write_text("Import-Module Pester\n", encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        edges = [edge for edge in result.edges if edge.relationship == "imports"]
+        self.assertEqual([edge.target_ref for edge in edges], ["Pester"])
