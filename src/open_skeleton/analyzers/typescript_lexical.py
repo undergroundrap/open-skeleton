@@ -1170,6 +1170,68 @@ def _value_constants(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _literal_unions(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Vocabularies declared as a union of string literals.
+
+    `type HashEncoding = "hex" | "base64" | "base64url"` is how TypeScript
+    spells an enumeration, and it is the same declaration a Python module
+    makes with a frozenset: a closed set of values the program will accept.
+    The Python reader records those and this one recorded nothing, so a
+    library whose whole subject is validation could state a vocabulary in
+    every file and have none of it reported.
+
+    Only unions written entirely out of string literals. `"a" | string` is a
+    type that happens to include a literal, not a vocabulary, and reporting
+    its one member as the whole set would state something false about what
+    the program accepts. Two members are required for the same reason a
+    single-form value set is not a contract: one literal is a constant.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    depth = 0
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind == "punctuation" and token.value in {"{", "("}:
+            depth += 1
+            continue
+        if token.kind == "punctuation" and token.value in {"}", ")"}:
+            depth = max(0, depth - 1)
+            continue
+        # Module scope only. A type declared inside a function or a namespace
+        # body is local to it, and this makes no claim about one.
+        if depth or token.kind != "identifier" or token.value != "type":
+            continue
+        if index + 2 >= total:
+            continue
+        name = tokens[index + 1]
+        if name.kind != "identifier" or tokens[index + 2].value != "=":
+            continue
+
+        members: list[str] = []
+        cursor = index + 3
+        expecting_member = True
+        while cursor < total:
+            current = tokens[cursor]
+            if current.kind == "punctuation" and current.value == ";":
+                break
+            if current.kind == "punctuation" and current.value == "|":
+                # A leading `|` before the first member is idiomatic when the
+                # union is wrapped across lines.
+                expecting_member = True
+                cursor += 1
+                continue
+            if current.kind == "string" and expecting_member:
+                members.append(current.value)
+                expecting_member = False
+                cursor += 1
+                continue
+            members = []
+            break
+        if len(members) >= 2:
+            found[name.value] = {"members": members, "line": name.line}
+    return found
+
+
 def _server_receivers(tokens: list[Token]) -> set[str]:
     """Names bound to something that serves requests.
 
@@ -1780,6 +1842,7 @@ class TypeScriptLexicalAnalyzer:
             file_servers = _server_receivers(file_tokens)
             file_tunables = _tunables(file_tokens)
             file_values = _value_constants(file_tokens)
+            file_unions = _literal_unions(file_tokens)
             file_exports = _exported_names(file_tokens)
             file_clients = {
                 name
@@ -1837,6 +1900,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"object_keys": file_object_keys} if file_object_keys else {}),
                         **({"tunables": file_tunables} if file_tunables else {}),
                         **({"string_constants": file_values} if file_values else {}),
+                        **({"collection_constants": file_unions} if file_unions else {}),
                         **({"name_index": file_name_index} if file_name_index else {}),
                     },
                 )

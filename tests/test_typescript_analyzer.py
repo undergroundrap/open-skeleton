@@ -18,6 +18,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _exported_names,
     _external_origins,
     _imported_names,
+    _literal_unions,
     _module_names,
     _module_state,
     _object_keys,
@@ -888,3 +889,42 @@ class FunctionDeclarationScopeTests(TestCase):
         source = "export const LIMIT: number = 9;\nfunction f() {\n  const scratch = 1;\n}\n"
         found = _tunables(_tokens(source))
         self.assertEqual(sorted(found), ["LIMIT"])
+
+
+class LiteralUnionTests(TestCase):
+    """A union of string literals is how TypeScript spells an enumeration.
+
+    The Python reader records a vocabulary declared as a frozenset and this
+    one recorded nothing, so a validation library could state a closed set of
+    accepted values in every file and have none of it reported. zod declares
+    fourteen that were invisible, including which JSON Schema drafts it emits
+    and which hash algorithms it accepts.
+    """
+
+    def _read(self, source: str) -> dict[str, Any]:
+        return _literal_unions(_tokens(source))
+
+    def test_a_union_of_literals_is_a_vocabulary(self) -> None:
+        found = self._read('export type HashEncoding = "hex" | "base64" | "base64url";\n')
+        self.assertEqual(found["HashEncoding"]["members"], ["hex", "base64", "base64url"])
+
+    def test_a_union_wrapped_across_lines_reads_the_same(self) -> None:
+        # The leading `|` is idiomatic once a union no longer fits on a line.
+        found = self._read('type Multi =\n  | "x"\n  | "y";\n')
+        self.assertEqual(found["Multi"]["members"], ["x", "y"])
+
+    def test_a_union_that_is_not_all_literals_is_not_read(self) -> None:
+        # `"a" | string` accepts every string. Reporting `a` as the whole set
+        # would state something false about what the program accepts.
+        self.assertEqual(self._read('export type Mixed = "a" | string;\n'), {})
+        self.assertEqual(self._read("type T = Foo | Bar;\n"), {})
+
+    def test_one_literal_is_a_constant_not_a_vocabulary(self) -> None:
+        self.assertEqual(self._read('type One = "only";\n'), {})
+
+    def test_a_type_declared_inside_a_function_is_local_to_it(self) -> None:
+        self.assertEqual(self._read('function f() { type Local = "a" | "b"; }\n'), {})
+
+    def test_the_declaration_line_is_recorded(self) -> None:
+        found = self._read('\n\nexport type IPVersion = "v4" | "v6";\n')
+        self.assertEqual(found["IPVersion"]["line"], 3)
