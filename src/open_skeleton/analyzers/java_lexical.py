@@ -31,6 +31,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.analyzers.base import declares_a_number
 from open_skeleton.ids import stable_id
@@ -483,6 +484,10 @@ class JavaMember:
     # path lives: `@GetMapping("/health")`. Empty when an annotation takes no
     # arguments or takes no string.
     annotation_arguments: tuple[tuple[str, str], ...] = ()
+    # The type a field was declared with, rendered from its own tokens:
+    # `Map<String,Integer>`, `int[]`, `java.io.File`. Empty for a method,
+    # whose return type this reader has no use for yet.
+    declared_type: str = ""
 
 
 def declared_members(tokens: list[Token]) -> list[JavaMember]:
@@ -583,6 +588,13 @@ def _classify(tokens: list[Token], head: list[int], owner: str) -> JavaMember | 
             if first_string is not None:
                 arguments.append((token.value, first_string))
     head = rest
+    # Everything after `=` initializes the declaration rather than declaring
+    # anything, and `new Cart()` in that position was being read as a
+    # parameter list.
+    for offset, index in enumerate(head):
+        if tokens[index].kind == "punctuation" and tokens[index].value == "=":
+            head = head[:offset]
+            break
     modifiers = [
         tokens[index].value
         for index in head
@@ -615,15 +627,16 @@ def _classify(tokens: list[Token], head: list[int], owner: str) -> JavaMember | 
         for index in head
         if tokens[index].kind == "identifier" and tokens[index].value not in MODIFIERS
     ]
-    if len(names) < 2:
-        return None
-    for offset, index in enumerate(head):
-        if tokens[index].kind == "punctuation" and tokens[index].value == "=":
-            names = [item for item in names if item < head[offset]]
-            break
+    # The head already ends before any `=`, so every name here is part of the
+    # declaration.
     if len(names) < 2:
         return None
     last = tokens[names[-1]]
+    # The type is what sits between the first word that is not a modifier and
+    # the name: every token, punctuation included, so `Map<String,Integer>`
+    # and `int[]` survive. Joined without spaces, the way the Rust reader
+    # renders a struct field, because one panel draws both.
+    declared = "".join(tokens[index].value for index in head if names[0] <= index < names[-1])[:80]
     return JavaMember(
         owner=owner,
         name=last.value,
@@ -632,6 +645,7 @@ def _classify(tokens: list[Token], head: list[int], owner: str) -> JavaMember | 
         modifiers=tuple(modifiers),
         annotations=tuple(annotations),
         annotation_arguments=tuple(arguments),
+        declared_type=declared,
     )
 
 
@@ -823,8 +837,8 @@ def enum_constants(tokens: list[Token]) -> list[tuple[str, str, int]]:
     return found
 
 
-def record_components(tokens: list[Token]) -> list[tuple[str, str, int]]:
-    """Every record component, as (owning record, component, line).
+def record_components(tokens: list[Token]) -> list[tuple[str, str, str, int]]:
+    """Every record component, as (owning record, component, type, line).
 
     A record's components are its public accessors: `record Point(int x, int
     y)` publishes `x()` and `y()`, and renaming one breaks every caller. They
@@ -833,7 +847,7 @@ def record_components(tokens: list[Token]) -> list[tuple[str, str, int]]:
     declare and nothing of what it is for.
     """
 
-    found: list[tuple[str, str, int]] = []
+    found: list[tuple[str, str, str, int]] = []
     position = 0
     total = len(tokens)
     while position < total:
@@ -860,30 +874,90 @@ def record_components(tokens: list[Token]) -> list[tuple[str, str, int]]:
             continue
         owner = tokens[position + 1].value
         depth = 0
+        # Every token of the component, not only its identifiers: the type is
+        # the part before the name, and `List<String>` loses its meaning if
+        # the punctuation is dropped on the way past.
         group: list[Token] = []
+
+        def component(collected: list[Token], record: str = owner) -> None:
+            if not collected or collected[-1].kind != "identifier":
+                return
+            last = collected[-1]
+            declared = "".join(item.value for item in collected[:-1])[:80]
+            found.append((record, last.value, declared, last.line))
+
         while cursor < total:
             current = tokens[cursor]
             if current.kind == "punctuation" and current.value in {"(", "<"}:
                 depth += 1
+                if depth > 1:
+                    group.append(current)
             elif current.kind == "punctuation" and current.value in {")", ">"}:
                 depth -= 1
                 if depth == 0:
                     # The component's name is the last identifier of its
                     # declaration, after the type and any generic arguments.
-                    if group and group[-1].kind == "identifier":
-                        found.append((owner, group[-1].value, group[-1].line))
+                    component(group)
                     break
+                group.append(current)
             elif current.kind == "punctuation" and current.value == "," and depth == 1:
-                if group and group[-1].kind == "identifier":
-                    found.append((owner, group[-1].value, group[-1].line))
+                component(group)
                 group = []
                 cursor += 1
                 continue
-            elif depth >= 1 and current.kind == "identifier":
+            elif depth >= 1 and (current.kind == "identifier" or current.kind == "punctuation"):
                 group.append(current)
             cursor += 1
         position = cursor + 1
     return found
+
+
+def declared_shapes(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """What each declared type holds, in the shape `model_fields` already has.
+
+    Python annotates a class and Rust names a struct's fields; Java writes the
+    same fact as a record header or a set of instance fields, and this reader
+    counted both for the public surface and then discarded the types. A
+    document that names `Order` without saying it holds an identifier and a
+    total describes a container by its label.
+
+    A `static` field is excluded. It belongs to the class rather than to any
+    instance, so it is a constant or shared state -- both already reported --
+    and putting it here would describe a shape nobody constructs.
+
+    `required` is set only where the language settles it. A record component
+    must be supplied at construction. An instance field's requirement depends
+    on which constructors exist, so it is left unstated rather than guessed:
+    the panel renders an absent requirement as a dash.
+    """
+
+    bases = {item.name.rsplit(".", 1)[-1]: list(item.supertypes) for item in declared_types(tokens)}
+    fields: dict[str, list[dict[str, Any]]] = {}
+    first_line: dict[str, int] = {}
+
+    for owner, name, declared, line in record_components(tokens):
+        fields.setdefault(owner, []).append(
+            {"name": name, "annotation": declared, "required": True, "line": line}
+        )
+        first_line.setdefault(owner, line)
+
+    for member in declared_members(tokens):
+        if member.kind != "field" or "static" in member.modifiers or not member.declared_type:
+            continue
+        fields.setdefault(member.owner, []).append(
+            {"name": member.name, "annotation": member.declared_type, "line": member.line}
+        )
+        first_line.setdefault(member.owner, member.line)
+
+    return {
+        owner: {
+            "fields": declared,
+            "line": first_line[owner],
+            "bases": bases.get(owner, []),
+        }
+        for owner, declared in fields.items()
+        if declared
+    }
 
 
 ANALYZER_NAME = "java-lexical"
@@ -1155,6 +1229,7 @@ class JavaLexicalAnalyzer:
                 package = package_name(tokens)
                 imports = imported_types(tokens)
                 file_enums = declared_enums(tokens)
+                file_shapes = declared_shapes(tokens)
                 file_constants = declared_constants(tokens)
                 file_strings = {
                     name: entry
@@ -1182,7 +1257,7 @@ class JavaLexicalAnalyzer:
             # One symbol per file to carry what the file declares. Every other
             # reader has one and this did not, so a Java package's vocabularies
             # and constants had nowhere to live even once they were read.
-            if file_enums or file_constants or file_strings:
+            if file_enums or file_constants or file_strings or file_shapes:
                 symbols.append(
                     SymbolRecord(
                         symbol_id=stable_id(
@@ -1201,6 +1276,7 @@ class JavaLexicalAnalyzer:
                             **({"tunables": file_constants} if file_constants else {}),
                             **({"collection_constants": file_enums} if file_enums else {}),
                             **({"string_constants": file_strings} if file_strings else {}),
+                            **({"model_fields": file_shapes} if file_shapes else {}),
                         },
                     )
                 )
@@ -1283,7 +1359,7 @@ class JavaLexicalAnalyzer:
                     # and record as exposing whatever else it happened to
                     # declare, which for most of them is nothing at all.
                     implicit = sum(1 for owner, _, _ in constants if owner == simple)
-                    implicit += sum(1 for owner, _, _ in components if owner == simple)
+                    implicit += sum(1 for owner, _, _, _ in components if owner == simple)
                     exposed = [
                         member
                         for member in members

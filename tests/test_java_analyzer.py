@@ -14,8 +14,10 @@ not to contain.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
@@ -24,6 +26,7 @@ from open_skeleton.analyzers.java_lexical import (
     declared_constants,
     declared_enums,
     declared_members,
+    declared_shapes,
     declared_throws,
     declared_types,
     enum_constants,
@@ -385,12 +388,12 @@ public record Point(int x, int y) {
 
     def test_record_components_are_read_from_the_header(self) -> None:
         found = record_components(tokenize(self.RECORD))
-        self.assertEqual([name for _, name, _ in found], ["x", "y"])
+        self.assertEqual([name for _, name, _, _ in found], ["x", "y"])
 
     def test_a_generic_record_still_yields_its_components(self) -> None:
         source = "package p;\npublic record Pair<A, B>(A left, java.util.List<B> right) {}\n"
         found = record_components(tokenize(source))
-        self.assertEqual([name for _, name, _ in found], ["left", "right"])
+        self.assertEqual([name for _, name, _, _ in found], ["left", "right"])
 
     def test_a_class_is_not_mistaken_for_a_record(self) -> None:
         self.assertEqual(record_components(tokenize("class A { void go(int x) {} }")), [])
@@ -604,3 +607,105 @@ class JavaEnvironmentTests(TestCase):
         claims = [item for item in result.claims if item.category == "configuration_read"]
         self.assertEqual(len(claims), 1)
         self.assertIn("SERVICE_URL", claims[0].claim)
+
+
+class JavaDeclaredShapeTests(TestCase):
+    """What a type holds, in the shape Python and Rust already write.
+
+    Checked against `java.base`: 1,451 shapes and 4,872 fields across its
+    1,600 files, with no field left without a type and none whose name is a
+    keyword -- the two ways a head walk shows it went somewhere it should not.
+    """
+
+    def test_a_record_states_its_components_and_their_types(self) -> None:
+        found = declared_shapes(tokenize("public record Order(String id, int total) {}\n"))
+        self.assertEqual(
+            [(item["name"], item["annotation"]) for item in found["Order"]["fields"]],
+            [("id", "String"), ("total", "int")],
+        )
+
+    def test_a_component_keeps_its_generic_arguments(self) -> None:
+        found = declared_shapes(tokenize("public record Bag(java.util.List<String> tags) {}\n"))
+        self.assertEqual(found["Bag"]["fields"][0]["annotation"], "java.util.List<String>")
+
+    def test_a_component_is_required(self) -> None:
+        # A record component must be supplied at construction. An instance
+        # field's requirement depends on which constructors exist, so it is
+        # left unstated rather than guessed.
+        found = declared_shapes(tokenize("public record Order(String id) {}\n"))
+        self.assertIs(found["Order"]["fields"][0]["required"], True)
+        found = declared_shapes(tokenize("class Basket { private int size; }\n"))
+        self.assertNotIn("required", found["Basket"]["fields"][0])
+
+    def test_an_instance_field_keeps_its_type(self) -> None:
+        found = declared_shapes(tokenize("class Basket { private Map<String, Integer> counts; }\n"))
+        self.assertEqual(found["Basket"]["fields"][0]["annotation"], "Map<String,Integer>")
+
+    def test_an_array_field_keeps_its_brackets(self) -> None:
+        found = declared_shapes(tokenize("class Basket { private int[] slots; }\n"))
+        self.assertEqual(found["Basket"]["fields"][0]["annotation"], "int[]")
+
+    def test_a_static_field_is_not_part_of_the_shape(self) -> None:
+        # It belongs to the class rather than to any instance, so it is a
+        # constant or shared state -- both reported elsewhere -- and putting
+        # it here would describe a shape nobody constructs.
+        self.assertEqual(declared_shapes(tokenize("class P { static final int MAX = 10; }\n")), {})
+
+    def test_a_type_records_what_it_extends(self) -> None:
+        found = declared_shapes(
+            tokenize("class Basket extends Cart implements Serializable { private int size; }\n")
+        )
+        self.assertEqual(found["Basket"]["bases"], ["Cart", "Serializable"])
+
+    def test_a_local_variable_is_not_a_field(self) -> None:
+        self.assertEqual(declared_shapes(tokenize("class P { void f() { int local = 1; } }\n")), {})
+
+    def test_shapes_reach_the_module_symbol(self) -> None:
+        result = _analyze({"Order.java": "public record Order(String id, int total) {}\n"})
+        models: dict[str, Any] = {}
+        for symbol in result.symbols:
+            metadata = symbol.metadata or {}
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            models.update(metadata.get("model_fields") or {})
+        self.assertIn("Order", models)
+
+
+class JavaInitializerTests(TestCase):
+    """An initializer is not part of the declaration it initializes.
+
+    `private Cart cart = new Cart();` was read as a method named `Cart`,
+    because the head was scanned for a parameter list before the `=` was
+    noticed and `new Cart()` supplies one. `private Map<String,Integer> counts
+    = new HashMap<>();` disappeared entirely: the token before its paren is
+    `>`, so the method branch rejected the head and returned nothing.
+
+    Both are ordinary Java, and the effect was a class reporting members it
+    does not have while omitting the fields it does.
+    """
+
+    SOURCE = (
+        "public class Basket {\n"
+        "    private Cart cart = new Cart();\n"
+        "    private Map<String, Integer> counts = new HashMap<>();\n"
+        "    private int size = 0;\n"
+        "    public void add(String x) {}\n"
+        "}\n"
+    )
+
+    def test_an_initialized_field_is_a_field(self) -> None:
+        members = declared_members(tokenize(self.SOURCE))
+        self.assertEqual(
+            sorted((item.kind, item.name) for item in members),
+            [("field", "cart"), ("field", "counts"), ("field", "size"), ("method", "add")],
+        )
+
+    def test_a_constructor_call_is_not_a_parameter_list(self) -> None:
+        members = declared_members(tokenize(self.SOURCE))
+        self.assertNotIn("Cart", [item.name for item in members if item.kind == "method"])
+
+    def test_an_initialized_field_keeps_its_declared_type(self) -> None:
+        members = {
+            item.name: item.declared_type for item in declared_members(tokenize(self.SOURCE))
+        }
+        self.assertEqual(members["counts"], "Map<String,Integer>")

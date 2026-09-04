@@ -53,6 +53,11 @@ SNIPPETS: dict[str, tuple[str, str]] = {
         (
             "import json\n"
             "\n"
+            "@dataclass\n"
+            "class Order:\n"
+            "    identifier: str\n"
+            "    total: int\n"
+            "\n"
             "MAX_RETRIES = 10\n"
             'SERVICE_NAME = "checkout"\n'
             'ALLOWED_METHODS = frozenset(["GET", "PUT", "HEAD"])\n'
@@ -67,6 +72,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
         "policy.ts",
         (
             'import fs from "node:fs";\n'
+            "export interface Order { identifier: string; total: number }\n"
             "export const MAX_RETRIES: number = 10;\n"
             'export const SERVICE_NAME: string = "checkout";\n'
             'export type Method = "GET" | "PUT" | "HEAD";\n'
@@ -78,6 +84,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
         "policy.rs",
         (
             "use std::io;\n"
+            "pub struct Order { pub identifier: String, pub total: u32 }\n"
             "pub const MAX_RETRIES: u32 = 10;\n"
             'pub const SERVICE_NAME: &str = "checkout";\n'
             "pub enum Method { Get, Put, Head }\n"
@@ -91,6 +98,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
         "Policy.java",
         (
             "import java.util.List;\n"
+            "public record Order(String identifier, int total) {}\n"
             "public class Policy {\n"
             "    public static final int MAX_RETRIES = 10;\n"
             '    public static final String SERVICE_NAME = "checkout";\n'
@@ -107,6 +115,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
         (
             "using System;\n"
             "namespace Service;\n"
+            "public record Order(string Identifier, int Total);\n"
             "public class Policy {\n"
             "    public const int MaxRetries = 10;\n"
             '    public const string ServiceName = "checkout";\n'
@@ -129,6 +138,10 @@ SNIPPETS: dict[str, tuple[str, str]] = {
         "policy.ps1",
         (
             "Import-Module Foo\n"
+            "class Order {\n"
+            "    [string] $Identifier\n"
+            "    [int] $Total\n"
+            "}\n"
             "$script:MaxRetries = 10\n"
             "$script:ServiceName = 'checkout'\n"
             "function Set-Thing {\n"
@@ -144,7 +157,11 @@ SNIPPETS: dict[str, tuple[str, str]] = {
     ),
 }
 
-VALUE_SURFACES = ("tunables", "string_constants", "collection_constants")
+# `model_fields` is what a type holds, which is what a person means when they
+# ask a repository for its types: not the list of names, which any grep
+# produces, but the contents. Python and Rust wrote it and the rest declared
+# the shape and reported only its label.
+VALUE_SURFACES = ("tunables", "string_constants", "collection_constants", "model_fields")
 
 # A module exposes something, fails somehow, and depends on something. Each is
 # as universal as a named constant, and each is reported by some readers and
