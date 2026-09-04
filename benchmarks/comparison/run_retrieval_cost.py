@@ -47,6 +47,8 @@ from open_skeleton.ledger import EvidenceLedger
 
 WINDOW = 400
 QUERY_LIMIT = 10
+# Used only to ask whether a missed answer was in the index at all.
+DEEP_LIMIT = 200
 # Characters per token, roughly, for English prose and identifiers. Used only
 # to put the byte counts in a unit the reader is paying in; every conclusion
 # here holds on the raw bytes too.
@@ -72,14 +74,34 @@ def _answered(text: str, question: dict[str, Any]) -> bool:
 
 
 def _occurrences(haystack: str, needle: str) -> list[int]:
-    found: list[int] = []
-    start = 0
-    while True:
-        index = haystack.find(needle, start)
-        if index < 0:
-            return found
-        found.append(index)
-        start = index + 1
+    """Where a needle appears as its own word, not inside a longer one.
+
+    A raw substring search answered "which exception signals a decode
+    failure" with `UnicodeDecodeError`, and would answer "how many retries"
+    with any number containing 10. The boundary is only applied where the
+    needle actually has one: a needle starting or ending in punctuation, like
+    a regular expression or a dotted version, keeps that end open.
+    """
+
+    left = r"(?<!\w)" if needle[:1].isalnum() or needle[:1] == "_" else ""
+    right = r"(?!\w)" if needle[-1:].isalnum() or needle[-1:] == "_" else ""
+    pattern = re.compile(left + re.escape(needle) + right)
+    return [match.start() for match in pattern.finditer(haystack)]
+
+
+def _depth(lines: list[str], question: dict[str, Any]) -> int | None:
+    """Rows an agent must read before the answer is in hand, or None.
+
+    Counted by reading down the result the way a caller does, rather than
+    scoring the whole block at once: a question answered by the first row and
+    one answered by the twentieth cost different amounts and used to score the
+    same.
+    """
+
+    for index in range(1, len(lines) + 1):
+        if _answered("\n".join(lines[:index]), question):
+            return index
+    return None
 
 
 def _query(question: dict[str, Any]) -> str:
@@ -121,6 +143,8 @@ def main() -> int:
     answered = 0
     total_cost = 0
     unanswered: list[str] = []
+    ranked_out: list[str] = []
+    depths: list[int] = []
     for question in payload["questions"]:
         query = _query(question)
         rows = ledger.search_claims(snapshot_id, query, limit=QUERY_LIMIT)
@@ -136,9 +160,34 @@ def main() -> int:
                 for line in symbol["declares"].splitlines()
             ]
         )
-        total_cost += len(rendered)
-        if _answered(rendered, question):
+        lines = rendered.splitlines()
+        # How far down an agent reads before it has the answer. It stops
+        # there, so the cost of a question is the text above the answer and
+        # not the whole result.
+        depth = _depth(lines, question)
+        if depth is not None:
             answered += 1
+            depths.append(depth)
+            total_cost += len("\n".join(lines[:depth]))
+            continue
+
+        total_cost += len(rendered)
+        # The same query, far deeper. If the answer is there it was ranked
+        # out, which is a scoring problem; if it is not, nothing indexed it,
+        # which is a reading problem. The two need opposite work and the
+        # answered count alone cannot tell them apart.
+        deep_rows = ledger.search_claims(snapshot_id, query, limit=DEEP_LIMIT)
+        deep_declared = ledger.search_declarations(snapshot_id, query, limit=DEEP_LIMIT)
+        deep = "\n".join(
+            [str(row.get("claim", "")) for row in deep_rows]
+            + [
+                f"{symbol['qualified_name']}: {line}  ({symbol['path']})"
+                for symbol in deep_declared
+                for line in symbol["declares"].splitlines()
+            ]
+        )
+        if _answered(deep, question):
+            ranked_out.append(str(question["id"]))
         else:
             unanswered.append(str(question["id"]))
 
@@ -158,8 +207,14 @@ def main() -> int:
         print(
             f"whole source         {source_size:,} characters ({source_size / max(1, average):,.0f}x)"
         )
+    if depths:
+        print(f"rows read to answer  {sum(depths) / len(depths):.1f} average, {max(depths)} worst")
+    if ranked_out:
+        print(
+            f"\nranked out (in the index, below the cut): {', '.join(ranked_out[: arguments.show])}"
+        )
     if unanswered:
-        print(f"\nnot answered by query: {', '.join(unanswered[: arguments.show])}")
+        print(f"not indexed at all: {', '.join(unanswered[: arguments.show])}")
     print()
     return 0
 

@@ -36,6 +36,22 @@ FILE_REFERENCE = re.compile(
 )
 
 
+def _occurrences(haystack: str, needle: str) -> list[int]:
+    """Where a needle appears as its own word, not inside a longer one.
+
+    A raw substring search answered "which exception signals a decode
+    failure" with `UnicodeDecodeError`, and would answer "how many retries"
+    with any number containing 10. The boundary is only applied where the
+    needle actually has one: a needle starting or ending in punctuation, like
+    a regular expression or a dotted version, keeps that end open.
+    """
+
+    left = r"(?<!\w)" if needle[:1].isalnum() or needle[:1] == "_" else ""
+    right = r"(?!\w)" if needle[-1:].isalnum() or needle[-1:] == "_" else ""
+    pattern = re.compile(left + re.escape(needle) + right)
+    return [match.start() for match in pattern.finditer(haystack)]
+
+
 def _score(document: str, question: dict[str, Any]) -> tuple[bool, bool]:
     """Return (answered, cited) for one question against one document."""
 
@@ -44,25 +60,13 @@ def _score(document: str, question: dict[str, Any]) -> tuple[bool, bool]:
     # and again beside its answer would otherwise anchor only to the contents.
     positions: list[int] = []
     for subject in (item.casefold() for item in question["subject"]):
-        start = 0
-        while True:
-            found = haystack.find(subject, start)
-            if found < 0:
-                break
-            positions.append(found)
-            start = found + 1
+        positions.extend(_occurrences(haystack, subject))
     if not positions:
         return False, False
 
     answered = False
     for answer in question["answers"]:
-        needle = answer.casefold()
-        start = 0
-        while True:
-            found = haystack.find(needle, start)
-            if found < 0:
-                break
-            start = found + 1
+        for found in _occurrences(haystack, answer.casefold()):
             # The answer must sit near a mention of what was asked about,
             # otherwise a stray number anywhere in the document would count.
             if not any(abs(found - anchor) <= WINDOW for anchor in positions):
