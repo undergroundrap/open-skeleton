@@ -712,6 +712,87 @@ def _module_names(paths: Iterable[str]) -> dict[str, str]:
     return resolved
 
 
+MAX_ENUM_VARIANTS = 64
+
+
+def _declared_enums(tokens: list[Token]) -> dict[str, dict[str, Any]]:
+    """Enum variants, which are how Rust declares a closed set of values.
+
+    A Python module states a vocabulary with a frozenset and TypeScript with a
+    union of string literals; both are read. Rust states one with an enum and
+    none of it was read at all, so a command-line parser could declare its
+    entire error vocabulary, its argument actions and its colour modes and the
+    specification would report none of them. Seven of nine unanswered
+    questions on the first Rust fixture were exactly this.
+
+    A variant carrying a payload is still a variant: `Io(std::io::Error)` and
+    `Custom { code: i32 }` name members of the set, and the payload is the
+    shape of one member rather than another member. Only the names are taken.
+
+    Two variants are required, for the same reason one literal is a constant
+    rather than a vocabulary.
+    """
+
+    templates = _macro_body_spans(tokens)
+    found: dict[str, dict[str, Any]] = {}
+    total = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value != "enum":
+            continue
+        if index + 2 >= total or any(start < index < end for start, end in templates):
+            continue
+        name = tokens[index + 1]
+        if name.kind != "identifier":
+            continue
+        # Step over any generic parameter list before the body.
+        cursor = index + 2
+        if tokens[cursor].value == "<":
+            depth = 0
+            while cursor < total:
+                if tokens[cursor].value == "<":
+                    depth += 1
+                elif tokens[cursor].value == ">":
+                    depth -= 1
+                    if depth == 0:
+                        cursor += 1
+                        break
+                cursor += 1
+        if cursor >= total or tokens[cursor].value != "{":
+            continue
+
+        variants: list[str] = []
+        depth = 0
+        expecting = True
+        while cursor < total:
+            current = tokens[cursor]
+            if current.kind == "punctuation" and current.value in {"{", "(", "["}:
+                depth += 1
+                cursor += 1
+                continue
+            if current.kind == "punctuation" and current.value in {"}", ")", "]"}:
+                depth -= 1
+                cursor += 1
+                if depth == 0:
+                    break
+                continue
+            # Only at the enum body's own depth. A field inside a struct-like
+            # variant is part of that variant, not a member beside it.
+            if depth == 1:
+                if current.kind == "punctuation" and current.value == ",":
+                    expecting = True
+                elif current.kind == "identifier" and expecting and current.value != "pub":
+                    variants.append(current.value)
+                    expecting = False
+                elif current.kind == "punctuation" and current.value == "#":
+                    # An attribute such as `#[non_exhaustive]` sits where a
+                    # variant would; skipping its brackets is handled by depth.
+                    expecting = True
+            cursor += 1
+        if 2 <= len(variants) <= MAX_ENUM_VARIANTS:
+            found[name.value] = {"members": variants, "line": name.line}
+    return found
+
+
 def _declared_items(tokens: list[Token]) -> list[tuple[str, str, int]]:
     """`(kind, name, line)` for the items a file actually declares.
 
@@ -1383,6 +1464,7 @@ class RustLexicalAnalyzer:
             file_call_sites = _call_sites(tokens)
             declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
             file_constants = _constants(tokens)
+            file_enums = _declared_enums(tokens)
             file_structs = _struct_fields(tokens)
             if file_flags and describes_the_product(file_record.role):
                 first_flag_line = min(file_flags.values())
@@ -1433,6 +1515,7 @@ class RustLexicalAnalyzer:
                         **({"name_index": file_names} if file_names else {}),
                         **({"tunables": file_constants} if file_constants else {}),
                         **({"model_fields": file_structs} if file_structs else {}),
+                        **({"collection_constants": file_enums} if file_enums else {}),
                     },
                 )
             )

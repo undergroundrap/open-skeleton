@@ -1,0 +1,121 @@
+{
+  "fixture": "clap_builder",
+  "fixture_version": "4.6.6",
+  "fixture_root": "~/.cargo/registry/src/index.crates.io-*/clap_builder-4.6.6",
+  "provenance": "Every answer was read out of clap_builder 4.6.6's own Rust source and is cited to the file and line it came from. None came from a specification this engine produced. The crate is a published dependency nobody here wrote, taken from the local cargo registry.",
+  "shape": "The fourth fixture and the first in Rust, which is the language this engine reads least well: its call edges carry no receiver, so nothing binds them, and its guards have been fixed twice without ever being scored. It is also a fourth kind of program -- a command-line argument parser, so its subject is an error vocabulary, a set of argument actions, and the exit codes it hands back to a shell.",
+  "questions": [
+    {
+      "id": "C01",
+      "question": "What exit code does the parser return for a usage error?",
+      "answers": ["2"],
+      "subject": ["exit", "usage", "code"],
+      "kind": "tunable",
+      "source": "src/util/mod.rs:32 pub(crate) const USAGE_CODE: i32 = 2"
+    },
+    {
+      "id": "C02",
+      "question": "What exit code is returned on success?",
+      "answers": ["0"],
+      "subject": ["exit", "success", "code"],
+      "kind": "tunable",
+      "source": "src/util/mod.rs:26 pub(crate) const SUCCESS_CODE: i32 = 0"
+    },
+    {
+      "id": "C03",
+      "question": "Which error kind covers a value outside the set a flag allows?",
+      "answers": ["InvalidValue"],
+      "subject": ["error", "kind", "value"],
+      "kind": "failure-surface",
+      "source": "src/error/kind.rs ErrorKind::InvalidValue"
+    },
+    {
+      "id": "C04",
+      "question": "Which error kind covers an argument the parser does not recognise?",
+      "answers": ["UnknownArgument"],
+      "subject": ["error", "kind", "unknown", "argument"],
+      "kind": "failure-surface",
+      "source": "src/error/kind.rs ErrorKind::UnknownArgument"
+    },
+    {
+      "id": "C05",
+      "question": "Which error kind is raised when two arguments cannot be used together?",
+      "answers": ["ArgumentConflict"],
+      "subject": ["conflict", "error", "kind"],
+      "kind": "failure-surface",
+      "source": "src/error/kind.rs ErrorKind::ArgumentConflict"
+    },
+    {
+      "id": "C06",
+      "question": "How many error kinds does the crate define?",
+      "answers": ["17"],
+      "subject": ["error", "kind"],
+      "kind": "inventory",
+      "source": "src/error/kind.rs declares 17 ErrorKind variants, InvalidUtf8 among them at line 256. First recorded here as 16: the pattern used to count them stopped at a digit and skipped that one name. The engine's disagreement is what prompted the recheck, and the source settled it."
+    },
+    {
+      "id": "C07",
+      "question": "Which argument action counts repetitions of a flag?",
+      "answers": ["Count"],
+      "subject": ["action", "argument"],
+      "kind": "policy",
+      "source": "src/builder/action.rs ArgAction::Count"
+    },
+    {
+      "id": "C08",
+      "question": "Which argument action collects every occurrence rather than replacing?",
+      "answers": ["Append"],
+      "subject": ["action", "argument"],
+      "kind": "policy",
+      "source": "src/builder/action.rs ArgAction::Append"
+    },
+    {
+      "id": "C09",
+      "question": "How many argument actions are available?",
+      "answers": ["9"],
+      "subject": ["action", "argument"],
+      "kind": "inventory",
+      "source": "src/builder/action.rs declares 9 ArgAction variants"
+    },
+    {
+      "id": "C10",
+      "question": "How many characters does the help writer reserve for a short flag?",
+      "answers": ["4"],
+      "subject": ["short", "help", "size"],
+      "kind": "tunable",
+      "source": "src/output/help_template.rs:78 const SHORT_SIZE: usize = 4"
+    },
+    {
+      "id": "C11",
+      "question": "Which colour choices can output use?",
+      "answers": ["Always"],
+      "subject": ["color", "colour", "choice"],
+      "kind": "policy",
+      "source": "src/util/color.rs ColorChoice::Auto, Always, Never"
+    },
+    {
+      "id": "C12",
+      "question": "What message does the crate print when it hits an internal error?",
+      "answers": ["Fatal internal error"],
+      "subject": ["internal", "error", "bug"],
+      "kind": "failure-surface",
+      "source": "src/lib.rs:48 INTERNAL_ERROR_MSG"
+    },
+    {
+      "id": "C13",
+      "question": "How many Rust source files does the crate hold?",
+      "answers": ["57"],
+      "subject": ["file", "Rust", "source"],
+      "kind": "inventory",
+      "source": "57 .rs files under src/"
+    },
+    {
+      "id": "C14",
+      "question": "What is this crate's version?",
+      "answers": ["4.6.6"],
+      "subject": ["version", "clap"],
+      "kind": "inventory",
+      "source": "Cargo.toml:16 version = \"4.6.6\""
+    }
+  ]
+}

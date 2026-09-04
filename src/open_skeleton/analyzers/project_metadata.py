@@ -893,6 +893,65 @@ class ProjectMetadataAnalyzer:
                 )
             )
 
+        def declare_version(
+            document: dict[str, Any],
+            file_record: FileRecord,
+            manifest_evidence: EvidenceRecord,
+        ) -> None:
+            """Emit the version a manifest states for the package it describes.
+
+            Every ecosystem has one and every reader wants it -- "what version
+            is this" is among the first questions asked of an unfamiliar
+            dependency -- and this reader already parsed the manifest that
+            carries it. `Cargo.toml` states 4.6.6 for a crate whose
+            specification could not say what version it described.
+
+            The package's own version only. A dependency's version is a
+            different fact about a different package, and the dependency
+            inventory carries those.
+            """
+
+            # Each ecosystem nests it differently and some callers pass the
+            # table rather than the document, so every place it is spelled is
+            # tried rather than assuming one shape.
+            tool = document.get("tool")
+            candidates = [
+                document.get("package"),
+                document.get("project"),
+                tool.get("poetry") if isinstance(tool, dict) else None,
+                document,
+            ]
+            version = None
+            for section in candidates:
+                if isinstance(section, dict) and isinstance(section.get("version"), str):
+                    version = section["version"]
+                    break
+            if not isinstance(version, str) or not version.strip():
+                return
+            text = (
+                f"`{file_record.path}` declares this package's own version as "
+                f"`{version}`. Dependency versions are a separate inventory."
+            )
+            claims.append(
+                ClaimRecord(
+                    claim_id=stable_id(
+                        "claim",
+                        (snapshot.snapshot_id, "declared_version", text, ANALYZER_VERSION),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    claim=text,
+                    category="declared_version",
+                    status="verified",
+                    confidence=1.0,
+                    importance="medium",
+                    produced_by=ANALYZER_VERSION,
+                    created_at=created_at,
+                    verified_at=created_at,
+                    supporting_evidence=(manifest_evidence.evidence_id,),
+                    invalidation_keys=(f"file:{file_record.path}",),
+                )
+            )
+
         package_names: set[str] = set()
         manifest_receipts: list[str] = []
         for file_record in eligible:
@@ -994,6 +1053,7 @@ class ProjectMetadataAnalyzer:
                 )
                 manifest_receipts.append(manifest_evidence.evidence_id)
                 declare_license(crate, "Cargo.toml", file_record, manifest_evidence)
+                declare_version(crate, file_record, manifest_evidence)
                 symbol_id = stable_id(
                     "symbol",
                     (
@@ -1110,6 +1170,7 @@ class ProjectMetadataAnalyzer:
                 manifest_receipts.append(manifest_evidence.evidence_id)
                 commands = _declared_commands(project, "pyproject.toml")
                 declare_license(project, "pyproject.toml", file_record, manifest_evidence)
+                declare_version(project, file_record, manifest_evidence)
                 if commands:
                     named = ", ".join(f"`{name}` (`{target}`)" for name, target in commands)
                     command_text = (

@@ -74,7 +74,11 @@ def _declared_text(metadata: dict[str, Any]) -> str:
                 continue
             if "members" in entry:
                 members = entry.get("members") or []
-                value = ", ".join(str(item) for item in members)
+                # The size, then the members. The panel has shown a member
+                # count since it was written and this text left it out, so
+                # "how many error kinds are there" could not be answered from
+                # a vocabulary whose every member was recorded.
+                value = f"{len(members)} member(s): " + ", ".join(str(item) for item in members)
             else:
                 value = str(entry.get("value", ""))
             parts.append(f"{name} = {value}" if value else str(name))
