@@ -37,8 +37,9 @@ import hashlib
 import re
 import time
 from pathlib import Path
+from typing import Any
 
-from open_skeleton.analyzers.base import declares_a_number
+from open_skeleton.analyzers.base import declares_a_number, render_declared_type
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -301,6 +302,149 @@ def environment_reads(source: str, clean: str) -> list[tuple[str, int]]:
     return found
 
 
+# A type declaration, with or without an access modifier: a nested type is
+# often `private class` and a top-level one in a file-scoped namespace often
+# has none at all.
+CONTAINER = re.compile(
+    r"\b(?:(?:public|internal|protected|private|sealed|static|abstract|partial|readonly|ref|unsafe)\s+)*"
+    rf"(?P<kind>{TYPE_KEYWORDS})\s+(?P<name>\w+)"
+)
+# A field or property: modifiers, a type, a name, and then whatever ends the
+# declaration -- `;` for a field, `{` for a property, `=` for either with an
+# initializer. `(` is deliberately absent, since that is a method.
+#
+# Named for the shape rather than called `MEMBER`, which this file already
+# uses for the identifier pattern the enum reader splits its members with.
+# Shadowing it made every C# enum vanish, and the parity table said so in one
+# run: a column that had read `yes` for weeks read `no`.
+SHAPE_MEMBER = re.compile(
+    r"\b(?:(?P<access>public|internal|protected|private)\s+)?"
+    r"(?P<modifiers>(?:(?:static|readonly|volatile|const|required|new|unsafe|event|abstract|virtual|override|sealed|extern|partial)\s+)*)"
+    rf"(?!(?:{TYPE_KEYWORDS}|return|new|throw|await|using|namespace|else|case)\b)"
+    r"(?P<type>[\w.<>\[\],?]+)\s+(?P<name>\w+)\s*(?P<tail>[{=;])"
+)
+NOT_A_TYPE_NAME = frozenset({"var", "return", "new", "await", "yield", "throw", "using"})
+EXCLUDED_MODIFIERS = frozenset({"static", "const"})
+
+
+def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
+    """What each declared type holds, in the shape `model_fields` already has.
+
+    Only the blanked copy is read. Every name and every type here is an
+    identifier, so nothing a comment or a string holds can be one, and the
+    original text has nothing this reader needs.
+
+    Membership is decided by brace depth, the way the Java reader decides it: a
+    member sits directly in its type's body, and a local variable inside a
+    method body sits one level deeper and looks identical to a field from a
+    regex's point of view. Without the depth, every `var count = 0` in every
+    method would be reported as part of the type.
+
+    A `static` or `const` member is excluded. It belongs to the type rather
+    than to any instance, is already reported as a constant or as shared
+    state, and listing it here would describe a shape nobody constructs.
+
+    A positional record states its components in its header, and each must be
+    supplied at construction; a field's requirement depends on which
+    constructors exist, so it is left unstated rather than guessed.
+    """
+
+    fields: dict[str, list[dict[str, Any]]] = {}
+    first_line: dict[str, int] = {}
+
+    def add(owner: str, entry: dict[str, Any]) -> None:
+        fields.setdefault(owner, []).append(entry)
+        first_line.setdefault(owner, int(entry["line"]))
+
+    containers = {match.start(): match for match in CONTAINER.finditer(clean)}
+    members = {match.start(): match for match in SHAPE_MEMBER.finditer(clean)}
+
+    stack: list[tuple[str, int]] = []
+    pending: str | None = None
+    depth = 0
+    position = 0
+    length = len(clean)
+    while position < length:
+        container = containers.get(position)
+        if container is not None:
+            pending = container.group("name")
+            after = _record_components(clean, container.end())
+            for name, declared, line in after:
+                add(pending, {"name": name, "annotation": declared, "required": True, "line": line})
+            position = container.end()
+            continue
+
+        member = members.get(position)
+        if member is not None and stack and depth == stack[-1][1]:
+            modifiers = set(member.group("modifiers").split())
+            declared = member.group("type")
+            if not (modifiers & EXCLUDED_MODIFIERS) and declared not in NOT_A_TYPE_NAME:
+                add(
+                    stack[-1][0],
+                    {
+                        "name": member.group("name"),
+                        "annotation": render_declared_type([declared]),
+                        "line": _line_of(clean, member.start("name")),
+                    },
+                )
+            # One short of the end: the tail is `;`, `=` or the `{` that opens
+            # a property body, and the depth counter below has to see it.
+            position = member.end() - 1
+            continue
+
+        character = clean[position]
+        if character == "{":
+            depth += 1
+            if pending is not None:
+                stack.append((pending, depth))
+                pending = None
+        elif character == "}":
+            while stack and stack[-1][1] > depth:
+                stack.pop()
+            depth -= 1
+            while stack and stack[-1][1] > depth:
+                stack.pop()
+        elif character == ";":
+            pending = None
+        position += 1
+
+    return {
+        owner: {"fields": members_found, "line": first_line[owner], "bases": []}
+        for owner, members_found in fields.items()
+        if members_found
+    }
+
+
+def _record_components(clean: str, start: int) -> list[tuple[str, str, int]]:
+    """Components of a positional record, if the type name is followed by one.
+
+    `record Order(string Identifier, int Total);` states its whole shape in the
+    header, exactly as a Java record does. A class's parameter list at this
+    position would be a primary constructor, which declares the same thing.
+    """
+
+    cursor = start
+    while cursor < len(clean) and clean[cursor] in " \t":
+        cursor += 1
+    if cursor >= len(clean) or clean[cursor] != "(":
+        return []
+    closing = clean.find(")", cursor)
+    if closing < 0:
+        return []
+    found: list[tuple[str, str, int]] = []
+    for part in clean[cursor + 1 : closing].split(","):
+        words = part.split()
+        if len(words) < 2:
+            continue
+        # A default value makes the component optional to write and does not
+        # change what the record holds, so only the type and the name matter.
+        declared, name = words[-2], words[-1].split("=")[0].strip()
+        if not name.isidentifier():
+            continue
+        found.append((name, render_declared_type([declared]), _line_of(clean, cursor)))
+    return found
+
+
 def throw_sites(source: str, clean: str) -> list[tuple[str | None, str | None, int]]:
     """`(exception type, literal message, line)` for every throw.
 
@@ -422,6 +566,7 @@ class CSharpLexicalAnalyzer:
             members = public_members(clean)
             throws = throw_sites(source, clean)
             settings = environment_reads(source, clean)
+            file_shapes = declared_shapes(clean)
 
             module = namespace or Path(file_record.path).stem
             names: dict[str, int] = {}
@@ -464,6 +609,7 @@ class CSharpLexicalAnalyzer:
                         **({"tunables": file_numbers} if file_numbers else {}),
                         **({"string_constants": file_strings} if file_strings else {}),
                         **({"collection_constants": file_enums} if file_enums else {}),
+                        **({"model_fields": file_shapes} if file_shapes else {}),
                     },
                 )
             )

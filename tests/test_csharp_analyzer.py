@@ -11,6 +11,7 @@ that makes a lexical analyzer safe: it must not be fooled by its own text.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -23,6 +24,7 @@ from open_skeleton.analyzers.csharp_lexical import (
     declared_constants,
     declared_enums,
     declared_namespace,
+    declared_shapes,
     declared_types,
     environment_reads,
     imported_namespaces,
@@ -297,3 +299,97 @@ class CSharpEnvironmentTests(TestCase):
         claims = [item for item in result.claims if item.category == "configuration_read"]
         self.assertEqual(len(claims), 1)
         self.assertIn("SERVICE_URL", claims[0].claim)
+
+
+class CSharpShapeTests(TestCase):
+    """What a declared type holds.
+
+    Written against the 687 C# files on this machine, which are Unity: 678
+    classes, 4 structs, one record. Checked against them too -- 601 shapes and
+    2,771 fields, with no field named for a control word and no empty type.
+    The three that trip the keyword screen are all a field genuinely called
+    `value`, which is a contextual keyword and a legal name.
+    """
+
+    def _shapes(self, source: str) -> dict[str, Any]:
+        return declared_shapes(blank_noise(source))
+
+    def test_a_field_keeps_its_type(self) -> None:
+        found = self._shapes("class Creature { private float speed; }\n")
+        self.assertEqual(
+            [(item["name"], item["annotation"]) for item in found["Creature"]["fields"]],
+            [("speed", "float")],
+        )
+
+    def test_a_property_is_part_of_the_shape(self) -> None:
+        found = self._shapes("class Creature { public string Name { get; set; } }\n")
+        self.assertEqual(found["Creature"]["fields"][0]["name"], "Name")
+
+    def test_a_field_after_a_property_is_not_lost(self) -> None:
+        # A property body opens a brace, and the scan used to jump past it.
+        # The depth counter never saw it, saw its `}` a moment later, and read
+        # the rest of the class one level too shallow -- so every field after
+        # the first property went missing.
+        found = self._shapes(
+            "class Creature {\n"
+            "  public string Name { get; set; }\n"
+            "  public List<Item> Items = new List<Item>();\n"
+            "  public Vector3 position;\n"
+            "}\n"
+        )
+        self.assertEqual(
+            [item["name"] for item in found["Creature"]["fields"]],
+            ["Name", "Items", "position"],
+        )
+
+    def test_a_positional_record_states_its_components(self) -> None:
+        found = self._shapes("public record Order(string Identifier, int Total);\n")
+        self.assertEqual(
+            [(item["name"], item["annotation"]) for item in found["Order"]["fields"]],
+            [("Identifier", "string"), ("Total", "int")],
+        )
+        self.assertIs(found["Order"]["fields"][0]["required"], True)
+
+    def test_a_constant_is_not_part_of_the_shape(self) -> None:
+        self.assertEqual(self._shapes("class P { public const int Max = 10; }\n"), {})
+
+    def test_a_static_field_is_not_part_of_the_shape(self) -> None:
+        self.assertEqual(self._shapes("class P { private static int counter; }\n"), {})
+
+    def test_a_local_variable_is_not_a_field(self) -> None:
+        # Without the depth guard every `var count = 0` in every method body
+        # would be reported as part of the type.
+        self.assertEqual(
+            self._shapes("class P { public void Run() { var local = 0; int other = 1; } }\n"), {}
+        )
+
+    def test_a_nested_type_holds_its_own_fields(self) -> None:
+        found = self._shapes("class Outer { private class Inner { public int depth; } }\n")
+        self.assertEqual([item["name"] for item in found["Inner"]["fields"]], ["depth"])
+
+    def test_enums_still_read(self) -> None:
+        # The shape reader's member pattern was first called `MEMBER`, which
+        # this file already uses for the identifier pattern the enum reader
+        # splits on. Shadowing it made every C# enum vanish, and the parity
+        # table reported it in one run.
+        self.assertEqual(
+            declared_enums(blank_noise("public enum Method { Get, Put, Head }\n"))["Method"][
+                "members"
+            ],
+            ["Get", "Put", "Head"],
+        )
+
+    def test_shapes_reach_the_module_symbol(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Order.cs").write_text(
+                "namespace S;\npublic record Order(string Identifier);\n", encoding="utf-8"
+            )
+            result = analyze_snapshot(scan_repository(root))
+        models: dict[str, Any] = {}
+        for symbol in result.symbols:
+            metadata = symbol.metadata or {}
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            models.update(metadata.get("model_fields") or {})
+        self.assertIn("Order", models)
