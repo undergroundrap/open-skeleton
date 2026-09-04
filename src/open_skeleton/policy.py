@@ -362,6 +362,14 @@ TEST_SCOPED_CATEGORIES = {
     "failure_surface": "test_failure_surface",
     "ui_state": "test_ui_state",
     "error_surface": "test_error_surface",
+    # Found the same way, once the differential was pointed at a second
+    # language. A `sys.exit(1)` in a benchmark is the harness reporting its
+    # own result, not the program's exit contract -- this repository filed
+    # two of them as delivery behaviour. A non-final static field in a test
+    # is the suite's shared state; `java.util.concurrent` relocated under
+    # `tests/` reported two as the program's.
+    "process_termination": "test_process_termination",
+    "process_local_state": "test_process_local_state",
 }
 
 # A benchmark is not a test. `EXERCISING_ROLES` already warns that conflating
