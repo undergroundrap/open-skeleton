@@ -1355,6 +1355,84 @@ def _string_constants(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return found
 
 
+COLLECTION_BUILDERS = frozenset({"frozenset", "set", "tuple", "list"})
+MAX_COLLECTION_MEMBERS = 24
+
+
+def _literal_collection(node: ast.expr | None) -> list[str] | None:
+    """The members of a collection written entirely out of literals.
+
+    `frozenset(["HEAD", "GET", "PUT"])` and `("HEAD", "GET")` are the same
+    declaration wearing different syntax, so the builder call is unwrapped and
+    both are read. Anything computed is not read at all: a comprehension, a
+    name, or a call returning a collection is a value this reader would have
+    to execute to know, and guessing it would put a vocabulary in the document
+    that the program never has.
+    """
+
+    if isinstance(node, ast.Call):
+        name = _expr_name(node.func) or ""
+        if name.rsplit(".", 1)[-1] not in COLLECTION_BUILDERS or len(node.args) != 1:
+            return None
+        node = node.args[0]
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return None
+    members: list[str] = []
+    for element in node.elts:
+        if not isinstance(element, ast.Constant) or isinstance(element.value, bool):
+            return None
+        if not isinstance(element.value, (str, int, float)):
+            return None
+        members.append(str(element.value))
+    return members or None
+
+
+def _collection_constants(tree: ast.Module) -> dict[str, dict[str, Any]]:
+    """Named collections of literals, with their members.
+
+    A vocabulary is as much a declaration as a number or a string, and it is
+    usually the more consequential one: urllib3 states which methods it will
+    retry, which statuses honour `Retry-After`, and which headers it strips
+    across a redirect, entirely as frozensets. A question set scored against
+    that library's source missed all three, because no surface carried a
+    collection.
+
+    The value-set concordance already joins a vocabulary declared in two
+    different forms, and deliberately reports nothing when it appears in one.
+    That is the right rule for a join and leaves a single declaration
+    invisible, which is what this records.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+
+    def collect(body: list[ast.stmt], prefix: str) -> None:
+        for statement in body:
+            targets: list[ast.expr]
+            if isinstance(statement, ast.AnnAssign):
+                targets = [statement.target] if statement.value is not None else []
+                value: ast.expr | None = statement.value
+            elif isinstance(statement, ast.Assign):
+                targets, value = list(statement.targets), statement.value
+            else:
+                continue
+            members = _literal_collection(value)
+            if members is None or len(members) > MAX_COLLECTION_MEMBERS:
+                continue
+            for name in (n for target in targets for n in _assigned_names(target)):
+                # `__all__` is already reported as the public surface, with the
+                # consequence of changing it spelled out. Repeating it here as
+                # an anonymous list of strings would say less, twice.
+                if name == "__all__":
+                    continue
+                found.setdefault(f"{prefix}{name}", {"members": members, "line": statement.lineno})
+
+    collect(tree.body, "")
+    for statement in tree.body:
+        if isinstance(statement, ast.ClassDef):
+            collect(statement.body, f"{statement.name}.")
+    return found
+
+
 def _imported_names(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """Which names each module contributes, not merely that it was imported.
 
@@ -1680,6 +1758,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         self.model_fields = _model_fields(tree)
         self.imported_names = _imported_names(tree)
         self.string_constants = _string_constants(tree)
+        self.collection_constants = _collection_constants(tree)
         self.embedded_literals = _embedded_literals(tree)
         self.value_sets = _declared_value_sets(tree)
         cli_options, cli_positionals = _declared_cli_flags(tree)
@@ -2728,6 +2807,8 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             payload["imported_names"] = self.imported_names
         if self.string_constants:
             payload["string_constants"] = self.string_constants
+        if self.collection_constants:
+            payload["collection_constants"] = self.collection_constants
         if self.embedded_literals:
             payload["embedded_literals"] = self.embedded_literals
         if self.signatures:

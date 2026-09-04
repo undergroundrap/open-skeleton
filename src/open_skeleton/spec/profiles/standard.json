@@ -2934,7 +2934,8 @@
           "concern": "Named string values the system compares and dispatches on.",
           "framing": "The tunable index carries numbers because a number is obviously a dial. A named string is one too, and a reader who cannot see its value cannot match the constant to the data it meets at runtime.",
           "panels": [
-            "string_constants"
+            "string_constants",
+            "collection_constants"
           ]
         },
         {

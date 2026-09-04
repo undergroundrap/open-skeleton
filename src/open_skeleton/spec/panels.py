@@ -613,6 +613,48 @@ def _string_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
     )
 
 
+def _collection_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
+    """Named collections of literals, with their members.
+
+    The tunable index carries numbers and the string-constant panel carries
+    strings. A vocabulary was carried by neither, and it is often the most
+    consequential of the three: which methods a client will retry, which
+    statuses honour `Retry-After`, which headers are stripped across a
+    redirect. urllib3 states all three as frozensets, and a question set
+    scored against its source missed every one.
+    """
+
+    rows: list[tuple[str, ...]] = []
+    for symbol in symbols:
+        constants = symbol.get("metadata", {}).get("collection_constants") or {}
+        for name, entry in sorted(constants.items()):
+            members = [str(item) for item in entry.get("members") or ()]
+            rows.append(
+                (
+                    name,
+                    str(len(members)),
+                    ", ".join(f"`{item}`" for item in members),
+                    f"{symbol['path']}:{entry.get('line', 1)}",
+                )
+            )
+    rows.sort(key=lambda row: (row[3], row[0]))
+    return Panel(
+        name="collection_constants",
+        title="Declared vocabularies",
+        columns=("Name", "Members", "Values", "Declared at"),
+        alignments=("left", "right", "left", "left"),
+        rows=tuple(rows[:MAX_TUNABLES]),
+        note=(
+            "Collections written entirely out of literals, at module scope or "
+            "in a class body. A set built by a comprehension, or from names "
+            "resolved elsewhere, is computed rather than declared and does not "
+            "appear: reading it would mean running the program. A vocabulary "
+            "stated in two different forms is joined separately, in the "
+            "value-set concordance."
+        ),
+    )
+
+
 def _imported_names(symbols: tuple[dict[str, Any], ...]) -> Panel:
     """Which names each dependency actually contributes.
 
@@ -1564,6 +1606,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _embedded_literals(context.symbols)
     if name == "string_constants":
         return _string_constants(context.symbols)
+    if name == "collection_constants":
+        return _collection_constants(context.symbols)
     if name == "imported_names":
         return _imported_names(context.symbols)
     if name == "payload_shapes":

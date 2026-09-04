@@ -192,6 +192,7 @@ Values and behaviour — decisions written into the code:
 |---|---|
 | `tunable_index` | Named numeric constants, module-level and per instance |
 | `string_constants` | Named string values the system compares against |
+| `collection_constants` | Named vocabularies written out of literals: which methods retry, which statuses are honoured |
 | `embedded_literals` | Numbers hardcoded inside function bodies, which nothing else indexes |
 | `failure_surface` | Raises recorded inside route handler bodies |
 

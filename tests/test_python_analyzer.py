@@ -12,8 +12,10 @@ from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.python_ast import (
+    MAX_COLLECTION_MEMBERS,
     PythonAstAnalyzer,
     _caught_families,
+    _collection_constants,
     _control_flow,
     _declared_cli_flags,
     _defined_exceptions,
@@ -1709,3 +1711,64 @@ class RefusalMessageTests(TestCase):
         raised = [event for event in events if event["kind"] == "raise"]
         self.assertEqual(raised[0]["label"], "HTTP 404")
         self.assertEqual(raised[0]["message"], "Player not found")
+
+
+class DeclaredVocabularyTests(TestCase):
+    """A named collection of literals is a declaration, not a computation.
+
+    urllib3 states which methods it retries, which statuses honour
+    `Retry-After` and which headers it strips across a redirect entirely as
+    frozensets on a class. A question set scored against that library's source
+    missed all three, because the tunable index carries numbers, the string
+    panel carries strings, and nothing carried a vocabulary.
+    """
+
+    def _read(self, source: str) -> dict[str, Any]:
+        return _collection_constants(ast.parse(source))
+
+    def test_a_frozenset_of_strings_is_read_with_its_members(self) -> None:
+        found = self._read("ALLOWED = frozenset(['HEAD', 'GET', 'PUT'])\n")
+        self.assertEqual(found["ALLOWED"]["members"], ["HEAD", "GET", "PUT"])
+
+    def test_the_builder_call_is_not_required(self) -> None:
+        # The same declaration wearing different syntax.
+        for source, name in (
+            ("CODES = [413, 429, 503]\n", "CODES"),
+            ("CODES = (413, 429, 503)\n", "CODES"),
+            ("CODES = {413, 429, 503}\n", "CODES"),
+            ("CODES = set([413, 429, 503])\n", "CODES"),
+        ):
+            self.assertEqual(self._read(source)[name]["members"], ["413", "429", "503"])
+
+    def test_a_class_body_vocabulary_is_named_for_its_class(self) -> None:
+        source = "class Retry:\n    METHODS = frozenset(['GET'])\n"
+        found = self._read(source)
+        self.assertIn("Retry.METHODS", found)
+        self.assertNotIn("METHODS", found)
+
+    def test_a_computed_collection_is_not_read(self) -> None:
+        # Reading one would mean running the program, and a guessed
+        # vocabulary is worse than none: it looks like a declaration.
+        for source in (
+            "NAMES = [item.upper() for item in source]\n",
+            "NAMES = list(OTHER_NAMES)\n",
+            "NAMES = frozenset(compute())\n",
+            "NAMES = ['a', OTHER]\n",
+        ):
+            self.assertEqual(self._read(source), {})
+
+    def test_public_surface_is_not_repeated_here(self) -> None:
+        # `__all__` is already reported with the consequence of changing it
+        # spelled out. Repeating it as an anonymous list of strings says less.
+        self.assertEqual(self._read("__all__ = ['run', 'stop']\n"), {})
+
+    def test_booleans_are_not_members(self) -> None:
+        self.assertEqual(self._read("FLAGS = [True, False]\n"), {})
+
+    def test_a_collection_too_large_to_read_is_left_out(self) -> None:
+        members = ", ".join(str(index) for index in range(MAX_COLLECTION_MEMBERS + 1))
+        self.assertEqual(self._read(f"BIG = [{members}]\n"), {})
+
+    def test_the_line_it_was_declared_on_is_recorded(self) -> None:
+        found = self._read("\n\nCODES = [1, 2]\n")
+        self.assertEqual(found["CODES"]["line"], 3)
