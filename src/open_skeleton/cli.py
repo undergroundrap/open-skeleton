@@ -900,13 +900,29 @@ def _audit(args: argparse.Namespace) -> int:
 
 
 def _search(args: argparse.Namespace) -> int:
+    """Answer a question from the ledger, in as few words as it takes.
+
+    Claims say what this engine concluded. Declarations say what the source
+    states outright -- a retry limit, a validation pattern, a vocabulary --
+    and searching only the first answered 4 of 16 questions on a library whose
+    subject is almost entirely declared values. Both are searched, and the
+    declarations are printed with the file and line so an answer can be
+    checked rather than trusted.
+    """
+
     ledger, snapshot_id = _ledger_and_snapshot(args)
     results = ledger.search_claims(snapshot_id, args.query, limit=args.limit)
+    declarations = ledger.search_declarations(snapshot_id, args.query, limit=args.limit)
     if args.json:
-        print(json.dumps(results, indent=2, sort_keys=True))
-    else:
-        for claim in results:
-            print(f"[{claim['status']}] {claim['claim']}")
+        print(
+            json.dumps({"claims": results, "declarations": declarations}, indent=2, sort_keys=True)
+        )
+        return 0
+    for claim in results:
+        print(f"[{claim['status']}] {claim['claim']}")
+    for symbol in declarations:
+        for line in symbol["declares"].splitlines():
+            print(f"[declared] {symbol['qualified_name']}: {line}  ({symbol['path']})")
     return 0
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -16,6 +17,61 @@ from open_skeleton.ids import stable_id
 from open_skeleton.models import AnalysisResult, Snapshot, utc_now
 
 SCHEMA_VERSION = "4"
+
+# Metadata keys holding a name a caller might search for, mapped to a value
+# they might search for it by. Deliberately a list rather than "everything in
+# metadata": a name index or a signature map holds thousands of entries per
+# module and would bury the declared values under its own bulk, which is the
+# same mistake as printing the whole document when asked one question.
+DECLARED_VALUE_KEYS = ("tunables", "string_constants", "collection_constants")
+# Lines returned per symbol. A query answers a question; it does not hand
+# over a file.
+MAX_DECLARED_LINES = 12
+
+
+def _declared_text(metadata: dict[str, Any]) -> str:
+    """The declarations a symbol carries, as text a query can match.
+
+    A retry default, a validation pattern and a vocabulary are all recorded on
+    the module symbol and none of them was searchable. `Retry.DEFAULT_BACKOFF_MAX`
+    was in the export, in a panel, and unreachable by any query an agent could
+    write -- which is the difference between holding an answer and delivering
+    one.
+    """
+
+    parts: list[str] = []
+    for key in DECLARED_VALUE_KEYS:
+        entries = metadata.get(key) or {}
+        if not isinstance(entries, dict):
+            continue
+        for name, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            if "members" in entry:
+                members = entry.get("members") or []
+                value = ", ".join(str(item) for item in members)
+            else:
+                value = str(entry.get("value", ""))
+            parts.append(f"{name} = {value}" if value else str(name))
+
+    # A parameter default is a declared value like any other, and often the
+    # one a caller actually meets: urllib3 states how many times it retries as
+    # `total: bool | int | None = 10` and nowhere else. Only the defaults are
+    # indexed, never the whole signature -- a module's parameter lists run to
+    # hundreds of lines and would bury what was asked for.
+    signatures = metadata.get("signatures") or {}
+    if isinstance(signatures, dict):
+        for name, entry in signatures.items():
+            if not isinstance(entry, dict):
+                continue
+            for parameter in entry.get("parameters") or ():
+                if not isinstance(parameter, dict):
+                    continue
+                default = parameter.get("default")
+                if default in (None, "", "None"):
+                    continue
+                parts.append(f"{name}({parameter.get('name')} = {default})")
+    return "\n".join(parts)
 
 
 class EvidenceLedger:
@@ -297,6 +353,23 @@ class EvidenceLedger:
                         claim,
                         category,
                         status
+                    )
+                    """
+                )
+                # What a symbol declares, not only what a claim says about it.
+                # Every retry default, pattern and vocabulary in this ledger
+                # lives in symbol metadata and none of it was reachable by
+                # query: a search surface that indexed claims alone answered 4
+                # of 16 questions on a client library whose subject is almost
+                # entirely declared values.
+                connection.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search USING fts5(
+                        snapshot_id UNINDEXED,
+                        symbol_id UNINDEXED,
+                        qualified_name,
+                        path,
+                        declares
                     )
                     """
                 )
@@ -783,6 +856,27 @@ class EvidenceLedger:
                             claim.status,
                         )
                         for claim in result.claims
+                    ),
+                )
+                connection.execute(
+                    "DELETE FROM symbol_search WHERE snapshot_id = ?", (result.snapshot_id,)
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO symbol_search(
+                        snapshot_id, symbol_id, qualified_name, path, declares
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            symbol.snapshot_id,
+                            symbol.symbol_id,
+                            symbol.qualified_name,
+                            symbol.path,
+                            _declared_text(symbol.metadata),
+                        )
+                        for symbol in result.symbols
                     ),
                 )
         return run_id
@@ -1299,6 +1393,64 @@ class EvidenceLedger:
             "missing_claim_ids": list(missing_claim_ids),
             "truncated": bool(omitted_claims or omitted_evidence or missing_claim_ids),
         }
+
+    def search_declarations(
+        self,
+        snapshot_id: str,
+        query: str,
+        *,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        """Symbols whose name, path, or declared values match the query.
+
+        Returns the declarations rather than the whole symbol: a caller asking
+        what the retry limit is wants `DEFAULT_BACKOFF_MAX = 120`, not a
+        module's entire name index.
+        """
+
+        if not query.strip():
+            raise ValueError("Search query cannot be empty")
+        if limit < 1 or limit > 500:
+            raise ValueError("Search limit must be between 1 and 500")
+        with self._session() as connection:
+            status = connection.execute("SELECT value FROM metadata WHERE key = 'fts5'").fetchone()
+            if status is None or status["value"] != "enabled":
+                return []
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT qualified_name, path, declares
+                    FROM symbol_search
+                    WHERE snapshot_id = ? AND symbol_search MATCH ? AND declares != ''
+                    ORDER BY bm25(symbol_search)
+                    LIMIT ?
+                    """,
+                    (snapshot_id, query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        # Only the lines that match. A module's declarations are one blob in
+        # the index, and returning the blob would answer a question about a
+        # retry limit by printing every constant in the file -- the same
+        # mistake as handing over the whole document, one level down.
+        terms = [term for term in re.findall(r"\w+", query.casefold()) if term != "or"]
+        found: list[dict[str, Any]] = []
+        for row in rows:
+            lines = [
+                line
+                for line in str(row["declares"] or "").splitlines()
+                if any(term in line.casefold() for term in terms)
+            ]
+            if not lines:
+                continue
+            found.append(
+                {
+                    "qualified_name": str(row["qualified_name"]),
+                    "path": str(row["path"]),
+                    "declares": "\n".join(lines[:MAX_DECLARED_LINES]),
+                }
+            )
+        return found
 
     def search_claims(
         self,
