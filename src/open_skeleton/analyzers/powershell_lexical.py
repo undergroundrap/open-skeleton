@@ -42,6 +42,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.analyzers.base import declares_a_number
 from open_skeleton.ids import stable_id
@@ -423,6 +424,93 @@ def environment_reads(source: str) -> list[tuple[str, str, int]]:
     return found
 
 
+CLASS = re.compile(
+    r"(?im)^[ \t]*class[ \t]+(?P<name>[A-Za-z_]\w*)[ \t]*(?::[ \t]*(?P<base>[A-Za-z_][\w.]*))?"
+)
+# `[uint64] $BytesFromPeers`, or the same thing over two lines -- one of the
+# fifteen classes Windows ships writes every property with its type above its
+# name, and requiring one line dropped that class whole.
+#
+# What keeps a parameter out is containment rather than these anchors: a
+# property counts only when the brace it sits directly inside belongs to a
+# class, and `param([String] $Method)` sits in a function's.
+TYPED_PROPERTY = re.compile(
+    r"(?m)^[ \t]*(?:\[[A-Za-z_][\w.]*\([^\r\n]*\)\][ \t]*)*"
+    r"\[(?P<type>[A-Za-z_][\w.\[\]]*)\][ \t]*\r?\n?[ \t]*"
+    r"\$(?P<name>[A-Za-z_]\w*)"
+    # `\r?` before the anchor: a file with Windows line endings puts a carriage
+    # return where `$` matches, and without this every property in every CRLF
+    # file failed silently.
+    r"[ \t]*(?:=[^\r\n]*?)?;?[ \t]*\r?$"
+)
+
+
+def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
+    """What each class holds, in the shape `model_fields` already has.
+
+    A property counts only when the brace it sits directly inside belongs to a
+    class. PowerShell writes a parameter the same way -- `param([String]
+    $Method)` -- and without that rule every parameter of every advanced
+    function would be reported as a field of whatever class happened to
+    enclose it, or of none.
+
+    Only the blanked copy is read. A class name and a type name are bare
+    words, so nothing a comment or a here-string holds can be one, and
+    `DeliveryOptimizationStatus` documents its own classes in prose above
+    them.
+    """
+
+    classes = {match.start(): match for match in CLASS.finditer(clean)}
+    properties = {match.start("type"): match for match in TYPED_PROPERTY.finditer(clean)}
+    fields: dict[str, list[dict[str, Any]]] = {}
+    bases: dict[str, list[str]] = {}
+    first_line: dict[str, int] = {}
+
+    # `None` marks a brace that is not a class body: a function, a script
+    # block, a hashtable. A property inside one belongs to no shape.
+    stack: list[str | None] = []
+    pending: str | None = None
+    position = 0
+    length = len(clean)
+    while position < length:
+        declaration = classes.get(position)
+        if declaration is not None:
+            pending = declaration.group("name")
+            if declaration.group("base"):
+                bases[pending] = [declaration.group("base")]
+            position = declaration.end()
+            continue
+
+        member = properties.get(position + 1)
+        if member is not None and stack and stack[-1] is not None:
+            owner = stack[-1]
+            line = _line_of(clean, member.start("type"))
+            fields.setdefault(owner, []).append(
+                {
+                    "name": member.group("name"),
+                    "annotation": member.group("type"),
+                    "line": line,
+                }
+            )
+            first_line.setdefault(owner, line)
+            position = member.end()
+            continue
+
+        character = clean[position]
+        if character == "{":
+            stack.append(pending)
+            pending = None
+        elif character == "}" and stack:
+            stack.pop()
+        position += 1
+
+    return {
+        owner: {"fields": members, "line": first_line[owner], "bases": bases.get(owner, [])}
+        for owner, members in fields.items()
+        if members
+    }
+
+
 EXPORT_MEMBER = re.compile(r"(?i)\bExport-ModuleMember\b")
 
 
@@ -535,6 +623,7 @@ class PowerShellLexicalAnalyzer:
             clean = _blank_noise(source)
             functions = declared_functions(clean)
             file_values = declared_values(source, clean)
+            file_shapes = declared_shapes(clean)
             file_numbers = {
                 name: entry
                 for name, entry in file_values.items()
@@ -573,6 +662,7 @@ class PowerShellLexicalAnalyzer:
                         **({"tunables": file_numbers} if file_numbers else {}),
                         **({"string_constants": file_strings} if file_strings else {}),
                         **({"collection_constants": file_sets} if file_sets else {}),
+                        **({"model_fields": file_shapes} if file_shapes else {}),
                     },
                 )
             )

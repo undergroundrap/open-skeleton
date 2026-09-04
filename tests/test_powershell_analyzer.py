@@ -13,6 +13,7 @@ flags a user can type.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -23,6 +24,7 @@ from open_skeleton.analyzers.powershell_lexical import (
     PowerShellLexicalAnalyzer,
     _blank_noise,
     declared_functions,
+    declared_shapes,
     declared_value_sets,
     declared_values,
     environment_reads,
@@ -376,3 +378,73 @@ class PowerShellEnvironmentTests(TestCase):
         claims = [item for item in result.claims if item.category == "configuration_read"]
         self.assertEqual(len(claims), 1)
         self.assertIn("SERVICE_URL", claims[0].claim)
+
+
+class PowerShellShapeTests(TestCase):
+    """What a PowerShell class holds.
+
+    Fifteen classes across the 155 files Windows ships, which sounds thin
+    until one is opened: `DOSwarmStats` declares eighteen typed properties and
+    `StorageHistory` forty-six, every one written `[uint64] $BytesFromPeers`.
+    Checked against those files, read as bytes the way the pipeline reads
+    them: 15 classes found of 15 declared, 301 fields.
+    """
+
+    def test_a_typed_property_is_a_field(self) -> None:
+        found = declared_shapes(
+            _blank_noise("class DOPeerInfo {\n    [string] $IP;\n    [uint64] $BytesSent\n}\n")
+        )
+        self.assertEqual(
+            [(item["name"], item["annotation"]) for item in found["DOPeerInfo"]["fields"]],
+            [("IP", "string"), ("BytesSent", "uint64")],
+        )
+
+    def test_a_base_class_is_recorded(self) -> None:
+        found = declared_shapes(
+            _blank_noise("class DOExtendedConfig : DOConfig {\n    [int] $Depth = 4\n}\n")
+        )
+        self.assertEqual(found["DOExtendedConfig"]["bases"], ["DOConfig"])
+
+    def test_a_parameter_is_not_a_field(self) -> None:
+        # A parameter is spelled exactly like a property. What separates them
+        # is the brace it sits inside, not the shape of the line.
+        source = (
+            "function Set-Thing {\n"
+            "    param(\n"
+            "        [ValidateSet('GET','PUT')]\n"
+            "        [String] $Method\n"
+            "    )\n"
+            "}\n"
+        )
+        self.assertEqual(declared_shapes(_blank_noise(source)), {})
+
+    def test_a_property_may_span_two_lines(self) -> None:
+        # `VMDirectStorage` writes every property with its type above its
+        # name. Requiring one line dropped that whole class, and fourteen of
+        # fifteen looks like success until you ask which one is missing.
+        found = declared_shapes(_blank_noise("class VMDisk {\n    [String]\n    $UniqueId\n}\n"))
+        self.assertEqual([item["name"] for item in found["VMDisk"]["fields"]], ["UniqueId"])
+
+    def test_windows_line_endings_are_read(self) -> None:
+        # `[ \t]*$` matches at the end of a line, and on a CRLF file the
+        # character in that position is `\r`. Every property in every file
+        # saved with Windows line endings failed silently, and the corpus
+        # check missed it because `read_text` had already translated them.
+        source = "class Order {\r\n    [string] $Identifier\r\n}\r\n"
+        found = declared_shapes(_blank_noise(source))
+        self.assertEqual([item["name"] for item in found["Order"]["fields"]], ["Identifier"])
+
+    def test_shapes_reach_the_module_symbol(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "types.ps1").write_text(
+                "class Order {\n    [string] $Identifier\n}\n", encoding="utf-8"
+            )
+            result = analyze_snapshot(scan_repository(root))
+        models: dict[str, Any] = {}
+        for symbol in result.symbols:
+            metadata = symbol.metadata or {}
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            models.update(metadata.get("model_fields") or {})
+        self.assertIn("Order", models)
