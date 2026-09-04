@@ -1,0 +1,121 @@
+{
+  "fixture": "zod",
+  "fixture_version": "4.4.3",
+  "fixture_root": "node_modules/zod/src",
+  "provenance": "Every answer was read out of zod 4.4.3's own TypeScript source and is cited to the file and line it came from. None came from a specification this engine produced. The published package ships compiled `.js` and `.d.ts` beside the source, so the fixture root is the `src` tree: analysing both would score a document against two copies of the same declarations.",
+  "shape": "The first fixture is a Python web service and the second a Python client library. This is neither: 286 files of TypeScript that serve nothing, store nothing and start nothing. It is a validation library whose whole subject is declared patterns, exported surface and an error vocabulary -- and TypeScript is the reader known to be weakest, so this is where a specification is least likely to flatter itself.",
+  "questions": [
+    {
+      "id": "Z01",
+      "question": "How many characters does a nanoid have, according to the pattern that validates one?",
+      "answers": ["21"],
+      "subject": ["nanoid"],
+      "kind": "policy",
+      "source": "v4/core/regexes.ts:13 nanoid = /^[a-zA-Z0-9_-]{21}$/"
+    },
+    {
+      "id": "Z02",
+      "question": "How many characters does a ksuid have?",
+      "answers": ["27"],
+      "subject": ["ksuid"],
+      "kind": "policy",
+      "source": "v4/core/regexes.ts:12 ksuid = /^[A-Za-z0-9]{27}$/"
+    },
+    {
+      "id": "Z03",
+      "question": "How many characters does a ULID have?",
+      "answers": ["26"],
+      "subject": ["ulid"],
+      "kind": "policy",
+      "source": "v4/core/regexes.ts:10 ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/"
+    },
+    {
+      "id": "Z04",
+      "question": "What is the issue code for a value of the wrong type?",
+      "answers": ["invalid_type"],
+      "subject": ["issue", "code", "invalid"],
+      "kind": "failure-surface",
+      "source": "v4/core/errors.ts:45 readonly code: \"invalid_type\""
+    },
+    {
+      "id": "Z05",
+      "question": "Which module-level container holds configuration that any caller can mutate?",
+      "answers": ["globalConfig"],
+      "subject": ["config", "global", "state"],
+      "kind": "state",
+      "source": "v4/core/config.ts:11 export const globalConfig: $ZodConfig = {}"
+    },
+    {
+      "id": "Z06",
+      "question": "Which function reads or updates the global configuration?",
+      "answers": ["config"],
+      "subject": ["config"],
+      "kind": "inventory",
+      "source": "v4/core/config.ts:13 export function config(...)"
+    },
+    {
+      "id": "Z07",
+      "question": "What does the library throw when a multiple-of check mixes number and bigint?",
+      "answers": ["Cannot mix number and bigint"],
+      "subject": ["multiple_of", "bigint", "throw"],
+      "kind": "failure-surface",
+      "source": "v4/core/checks.ts:178 throw new Error(\"Cannot mix number and bigint in multiple_of check.\")"
+    },
+    {
+      "id": "Z08",
+      "question": "Which JavaScript type does the library refuse to represent in JSON Schema?",
+      "answers": ["BigInt"],
+      "subject": ["JSON Schema", "json-schema", "represent"],
+      "kind": "failure-surface",
+      "source": "v4/core/json-schema-processors.ts:104 throw new Error(\"BigInt cannot be represented in JSON Schema\")"
+    },
+    {
+      "id": "Z09",
+      "question": "Which file declares the validation patterns?",
+      "answers": ["regexes"],
+      "subject": ["regex", "pattern"],
+      "kind": "inventory",
+      "source": "v4/core/regexes.ts holds the exported patterns"
+    },
+    {
+      "id": "Z10",
+      "question": "Does the library carry more than one major version of itself in the same tree?",
+      "answers": ["v3"],
+      "subject": ["v3", "version", "module"],
+      "kind": "inventory",
+      "source": "src/v3 and src/v4 both exist and are both shipped"
+    },
+    {
+      "id": "Z11",
+      "question": "How many TypeScript source files does the library hold?",
+      "answers": ["286"],
+      "subject": ["TypeScript", "file"],
+      "kind": "inventory",
+      "source": "286 .ts files excluding .d.ts declarations"
+    },
+    {
+      "id": "Z12",
+      "question": "Which utility module carries the largest exported surface?",
+      "answers": ["util"],
+      "subject": ["util", "export"],
+      "kind": "inventory",
+      "source": "v4/core/util.ts declares 131 exports"
+    },
+    {
+      "id": "Z13",
+      "question": "Is localisation of error messages part of this library?",
+      "answers": ["locale"],
+      "subject": ["locale", "error"],
+      "kind": "inventory",
+      "source": "68 locale files under src/locales, src/v3/locales and src/v4/locales"
+    },
+    {
+      "id": "Z14",
+      "question": "Which schema standard does the library interoperate with?",
+      "answers": ["standard-schema", "standard schema"],
+      "subject": ["standard", "schema"],
+      "kind": "integration",
+      "source": "v4/core/standard-schema.ts implements the Standard Schema interface"
+    }
+  ]
+}

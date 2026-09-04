@@ -891,6 +891,15 @@ def _opens_assigned_function(tokens: list[Token], brace: int) -> bool:
         scan -= 1
     if scan < 0 or tokens[scan].value != "function":
         return False
+    # A named declaration holds locals. `function f() { const scratch = 1; }`
+    # was reported as a module constant because this asked only whether the
+    # function was assigned to something, and a declaration is not -- so it
+    # was treated like the IIFE wrapper, whose body genuinely does hold module
+    # constants. The two are told apart by the name: `function f(` declares,
+    # `(function (` wraps.
+    named = scan + 1 < len(tokens) and tokens[scan + 1].kind == "identifier"
+    if named:
+        return True
     # `const f = function () {}` is assigned; `(function () {})()` is not.
     return scan >= 1 and tokens[scan - 1].value == "="
 
@@ -1025,6 +1034,43 @@ def _exported_names(tokens: list[Token]) -> list[str]:
     return unique
 
 
+def _assignment_after_annotation(tokens: list[Token], start: int) -> int:
+    """Index of the `=` that follows a type annotation, or -1.
+
+    `const B: number = 10` is the ordinary way to write a constant in a typed
+    codebase and this reader saw none of them: it required the `=` to sit two
+    tokens after the name, so every annotated declaration was skipped. A
+    validation library measured against its own source lost its patterns and
+    its limits that way.
+
+    Nesting is tracked because an annotation is not a flat run of tokens --
+    `Map<string, number>`, `{ a: number }`, `(x: string) => void` all carry
+    their own brackets. The arrow is the trap: `=>` tokenizes as `=` then `>`,
+    so an `=` immediately followed by `>` is a function type on its way past,
+    not the assignment.
+    """
+
+    depth = 0
+    opening = {"(", "[", "{", "<"}
+    closing = {")", "]", "}", ">"}
+    for cursor in range(start, len(tokens)):
+        token = tokens[cursor]
+        if token.kind != "punctuation":
+            continue
+        if token.value in opening:
+            depth += 1
+        elif token.value in closing:
+            depth -= 1
+        elif token.value == ";":
+            return -1
+        elif token.value == "=" and depth == 0:
+            following = tokens[cursor + 1] if cursor + 1 < len(tokens) else None
+            if following is not None and following.value == ">":
+                continue
+            return cursor
+    return -1
+
+
 def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     """Named literal constants: the numbers a reader would change to retune.
 
@@ -1063,12 +1109,19 @@ def _tunables(tokens: list[Token]) -> dict[str, dict[str, Any]]:
         if index + 3 >= total:
             continue
         name = tokens[index + 1]
-        if name.kind != "identifier" or tokens[index + 2].value != "=":
+        if name.kind != "identifier":
             continue
-        value = tokens[index + 3]
+        assignment = index + 2
+        if tokens[assignment].value == ":":
+            assignment = _assignment_after_annotation(tokens, assignment)
+            if assignment < 0 or assignment + 1 >= total:
+                continue
+        elif tokens[assignment].value != "=":
+            continue
+        value = tokens[assignment + 1]
         sign = ""
-        if value.value == "-" and index + 4 < total:
-            sign, value = "-", tokens[index + 4]
+        if value.value == "-" and assignment + 2 < total:
+            sign, value = "-", tokens[assignment + 2]
         if value.kind not in {"number", "string"}:
             continue
         found[name.value] = {

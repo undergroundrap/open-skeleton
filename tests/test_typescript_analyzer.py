@@ -795,3 +795,72 @@ class CatchHandlerTests(TestCase):
             self.assertIn("2 place(s)", claim.claim)
             self.assertIn("1 of which rethrow", claim.claim)
             self.assertIn("run no statement at all", claim.claim)
+
+
+class AnnotatedConstantTests(TestCase):
+    """A typed codebase writes `const B: number = 10`, and none were read.
+
+    The assignment had to sit two tokens after the name, so every annotated
+    declaration was skipped -- which is the ordinary form in TypeScript. A
+    validation library measured against its own source lost its patterns and
+    its limits that way.
+    """
+
+    def test_an_annotated_number_is_recorded(self) -> None:
+        found = _tunables(_tokens("export const LIMIT: number = 9;\n"))
+        self.assertEqual(found["LIMIT"]["value"], "9")
+
+    def test_an_annotated_string_is_recorded(self) -> None:
+        found = _tunables(_tokens('export const MODE: string = "surf";\n'))
+        self.assertEqual(found["MODE"]["value"], "surf")
+
+    def test_a_union_annotation_is_stepped_over(self) -> None:
+        found = _tunables(_tokens("const RETRIES: number | null = 5;\n"))
+        self.assertEqual(found["RETRIES"]["value"], "5")
+
+    def test_an_annotated_negative_keeps_its_sign(self) -> None:
+        found = _tunables(_tokens("const FLOOR: number = -9.8;\n"))
+        self.assertEqual(found["FLOOR"]["value"], "-9.8")
+
+    def test_a_generic_annotation_carries_no_literal(self) -> None:
+        # `Map<string, number>` nests, and the value is a call rather than a
+        # literal, so there is nothing to report -- but the brackets must not
+        # send the scan past the end of the declaration either.
+        self.assertEqual(_tunables(_tokens("const M: Map<string, number> = new Map();\n")), {})
+
+    def test_a_function_type_annotation_is_not_mistaken_for_assignment(self) -> None:
+        # `=>` tokenizes as `=` then `>`. Reading the arrow as the assignment
+        # would take `void` as the value of the constant.
+        self.assertEqual(_tunables(_tokens("const F: () => void = g;\n")), {})
+
+
+class FunctionDeclarationScopeTests(TestCase):
+    """A named function's body holds locals, not module constants.
+
+    This asked only whether a function was assigned to something, and a
+    declaration is not -- so `function f() { const scratch = 1; }` was treated
+    like the IIFE wrapper, whose body genuinely does hold module constants.
+    36 of zod's 54 reported constants were locals of that kind, most of them
+    test data: `goodData`, `badData`, `errorMsg`, `tooLong`.
+    """
+
+    def test_a_local_in_a_declared_function_is_not_a_constant(self) -> None:
+        source = "function timeSource(args) {\n  const hhmm = `x`;\n  const n: number = 2;\n}\n"
+        self.assertEqual(_tunables(_tokens(source)), {})
+
+    def test_the_iife_wrapper_still_holds_module_constants(self) -> None:
+        source = "(function () {\n  const AIR_ACCEL = 12.0;\n})();\n"
+        self.assertIn("AIR_ACCEL", _tunables(_tokens(source)))
+
+    def test_a_local_in_an_assigned_function_expression_is_not_a_constant(self) -> None:
+        source = "const f = function () {\n  const scratch = 1;\n};\n"
+        self.assertEqual(_tunables(_tokens(source)), {})
+
+    def test_a_local_in_a_method_is_not_a_constant(self) -> None:
+        source = "class A {\n  run() {\n    const scratch = 2;\n  }\n}\n"
+        self.assertEqual(_tunables(_tokens(source)), {})
+
+    def test_a_module_constant_beside_a_declaration_survives(self) -> None:
+        source = "export const LIMIT: number = 9;\nfunction f() {\n  const scratch = 1;\n}\n"
+        found = _tunables(_tokens(source))
+        self.assertEqual(sorted(found), ["LIMIT"])
