@@ -357,6 +357,106 @@ def _append_mathematical_conflicts(
     return evidence + tuple(comment_receipts)
 
 
+def _append_declaration_census(
+    snapshot: Snapshot,
+    *,
+    created_at: str,
+    claims: list[ClaimRecord],
+    evidence: tuple[EvidenceRecord, ...],
+) -> tuple[EvidenceRecord, ...]:
+    """State how much of each thing there is, having stated each thing.
+
+    This engine reports one claim per exception type and one per source file
+    and never says how many there are, so "how many exception classes does
+    this library define" and "how many TypeScript files does it hold" were
+    unanswerable from a ledger that had already read every one of them. A
+    reader asking what they are is well served; a reader asking how big it is
+    was not, and that is the first question anyone asks of an unfamiliar
+    repository.
+
+    Counted from what was actually read, so the number cannot exceed the
+    evidence: the file census counts files in the snapshot, and the type
+    census counts the claims other readers produced rather than re-deriving
+    them.
+    """
+
+    census = EvidenceRecord(
+        evidence_id=stable_id(
+            "evidence", (snapshot.snapshot_id, ".", "declaration_census", PIPELINE_VERSION)
+        ),
+        snapshot_id=snapshot.snapshot_id,
+        path=".",
+        start_line=None,
+        end_line=None,
+        symbol=None,
+        evidence_kind="snapshot_census",
+        excerpt_sha256=snapshot.snapshot_id,
+        analyzer=PIPELINE_VERSION,
+        created_at=created_at,
+    )
+
+    def state(text: str, category: str, keys: tuple[str, ...]) -> None:
+        claims.append(
+            ClaimRecord(
+                claim_id=stable_id(
+                    "claim", (snapshot.snapshot_id, category, text, PIPELINE_VERSION)
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                claim=text,
+                category=category,
+                status="verified",
+                confidence=1.0,
+                importance="medium",
+                produced_by=PIPELINE_VERSION,
+                created_at=created_at,
+                verified_at=created_at,
+                supporting_evidence=(census.evidence_id,),
+                invalidation_keys=keys,
+            )
+        )
+
+    added = False
+    # Source files only. Counting a suite's files beside the product's would
+    # answer "how big is this" with a number that is partly about its tests,
+    # which is the role confusion this engine corrects everywhere else.
+    languages: defaultdict[str, int] = defaultdict(int)
+    for record in snapshot.files:
+        if record.role == "source" and record.language != "Unknown":
+            languages[record.language] += 1
+    if languages:
+        ordered = sorted(languages.items(), key=lambda pair: (-pair[1], pair[0]))
+        named = ", ".join(f"{count:,} {language}" for language, count in ordered[:8])
+        state(
+            f"The snapshot holds {sum(languages.values()):,} source file(s): {named}"
+            f"{', and more' if len(ordered) > 8 else ''}. Files classified as tests, "
+            "benchmarks, documentation or configuration are counted elsewhere.",
+            "file_census",
+            ("snapshot:file-set",),
+        )
+        added = True
+
+    # Exception types, counted from the claims that named them one at a time.
+    declared = sorted(
+        {
+            claim.claim.split(" extends ", 1)[0].strip()
+            for claim in claims
+            if claim.category == "exception_type" and " extends " in claim.claim
+        }
+    )
+    if declared:
+        named = ", ".join(declared[:10])
+        state(
+            f"This repository declares {len(declared):,} exception type(s): {named}"
+            f"{', and more' if len(declared) > 10 else ''}. Each is named by a claim of its "
+            "own; this states how many there are.",
+            "exception_census",
+            ("snapshot:file-set",),
+        )
+        added = True
+
+    return (*evidence, census) if added else evidence
+
+
 def _append_testing_census(
     snapshot: Snapshot,
     *,
@@ -1017,6 +1117,14 @@ def analyze_snapshot(
         created_at=created_at,
         evidence=evidence,
         claims=claims,
+    )
+    # After the readers, because the exception census counts the claims they
+    # produced rather than deriving the same fact a second way.
+    evidence = _append_declaration_census(
+        snapshot,
+        created_at=created_at,
+        claims=claims,
+        evidence=evidence,
     )
     evidence = _append_shared_test_helpers(
         snapshot,

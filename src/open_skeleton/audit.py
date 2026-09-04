@@ -43,6 +43,11 @@ CENSUS_CATEGORIES = frozenset(
         "auth_control_census",
         "dependency_inventory",
         "language_census",
+        # A count of what the repository holds is a statement about the
+        # snapshot, and there is no file it could name without picking one
+        # arbitrarily out of the set it counted.
+        "file_census",
+        "exception_census",
         # The checked-out commit is a property of the repository, not of any
         # file in it, so its receipt is a census receipt by construction and
         # this check fired on every git repository ever analyzed -- five of

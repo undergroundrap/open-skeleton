@@ -83,7 +83,16 @@ CATEGORY_FAMILY: dict[str, str] = {
 # A census claim attaches to everything it surveyed by construction, so it says
 # nothing about any one structure and would make every symbol look multi-role.
 CENSUS_CATEGORIES = frozenset(
-    {"auth_control_census", "testing_census", "http_route_inventory", "concentration"}
+    {
+        "auth_control_census",
+        "testing_census",
+        "http_route_inventory",
+        "concentration",
+        # A count of what the repository holds rests on the snapshot, not
+        # on any one file, which is what a census receipt means.
+        "file_census",
+        "exception_census",
+    }
 )
 
 
