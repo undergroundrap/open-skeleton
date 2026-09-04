@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from open_skeleton.analyzers.base import declares_a_number
+from open_skeleton.analyzers.base import declares_a_number, render_declared_type
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -473,7 +473,7 @@ def _struct_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
                         # renders both languages rather than each growing its
                         # own. A struct field has no default, so it is always
                         # required in a struct literal.
-                        "annotation": "".join(parts)[:80],
+                        "annotation": render_declared_type(parts),
                         "required": True,
                         "line": current.line,
                     }

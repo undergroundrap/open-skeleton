@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from open_skeleton.analyzers.base import render_declared_type
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -418,6 +419,11 @@ class Declaration:
     kind: str
     start_line: int
     end_line: int
+    # The declared type of a property, and whether `?` made it optional.
+    # Empty and `None` for everything else: a method's signature and a
+    # binding's inferred type are not what this carries.
+    annotation: str = ""
+    optional: bool | None = None
 
 
 def _initializer_kind(tokens: list[Token], start: int, limit: int = 400) -> str:
@@ -1638,8 +1644,20 @@ def _declarations(tokens: list[Token]) -> list[Declaration]:
                     member = "property"
                 if member is not None:
                     qualified = f"{prefix}.{name_token.value}"
+                    annotation = ""
+                    optional: bool | None = None
+                    if member == "property" and following in {":", "?"}:
+                        optional = following == "?"
+                        annotation = _annotation_after(tokens, step + 1)
                     result.append(
-                        Declaration(qualified, member, name_token.line, name_token.end_line)
+                        Declaration(
+                            qualified,
+                            member,
+                            name_token.line,
+                            name_token.end_line,
+                            annotation,
+                            optional,
+                        )
                     )
                     index = step + 1
                     continue
@@ -1647,6 +1665,80 @@ def _declarations(tokens: list[Token]) -> list[Declaration]:
         index += 1
 
     return result
+
+
+PROPERTY_TERMINATORS = frozenset({";", ",", "}"})
+
+
+def _annotation_after(tokens: list[Token], start: int) -> str:
+    """The declared type between `:` and the end of the property.
+
+    Stops at the `;`, `,` or `}` that ends the member, and only at its own
+    nesting level: `handlers: Record<string, () => void>` ends at the brace
+    that closes the interface, not at the one inside its own type.
+    """
+
+    cursor = start
+    while cursor < len(tokens) and tokens[cursor].value in {":", "?"}:
+        cursor += 1
+    parts: list[str] = []
+    depth = 0
+    while cursor < len(tokens):
+        value = tokens[cursor].value
+        following = tokens[cursor + 1].value if cursor + 1 < len(tokens) else ""
+        if value in {"<", "(", "[", "{"}:
+            depth += 1
+        elif value in {">", ")", "]"} and depth > 0:
+            depth -= 1
+        elif value == "}":
+            if depth <= 0:
+                break
+            depth -= 1
+        elif value == "=" and depth <= 0 and following != ">":
+            # An initializer, not a type. This tokenizer splits `=>` into two,
+            # so without the lookahead `handler: () => void` would end here
+            # and be recorded as the type `()`.
+            break
+        elif value in PROPERTY_TERMINATORS and depth <= 0:
+            break
+        parts.append(value)
+        cursor += 1
+    return render_declared_type(parts)
+
+
+def declared_shapes(declarations: list[Declaration]) -> dict[str, dict[str, Any]]:
+    """What each declared type holds, in the shape `model_fields` already has.
+
+    Grouped by the container the member was qualified with, so an interface,
+    an object type alias and a class all report the same way -- they are the
+    same statement about data in three spellings.
+
+    A property with no annotation is skipped. `total = 0` in a class body is a
+    value whose type TypeScript infers, and stating the inferred type would be
+    this reader guessing rather than the file declaring.
+    """
+
+    fields: dict[str, list[dict[str, Any]]] = {}
+    first_line: dict[str, int] = {}
+    for declaration in declarations:
+        if declaration.kind != "property" or "." not in declaration.name:
+            continue
+        if not declaration.annotation:
+            continue
+        owner, _, member = declaration.name.rpartition(".")
+        entry: dict[str, Any] = {
+            "name": member,
+            "annotation": declaration.annotation,
+            "line": declaration.start_line,
+        }
+        if declaration.optional is not None:
+            entry["required"] = not declaration.optional
+        fields.setdefault(owner, []).append(entry)
+        first_line.setdefault(owner, declaration.start_line)
+    return {
+        owner: {"fields": members, "line": first_line[owner], "bases": []}
+        for owner, members in fields.items()
+    }
 
 
 def _next_token(tokens: list[Token], index: int, value: str | None = None) -> int | None:
@@ -1853,6 +1945,7 @@ class TypeScriptLexicalAnalyzer:
             file_served = _served_routes(file_tokens, file_servers)
             file_origins = _external_origins(file_tokens)
             file_name_index = _name_index(file_tokens)
+            file_shapes = declared_shapes(file_declarations)
             file_state = _module_state(file_tokens, file_declarations)
             file_env = _environment_reads(file_tokens)
             file_throws = _throw_sites(file_tokens)
@@ -1902,6 +1995,7 @@ class TypeScriptLexicalAnalyzer:
                         **({"string_constants": file_values} if file_values else {}),
                         **({"collection_constants": file_unions} if file_unions else {}),
                         **({"name_index": file_name_index} if file_name_index else {}),
+                        **({"model_fields": file_shapes} if file_shapes else {}),
                     },
                 )
             )

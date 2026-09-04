@@ -39,6 +39,35 @@ class Analyzer(Protocol):
         """Analyze an immutable snapshot without executing target code."""
 
 
+def render_declared_type(values: list[str], limit: int = 80) -> str:
+    """Join type tokens the way the language wrote them.
+
+    A space goes in exactly where leaving it out would merge two words:
+    `dyn Error`, `keyof T`, `Augmentation extends ZodRawShape`. Joining
+    everything with nothing between produced `Vec<Box<dynError>>` in Rust and
+    `<AugmentationextendsZodRawShape>` in TypeScript, neither of which names a
+    type a reader can search for.
+
+    Punctuation gets no space of its own, so Java's wildcard reads
+    `List<?extends Number>` rather than `List<? extends Number>`. That is one
+    character off the idiom and still the right name to search for; spacing
+    every operator the way each language prefers would be six rules instead
+    of one, and this reads all six.
+
+    Truncated at `limit`, because a fully instantiated generic signature can
+    run to several hundred characters and a table has to stay readable.
+    """
+
+    rendered = ""
+    for value in values:
+        closes_a_word = bool(rendered) and (rendered[-1].isalnum() or rendered[-1] == "_")
+        opens_a_word = value[:1].isalnum() or value[:1] == "_"
+        if closes_a_word and opens_a_word:
+            rendered += " "
+        rendered += value
+    return rendered.strip()[:limit]
+
+
 def declares_a_number(value: object) -> bool:
     """Whether a recorded constant's value is a number rather than a string.
 

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from open_skeleton.analyzers.base import declares_a_number
+from open_skeleton.analyzers.base import declares_a_number, render_declared_type
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -636,7 +636,9 @@ def _classify(tokens: list[Token], head: list[int], owner: str) -> JavaMember | 
     # the name: every token, punctuation included, so `Map<String,Integer>`
     # and `int[]` survive. Joined without spaces, the way the Rust reader
     # renders a struct field, because one panel draws both.
-    declared = "".join(tokens[index].value for index in head if names[0] <= index < names[-1])[:80]
+    declared = render_declared_type(
+        [tokens[index].value for index in head if names[0] <= index < names[-1]]
+    )
     return JavaMember(
         owner=owner,
         name=last.value,
@@ -883,7 +885,7 @@ def record_components(tokens: list[Token]) -> list[tuple[str, str, str, int]]:
             if not collected or collected[-1].kind != "identifier":
                 return
             last = collected[-1]
-            declared = "".join(item.value for item in collected[:-1])[:80]
+            declared = render_declared_type([item.value for item in collected[:-1]])
             found.append((record, last.value, declared, last.line))
 
         while cursor < total:
