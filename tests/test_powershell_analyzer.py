@@ -25,6 +25,7 @@ from open_skeleton.analyzers.powershell_lexical import (
     declared_functions,
     declared_value_sets,
     declared_values,
+    environment_reads,
     imported_modules,
     parameter_blocks,
     publishes_a_module,
@@ -316,3 +317,62 @@ class PowerShellImportTests(TestCase):
             result = analyze_snapshot(scan_repository(root))
         edges = [edge for edge in result.edges if edge.relationship == "imports"]
         self.assertEqual([edge.target_ref for edge in edges], ["Pester"])
+
+
+class PowerShellEnvironmentTests(TestCase):
+    """What a script needs from its environment, and what it changes.
+
+    Measured before it was written. There are 148 `$env:` uses across the 155
+    PowerShell files Windows ships; blanking erases 75 of them, because
+    PowerShell expands a double-quoted string and `"$env:windir\\system32"` is
+    a real read. Not one of the 148 sits inside a single-quoted string, where
+    it would be literal text.
+    """
+
+    def test_a_bare_read_is_recorded(self) -> None:
+        self.assertEqual(
+            environment_reads("$x = $env:SERVICE_URL\n"), [("SERVICE_URL", "reads", 1)]
+        )
+
+    def test_an_expandable_string_is_a_read(self) -> None:
+        # Half the reads in that corpus are this shape.
+        self.assertEqual(
+            environment_reads('$p = "$env:windir' + chr(92) + 'system32"\n'),
+            [("windir", "reads", 1)],
+        )
+
+    def test_a_literal_string_is_not_a_read(self) -> None:
+        self.assertEqual(environment_reads("$x = '$env:SERVICE_URL'\n"), [])
+
+    def test_a_comment_is_not_a_read(self) -> None:
+        self.assertEqual(environment_reads("# add $scopePath to $env:Path\n"), [])
+
+    def test_an_assignment_is_reported_as_a_write(self) -> None:
+        # Twelve of these in that corpus, and each changes what every child
+        # process inherits.
+        self.assertEqual(
+            environment_reads("$env:PSModulePath = 'x'\n"), [("PSModulePath", "sets", 1)]
+        )
+
+    def test_a_comparison_is_not_a_write(self) -> None:
+        self.assertEqual(environment_reads("if ($env:PATH -eq 'x') { }\n"), [("PATH", "reads", 1)])
+
+    def test_the_braced_form_is_read(self) -> None:
+        self.assertEqual(environment_reads("${env:Braced}\n"), [("Braced", "reads", 1)])
+
+    def test_two_settings_on_one_line_are_both_recorded(self) -> None:
+        # The pattern once captured the text that told a read from a write,
+        # and `finditer` does not overlap, so the second went missing.
+        source = '$p = "$env:SystemDrive' + chr(92) + '$env:HOMEPATH"\n'
+        self.assertEqual(
+            [name for name, _, _ in environment_reads(source)], ["SystemDrive", "HOMEPATH"]
+        )
+
+    def test_a_read_becomes_a_claim(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "build.ps1").write_text("$x = $env:SERVICE_URL\n", encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        claims = [item for item in result.claims if item.category == "configuration_read"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("SERVICE_URL", claims[0].claim)

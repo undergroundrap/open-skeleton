@@ -85,8 +85,15 @@ class ParameterBlock:
     script_level: bool
 
 
-def _blank_noise(source: str) -> str:
-    """Replace comments and string bodies with spaces, keeping every newline.
+def _blank_noise(source: str, *, keep_expandable: bool = False) -> str:
+    r"""Replace comments and string bodies with spaces, keeping every newline.
+
+    `keep_expandable` leaves double-quoted strings and `@" ... "@` blocks
+    intact while still blanking comments and single-quoted text. PowerShell
+    expands a double-quoted string, so `"$env:windir\system32"` is a real read
+    of a real setting; blanking it erased half the environment reads in the
+    modules Windows ships. The string is still walked past either way, so a
+    `#` inside one is not mistaken for a comment.
 
     A reader that matches on raw text finds `function` in a comment and
     `throw` inside a message. Blanking rather than deleting keeps every
@@ -124,7 +131,8 @@ def _blank_noise(source: str) -> str:
             terminator = '"@' if source[index + 1] == '"' else "'@"
             end = source.find(terminator, index + 2)
             end = length if end < 0 else end + 2
-            blank(index, end)
+            if not (keep_expandable and source[index + 1] == '"'):
+                blank(index, end)
             index = end
             continue
         if char in "\"'":
@@ -141,7 +149,8 @@ def _blank_noise(source: str) -> str:
                     end += 1
                     break
                 end += 1
-            blank(index, end)
+            if not (keep_expandable and char == '"'):
+                blank(index, end)
             index = end
             continue
         index += 1
@@ -383,6 +392,35 @@ def imported_modules(source: str, clean: str) -> list[tuple[str, int]]:
                 seen.add(entry)
                 found.append(entry)
     return sorted(found, key=lambda item: (item[1], item[0]))
+
+
+# The trailing text is a lookahead so it is not consumed. Captured, it hid
+# every second setting on a line: `"$env:SystemDrive\$env:HOMEPATH"` is two
+# reads, and `finditer` resumes after the first match rather than inside it.
+ENVIRONMENT = re.compile(r"(?i)\$\{?env:(?P<name>[A-Za-z_]\w*)\}?(?=(?P<rest>[^\r\n]{0,40}))")
+
+
+def environment_reads(source: str) -> list[tuple[str, str, int]]:
+    r"""Settings a script reads or sets, as `(name, direction, line)`.
+
+    Matched against a copy that keeps expandable strings, because PowerShell
+    expands them: `"$env:windir\system32"` reads `windir`, and blanking it
+    erased 75 of the 148 `$env:` uses in the modules Windows ships. Comments
+    and single-quoted text are still blanked, since neither is a read.
+
+    A write is reported as a write. `$env:PSModulePath = ...` appears twelve
+    times in that corpus and it changes what every child process inherits,
+    which is the opposite of a setting this script needs supplied. `-eq` and
+    `-ne` are comparisons rather than assignments, so only a bare `=` counts.
+    """
+
+    clean = _blank_noise(source, keep_expandable=True)
+    found: list[tuple[str, str, int]] = []
+    for match in ENVIRONMENT.finditer(clean):
+        rest = match.group("rest").lstrip()
+        direction = "sets" if rest.startswith("=") and not rest.startswith("==") else "reads"
+        found.append((match.group("name"), direction, _line_of(clean, match.start())))
+    return found
 
 
 EXPORT_MEMBER = re.compile(r"(?i)\bExport-ModuleMember\b")
@@ -630,6 +668,30 @@ class PowerShellLexicalAnalyzer:
                         first_line,
                         "public_api",
                         _excerpt(lines, first_line, file_record.path),
+                    ).evidence_id,
+                    file_record.path,
+                )
+
+            for name, direction, line in dict.fromkeys(environment_reads(source)):
+                claim(
+                    (
+                        f"{file_record.path} {direction} environment setting {name}"
+                        + (
+                            " at run time. A machine that does not set it runs a different "
+                            "script from the one this file describes."
+                            if direction == "reads"
+                            else ", so every process this script starts inherits the value "
+                            "it wrote rather than the one the machine had."
+                        )
+                    ),
+                    "configuration_read",
+                    "medium",
+                    receipt(
+                        file_record.path,
+                        line,
+                        line,
+                        "environment_read",
+                        _excerpt(lines, line, file_record.path),
                     ).evidence_id,
                     file_record.path,
                 )

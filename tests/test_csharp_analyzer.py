@@ -24,6 +24,7 @@ from open_skeleton.analyzers.csharp_lexical import (
     declared_enums,
     declared_namespace,
     declared_types,
+    environment_reads,
     imported_namespaces,
     public_members,
     throw_sites,
@@ -253,3 +254,46 @@ class CSharpDeclaredValueTests(TestCase):
 
     def test_one_member_is_not_a_vocabulary(self) -> None:
         self.assertNotIn("One", declared_enums(blank_noise(self.SOURCE)))
+
+
+class CSharpEnvironmentTests(TestCase):
+    """What a file needs supplied before it will run.
+
+    Blanking empties the argument, so the call is found on the blanked copy
+    and the name read from the original. The first version of this pattern
+    asked the blanked copy whether a quote followed the paren; it never does.
+    """
+
+    def test_a_setting_is_named(self) -> None:
+        source = (
+            'class P { void F() { var e = Environment.GetEnvironmentVariable("SERVICE_URL"); } }'
+        )
+        self.assertEqual(environment_reads(source, blank_noise(source)), [("SERVICE_URL", 1)])
+
+    def test_a_verbatim_literal_is_read(self) -> None:
+        source = 'class P { void F() { Environment.GetEnvironmentVariable(@"SERVICE_URL"); } }'
+        self.assertEqual(environment_reads(source, blank_noise(source)), [("SERVICE_URL", 1)])
+
+    def test_a_name_in_a_variable_is_not_recorded(self) -> None:
+        source = "class P { void F() { Environment.GetEnvironmentVariable(key); } }"
+        self.assertEqual(environment_reads(source, blank_noise(source)), [])
+
+    def test_a_call_in_a_comment_is_not_a_read(self) -> None:
+        source = 'class P { /* Environment.GetEnvironmentVariable("X") */ }'
+        self.assertEqual(environment_reads(source, blank_noise(source)), [])
+
+    def test_a_read_becomes_a_claim(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "P.cs").write_text(
+                "using System;\n"
+                "namespace S;\n"
+                "public class P {\n"
+                '  public void F() { var e = Environment.GetEnvironmentVariable("SERVICE_URL"); }\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        claims = [item for item in result.claims if item.category == "configuration_read"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("SERVICE_URL", claims[0].claim)

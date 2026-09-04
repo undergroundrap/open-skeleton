@@ -266,6 +266,41 @@ def public_members(clean: str) -> list[tuple[str, str, int]]:
     return found
 
 
+# The pattern stops at the paren. It cannot ask the blanked copy whether a
+# quote follows, because blanking replaces the whole literal, quotes included.
+ENVIRONMENT_READ = re.compile(r"\bEnvironment\s*\.\s*GetEnvironmentVariable\s*\(")
+
+
+def environment_reads(source: str, clean: str) -> list[tuple[str, int]]:
+    """Settings a file reads from its environment, as `(name, line)`.
+
+    The call is found on the blanked copy, so one written inside a comment or
+    a string is not a read. The name is then taken from the original at the
+    same offset, because blanking empties the argument -- reading it from the
+    blanked copy would report a program that reads a setting called nothing.
+
+    A name built at run time yields no literal and is not recorded: its value
+    is not knowable without running the program.
+    """
+
+    found: list[tuple[str, int]] = []
+    for match in ENVIRONMENT_READ.finditer(clean):
+        cursor = match.end()
+        while cursor < len(source) and source[cursor] in " \t":
+            cursor += 1
+        while cursor < len(source) and source[cursor] in "@$":
+            cursor += 1
+        if cursor >= len(source) or source[cursor] != '"':
+            continue
+        closing = source.find('"', cursor + 1)
+        if closing < 0:
+            continue
+        name = source[cursor + 1 : closing].strip()
+        if name:
+            found.append((name, _line_of(clean, match.start())))
+    return found
+
+
 def throw_sites(source: str, clean: str) -> list[tuple[str | None, str | None, int]]:
     """`(exception type, literal message, line)` for every throw.
 
@@ -386,6 +421,7 @@ class CSharpLexicalAnalyzer:
             types = declared_types(clean)
             members = public_members(clean)
             throws = throw_sites(source, clean)
+            settings = environment_reads(source, clean)
 
             module = namespace or Path(file_record.path).stem
             names: dict[str, int] = {}
@@ -505,6 +541,24 @@ class CSharpLexicalAnalyzer:
                         first,
                         "public_api",
                         _excerpt(lines, first, file_record.path),
+                    ).evidence_id,
+                    file_record.path,
+                )
+
+            for name, line in dict.fromkeys(settings):
+                claim(
+                    (
+                        f"{file_record.path} reads environment setting {name} at run time. "
+                        "A machine that does not set it runs a different program from the "
+                        "one this file describes."
+                    ),
+                    "configuration_read",
+                    "medium",
+                    receipt(
+                        file_record.path,
+                        line,
+                        "environment_read",
+                        _excerpt(lines, line, file_record.path),
                     ).evidence_id,
                     file_record.path,
                 )

@@ -17,9 +17,12 @@ reads, and a reader either records them or does not. So this asks all of them
 at once: it writes a few lines of ordinary source per language, runs the
 pipeline, and reports which surfaces came back.
 
-The snippets are deliberately plain. This is a conformance check against
-surfaces the engine already claims to provide, not a test of how well any
-reader handles real code -- a fixture measures that, and five of them do.
+The snippets are deliberately plain, but they are not invented: each line is
+a spelling counted in shipped code, because the last snippet written from a
+language reference used two idioms the shipped module never contains. This is
+a conformance check against surfaces the engine already claims to provide, not
+a test of how well any reader handles real code -- a fixture measures that,
+and five of them do.
 A blank cell is not proof of a defect either: a language may genuinely lack
 the concept. It is a question worth asking, and the row says which reader to
 ask it of.
@@ -56,6 +59,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             '__all__ = ["run"]\n'
             "\n"
             "def run(path):\n"
+            '    endpoint = os.getenv("SERVICE_URL")\n'
             '    raise ValueError("bad path")\n'
         ),
     ),
@@ -66,6 +70,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "export const MAX_RETRIES: number = 10;\n"
             'export const SERVICE_NAME: string = "checkout";\n'
             'export type Method = "GET" | "PUT" | "HEAD";\n'
+            "export const endpoint = process.env.SERVICE_URL;\n"
             'export function run(p: string) { throw new Error("bad path"); }\n'
         ),
     ),
@@ -76,7 +81,10 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "pub const MAX_RETRIES: u32 = 10;\n"
             'pub const SERVICE_NAME: &str = "checkout";\n'
             "pub enum Method { Get, Put, Head }\n"
-            'pub fn run() -> Result<(), io::Error> { panic!("bad path") }\n'
+            "pub fn run() -> Result<(), io::Error> {\n"
+            '    let _ = std::env::var("SERVICE_URL");\n'
+            '    panic!("bad path")\n'
+            "}\n"
         ),
     ),
     "Java": (
@@ -87,6 +95,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "    public static final int MAX_RETRIES = 10;\n"
             '    public static final String SERVICE_NAME = "checkout";\n'
             "    public void run() {\n"
+            '        String endpoint = System.getenv("SERVICE_URL");\n'
             '        throw new IllegalStateException("bad path");\n'
             "    }\n"
             "}\n"
@@ -102,6 +111,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "    public const int MaxRetries = 10;\n"
             '    public const string ServiceName = "checkout";\n'
             "    public void Run() {\n"
+            '        var endpoint = Environment.GetEnvironmentVariable("SERVICE_URL");\n'
             '        throw new InvalidOperationException("bad path");\n'
             "    }\n"
             "}\n"
@@ -126,6 +136,7 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "        [ValidateSet('GET', 'PUT', 'HEAD')]\n"
             "        [String] $Method\n"
             "    )\n"
+            "    $endpoint = $env:SERVICE_URL\n"
             "    throw 'bad path'\n"
             "}\n"
             "Export-ModuleMember -Function Set-Thing\n"
@@ -153,6 +164,12 @@ FAILURE_CATEGORIES = frozenset(
 CLAIM_SURFACES = {
     "public surface": frozenset({"public_api"}),
     "failure surface": FAILURE_CATEGORIES,
+    # What a program needs from outside itself in order to start. Spelled six
+    # ways and meaning one thing, and each spelling below was counted in
+    # shipped code rather than chosen from a manual: `System.getProperty`
+    # outnumbers `System.getenv` fifty to nine across `java.base`, and `$env:`
+    # appears 156 times in the 155 PowerShell files Windows installs.
+    "configuration": frozenset({"configuration_read"}),
 }
 EDGE_SURFACES = {"imports": "imports"}
 SURFACES = (*VALUE_SURFACES, *CLAIM_SURFACES, *EDGE_SURFACES)

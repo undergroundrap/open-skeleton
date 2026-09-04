@@ -925,6 +925,47 @@ def _dotted_name(tokens: list[Token], start: int) -> tuple[str, int]:
     return ".".join(parts), cursor
 
 
+ENVIRONMENT_CALLS = {
+    "getenv": "environment setting",
+    "getProperty": "system property",
+}
+
+
+def environment_reads(tokens: list[Token]) -> list[tuple[str, str, int]]:
+    """Settings a file reads from outside itself, as `(name, kind, line)`.
+
+    `System.getProperty` outnumbers `System.getenv` fifty to nine across
+    `java.base`, and the two are not interchangeable: a property is supplied
+    with `-D` on the command line or set by the program, an environment
+    setting by whatever starts the process. Reporting both as "environment"
+    would tell an operator to set the wrong thing, so each is named.
+
+    The receiver must be `System`. A `Properties` object also answers
+    `getProperty`, and that reads a file the program loaded rather than
+    something the machine supplies.
+
+    `System.getProperty(name)` passes a variable and yields no string token.
+    Its value is not knowable without running the program, so it is not
+    recorded -- the same rule the Rust reader applies to a name built at
+    run time.
+    """
+
+    found: list[tuple[str, str, int]] = []
+    for index, token in enumerate(tokens):
+        if token.kind != "identifier" or token.value not in ENVIRONMENT_CALLS:
+            continue
+        if index < 2 or index + 2 >= len(tokens):
+            continue
+        if tokens[index - 1].value != "." or tokens[index - 2].value != "System":
+            continue
+        if tokens[index + 1].value != "(" or tokens[index + 2].kind != "string":
+            continue
+        name = tokens[index + 2].value.strip()
+        if name:
+            found.append((name, ENVIRONMENT_CALLS[token.value], token.line))
+    return found
+
+
 def _simple_name(name: str) -> str:
     """`java.io.IOException` and `IOException` are one type, so name it once.
 
@@ -1394,6 +1435,30 @@ class JavaLexicalAnalyzer:
                         path=path,
                     )
                 )
+
+            if describes_the_product(file_record.role):
+                for name, kind, line in dict.fromkeys(environment_reads(tokens)):
+                    claims.append(
+                        self._claim(
+                            snapshot,
+                            created_at,
+                            text=(
+                                f"{path} reads {kind} {name} at run time. It is supplied by "
+                                + (
+                                    "whatever starts the process"
+                                    if kind == "environment setting"
+                                    else "`-D` on the command line or by the program itself"
+                                )
+                                + ", so a machine that does not set it runs a different "
+                                "program from the one this file describes."
+                            ),
+                            category="configuration_read",
+                            supporting=(
+                                receipt(path, line, "environment_read", None, line_text(line)),
+                            ),
+                            path=path,
+                        )
+                    )
 
             for target, line in imports:
                 edges.append(

@@ -27,6 +27,7 @@ from open_skeleton.analyzers.java_lexical import (
     declared_throws,
     declared_types,
     enum_constants,
+    environment_reads,
     imported_types,
     package_name,
     record_components,
@@ -551,3 +552,55 @@ class JavaFailureSurfaceTests(TestCase):
     def test_a_file_that_cannot_fail_claims_nothing(self) -> None:
         result = _analyze({"P.java": "public class P { int f() { return 1; } }\n"})
         self.assertEqual([item for item in result.claims if item.category == "failure_surface"], [])
+
+
+class JavaEnvironmentTests(TestCase):
+    """What a file needs supplied before it will run.
+
+    `System.getProperty` outnumbers `System.getenv` fifty to nine across the
+    1,600 files of `java.base`, and every real `getenv` call there passes a
+    variable rather than a literal. A reader written for `getenv` alone would
+    have found nothing in the standard library.
+    """
+
+    def test_a_system_property_is_recorded(self) -> None:
+        found = environment_reads(
+            tokenize('class P { void f() { System.getProperty("jdk.debug"); } }')
+        )
+        self.assertEqual(found, [("jdk.debug", "system property", 1)])
+
+    def test_an_environment_setting_is_named_differently(self) -> None:
+        found = environment_reads(
+            tokenize('class P { void f() { System.getenv("SERVICE_URL"); } }')
+        )
+        self.assertEqual(found, [("SERVICE_URL", "environment setting", 1)])
+
+    def test_a_property_object_is_not_the_system(self) -> None:
+        # `Properties.getProperty` reads a file the program loaded, not
+        # something the machine supplies.
+        self.assertEqual(
+            environment_reads(tokenize('class P { void f() { props.getProperty("a.b"); } }')), []
+        )
+
+    def test_a_name_held_in_a_variable_is_not_recorded(self) -> None:
+        # Every `System.getenv` in `java.base` is this shape.
+        self.assertEqual(
+            environment_reads(tokenize("class P { void f() { System.getenv(name); } }")), []
+        )
+
+    def test_a_javadoc_example_is_not_a_read(self) -> None:
+        # `System.java` documents `System.getenv("FOO").equals(...)` in prose
+        # and `InputStreamReader` shows `getProperty("stdin.encoding")` in a
+        # `{@snippet}`. A grep counts all three; the tokenizer drops comments.
+        found = environment_reads(
+            tokenize('/** {@code System.getenv("FOO")} */\nclass P { void f() {} }\n')
+        )
+        self.assertEqual(found, [])
+
+    def test_a_read_becomes_a_claim(self) -> None:
+        result = _analyze(
+            {"P.java": 'public class P { void f() { System.getenv("SERVICE_URL"); } }\n'}
+        )
+        claims = [item for item in result.claims if item.category == "configuration_read"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("SERVICE_URL", claims[0].claim)
