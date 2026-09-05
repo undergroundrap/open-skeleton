@@ -85,6 +85,17 @@ class Panel:
     alignments: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...]
     note: str | None = None
+    # How many rows there were before this panel kept some of them. A panel
+    # truncates and the document truncates again, and without this neither
+    # number is recoverable afterwards -- so the document's message about what
+    # it withheld could only ever be a guess about its own contents.
+    total_rows: int | None = None
+
+    @property
+    def dropped_rows(self) -> int:
+        """Rows this panel had and did not keep, so they reach no projection."""
+
+        return max(0, (self.total_rows or len(self.rows)) - len(self.rows))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +104,7 @@ class Panel:
             "columns": list(self.columns),
             "rows": [list(row) for row in self.rows],
             "note": self.note,
+            "total_rows": self.total_rows if self.total_rows is not None else len(self.rows),
         }
 
 
@@ -403,6 +415,7 @@ def _tunable_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Constant", "Value", "Defined at"),
         alignments=("left", "right", "left"),
         rows=tuple(rows[:MAX_TUNABLES]),
+        total_rows=len(rows),
         note=(
             "Module-level numeric declarations. A literal is shown as itself; a "
             "value the program computes is shown as the expression in backticks, "
@@ -447,6 +460,7 @@ def _failure_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Raised", "Route", "At"),
         alignments=("left", "left", "left"),
         rows=rows[: MAX_PANEL_ROWS * 3],
+        total_rows=len(rows),
         note=(
             "Raises recorded inside route handler bodies. A failure produced by "
             "framework validation, by middleware, or by a helper the handler "
@@ -513,6 +527,7 @@ def _symbol_index(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Symbol", "Short form", "Kind", "Defined at"),
         alignments=("left", "left", "left", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=note,
     )
 
@@ -552,6 +567,7 @@ def _model_fields(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Model", "Base", "Field", "Annotation", "Requirement", "Declared at"),
         alignments=("left", "left", "left", "left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             "Annotations are recorded as written, not resolved: the declared "
             "type is the contract, and what it evaluates to at import time is "
@@ -594,6 +610,7 @@ def _embedded_literals(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Function", "Distinct", "Values", "Defined at"),
         alignments=("left", "right", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             "0 and 1 are excluded because they are structural far more often "
             "than they are decisions. A value repeated within one function is "
@@ -630,6 +647,7 @@ def _string_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Name", "Value", "Declared at"),
         alignments=("left", "left", "left"),
         rows=tuple(rows[:MAX_TUNABLES]),
+        total_rows=len(rows),
         note=(
             "Module-level assignments only, and where a reader records them, "
             "regular-expression literals shown as written. A named pattern is "
@@ -672,6 +690,7 @@ def _collection_constants(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Name", "Members", "Values", "Declared at"),
         alignments=("left", "right", "left", "left"),
         rows=tuple(rows[:MAX_TUNABLES]),
+        total_rows=len(rows),
         note=(
             "Collections written entirely out of literals, at module scope or "
             "in a class body. A set built by a comprehension, or from names "
@@ -716,6 +735,7 @@ def _imported_names(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Module", "Importers", "Names", "Imported names"),
         alignments=("left", "right", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Counted from import statements, so a name imported but never used "
             "still appears and a name reached dynamically does not. Aliases are "
@@ -755,6 +775,7 @@ def _payload_shapes(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Function", "Fields", "Field names", "Returns at"),
         alignments=("left", "right", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             "Literal string keys of dictionaries returned by each function. A "
             "key computed at runtime is absent rather than guessed at, so this "
@@ -811,6 +832,7 @@ def _signatures(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Function", "Params", "Required", "Signature", "Returns", "Defined at"),
         alignments=("left", "right", "right", "left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             "Annotations and defaults are rendered from source rather than "
             "evaluated, so a mutable default stays visible as the expression "
@@ -851,6 +873,7 @@ def _object_keys(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Field", "Sites", "First seen"),
         alignments=("left", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Keys written literally in object position. A computed key is "
             "absent rather than guessed at, and shorthand is counted only "
@@ -967,6 +990,7 @@ def _data_flow(context: PanelContext) -> Panel:
         ),
         alignments=("left", "right", "left", "right", "left", "right"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Granularity is the module on purpose. Call edges record a module "
             "and a called name rather than a resolved function, so naming which "
@@ -1075,6 +1099,7 @@ def _endpoint_catalog(symbols: tuple[dict[str, Any], ...]) -> Panel:
         ),
         alignments=("left", "left", "left", "left", "right", "left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             f"{len(rows):,} served routes, of which {unguarded:,} reach their body with no guard "
             "recorded in the handler itself. Guards and refusals are counted inside the "
@@ -1108,6 +1133,7 @@ def _contract_concordance(routes: tuple[ContractRoute, ...]) -> Panel:
         columns=("Path", "Served methods", "Documented methods", "Local caller", "Relation"),
         alignments=("left", "left", "left", "left", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Exact paths and literal static prefixes only. A local caller match does not prove "
             "that runtime configuration sends the request to this server. The complete rows, "
@@ -1142,6 +1168,7 @@ def _value_set_concordance(vocabularies: tuple[ContractValueSet, ...]) -> Panel:
         columns=("Members", "Sites", "Forms", "Declared at"),
         alignments=("left", "right", "left", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Joined on the member set itself, exactly -- never on the name, because this "
             "kind of vocabulary is routinely spelled under different names in different "
@@ -1172,6 +1199,7 @@ def _record_concordance(records: tuple[ContractRecord, ...]) -> Panel:
         columns=("Shapes", "Relation", "Shared fields", "Forms", "Declared at"),
         alignments=("left", "left", "right", "left", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Joined on field names, exactly. `identical` means both forms name the same "
             "fields; `superset` means one strictly contains the other, which is the "
@@ -1277,6 +1305,7 @@ def _multi_role(roles: tuple[MultiRole, ...]) -> Panel:
         columns=("Structure", "Concerns", "Families", "Claim categories", "Declared at"),
         alignments=("left", "right", "left", "left", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Nothing here is asserted that a claim did not already say; what is "
             "added is that two of them are about the same object. Facets of one "
@@ -1378,6 +1407,7 @@ def _documented_values(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Name", "Documented", "In code", "Agreement", "Stated at"),
         alignments=("left", "left", "left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             f"{len(rows):,} names are asserted by documentation. {comparable:,} of them "
             f"also name a constant this code declares and could therefore be checked; "
@@ -1440,6 +1470,7 @@ def _external_calls(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Call", "Imported as", "Origin", "Sites", "First seen"),
         alignments=("left", "left", "left", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "The receiver has to trace back to an import, so a call on a "
             "parameter is this module's own wiring and is excluded. A name "
@@ -1474,6 +1505,7 @@ def _config_settings(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Setting", "Value", "Declared in"),
         alignments=("left", "left", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             "Scalar settings only, flattened to dotted keys. `strict` set to "
             "false is a fact about how much of a codebase the type checker "
@@ -1522,6 +1554,7 @@ def _external_origins(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Host", "Scheme", "Literals", "First seen"),
         alignments=("left", "left", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             "Hosts written as literals, not requests observed: a URL built at "
             "runtime from parts is absent, and a literal in dead code still "
@@ -1567,6 +1600,7 @@ def _external_api_surface(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Reference", "Use", "Sites", "First seen"),
         alignments=("left", "left", "right", "left"),
         rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
         note=(
             f"Showing {min(len(rows), MAX_SYMBOL_ROWS):,} of {len(rows):,} references. "
             "A name this repository declares is excluded, so what remains is "
@@ -1599,6 +1633,7 @@ def _data_containers(symbols: tuple[dict[str, Any], ...]) -> Panel:
         columns=("Name", "Kind", "Entries", "Defined at"),
         alignments=("left", "left", "right", "left"),
         rows=tuple(rows[:MAX_SYMBOL_ROWS]),
+        total_rows=len(rows),
         note=(
             "Literal list, set, and dict assignments at module scope with two or "
             "more entries. A table built at import time by a call is not a literal "

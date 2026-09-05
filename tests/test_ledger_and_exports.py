@@ -11,7 +11,7 @@ from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.exports import export_jsonl, export_markdown
-from open_skeleton.ledger import EvidenceLedger
+from open_skeleton.ledger import EvidenceLedger, _declared_text
 from open_skeleton.scanner import scan_repository
 from tests.helpers import create_sample_repository
 
@@ -188,3 +188,29 @@ class AdditiveMigrationTests(TestCase):
                     for row in connection.execute("PRAGMA table_info(analysis_coverage)")
                 ]
             self.assertEqual(columns.count("claimed_files"), 1)
+
+
+class DeclaredExpressionSearchTests(TestCase):
+    """A computed constant is searchable by name and says what it computes.
+
+    `ThreadPoolExecutor` writes its whole state vocabulary as arithmetic over
+    `COUNT_BITS`, and a search that returns the names without the expressions
+    answers "where is it" and not "what is it".
+    """
+
+    def test_a_computed_constant_shows_its_expression(self) -> None:
+        text = _declared_text(
+            {"tunables": {"COUNT_BITS": {"expression": "Integer.SIZE-3", "line": 4}}}
+        )
+        self.assertIn("COUNT_BITS = Integer.SIZE-3", text)
+
+    def test_a_literal_constant_still_shows_its_value(self) -> None:
+        text = _declared_text({"tunables": {"MAX_CAP": {"value": "0x7fff", "line": 9}}})
+        self.assertIn("MAX_CAP = 0x7fff", text)
+
+    def test_a_constant_with_neither_is_named_alone(self) -> None:
+        # A Rust `static` can be declared in one place and assigned in
+        # another, so a name without either is a real case rather than a bug.
+        text = _declared_text({"tunables": {"LIMIT": {"line": 2}}})
+        self.assertIn("LIMIT", text)
+        self.assertNotIn("LIMIT =", text)

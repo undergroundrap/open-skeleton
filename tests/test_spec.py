@@ -18,6 +18,8 @@ from open_skeleton.spec import build_spec, load_profile, render_spec_markdown, v
 from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.panels import (
     MAX_MESSAGE_CHARS,
+    MAX_TUNABLES,
+    Panel,
     PanelContext,
     _truncate_message,
     build_panel,
@@ -575,6 +577,57 @@ class AppendixPanelTests(TestCase):
             panel = build_panel(name, PanelContext(symbols=self.SYMBOLS))
             assert panel.note is not None
             self.assertIn("not", panel.note.lower())
+
+
+class WithheldRowTests(TestCase):
+    """A document that withholds rows has to say where they went."""
+
+    def test_a_panel_reports_what_it_dropped(self) -> None:
+        panel = Panel(
+            name="p",
+            title="t",
+            columns=("a",),
+            alignments=("left",),
+            rows=(("x",),),
+            total_rows=10,
+        )
+        self.assertEqual(panel.dropped_rows, 9)
+        self.assertEqual(panel.to_dict()["total_rows"], 10)
+
+    def test_a_panel_that_kept_everything_dropped_nothing(self) -> None:
+        panel = Panel(name="p", title="t", columns=("a",), alignments=("left",), rows=(("x",),))
+        self.assertEqual(panel.dropped_rows, 0)
+        self.assertEqual(panel.to_dict()["total_rows"], 1)
+
+    def test_a_truncated_table_says_where_the_rest_is(self) -> None:
+        rendered = self._render(constants=MAX_TUNABLES + 40)
+        # The count for `spec.json` is right and stays. The claim about
+        # `spec.index.json` goes: it carries identity and no metadata, so it
+        # holds none of a metadata panel's rows.
+        self.assertIn("are carried in `spec.json`", rendered)
+        self.assertNotIn("`spec.index.json`, which scale", rendered)
+        self.assertIn("passed this panel's own limit", rendered)
+        self.assertIn("in neither projection", rendered)
+
+    def test_a_panel_within_its_limit_says_nothing_about_the_ledger(self) -> None:
+        rendered = self._render(constants=30)
+        self.assertNotIn("passed this panel's own limit", rendered)
+
+    def _render(self, *, constants: int) -> str:
+        body = "".join(
+            f"    static final int LIMIT_{index} = {index};\n" for index in range(constants)
+        )
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Policy.java").write_text(
+                f"public class Policy {{\n{body}}}\n", encoding="utf-8"
+            )
+            ledger = EvidenceLedger(root / "evidence.sqlite3")
+            ledger.initialize()
+            snapshot = scan_repository(root)
+            ledger.save_snapshot(snapshot)
+            ledger.save_analysis(analyze_snapshot(snapshot))
+            return render_spec_markdown(build_spec(ledger, load_profile()))
 
 
 class DocumentedValueTests(TestCase):

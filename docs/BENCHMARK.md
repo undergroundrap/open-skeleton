@@ -339,6 +339,46 @@ one arrived holding 8,707 claims.
 Exit status is non-zero when anything crashed or any document disagreed with
 itself, which makes this usable as a gate over a corpus a team already trusts.
 
+## Document budget: what the specification knows and does not show
+
+```
+python benchmarks/generalization/run_document_budget.py --source .
+```
+
+Every panel truncates twice. The panel keeps at most its own limit, and the
+markdown then prints at most twenty-five rows of what survived. Both are
+deliberate: a specification that printed every row would be an inventory, and
+the projections exist to carry the inventory instead.
+
+This asks whether that split holds, because a withheld row is fine when a
+reader can reach it and is told where, and a hole when the document says it is
+somewhere it is not. It reports three numbers per panel — printed, carried in
+`spec.json`, and dropped by the panel before either projection saw them — and
+tests, rather than assumes, whether a dropped row is recoverable:
+`spec.index.json` carries each symbol's identity and nothing from its
+metadata, so a panel made of symbol identity keeps its content reachable there
+and a panel made of metadata does not.
+
+Its first run found the sentence under every truncated table to be wrong
+twice. On `java.util.concurrent` the ledger holds 254 numeric tunables,
+`spec.json` holds 120 because the panel has a limit of its own, and
+`spec.index.json` holds none of them — yet the note read "95 further row(s)
+are carried in `spec.json` and `spec.index.json`". A reader sent to look for
+`MAX_CAP` there found nothing, and had no way to tell whether the engine had
+ever read it. The note now names only what each projection carries, and a
+panel that dropped rows says so and points at the ledger, which
+`open-skeleton search` reads.
+
+The same run showed the second thing worth knowing, which is not yet fixed:
+rows are ordered by path, so a printed table of twenty-five is twenty-five
+rows about the files whose names sort first. On this repository `symbol_index`
+prints rows about 3 of the 52 files it holds rows for, and `signatures` 4 of
+92. Some order has to be chosen, and this one decides whether a reader who
+trusts the table is reading the repository or its first few files.
+
+Exit status is zero. This measures what the document withholds; it is not a
+gate.
+
 ## Reader parity: which readers record what the others record
 
 ```

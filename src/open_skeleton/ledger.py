@@ -80,7 +80,11 @@ def _declared_text(metadata: dict[str, Any]) -> str:
                 # a vocabulary whose every member was recorded.
                 value = f"{len(members)} member(s): " + ", ".join(str(item) for item in members)
             else:
-                value = str(entry.get("value", ""))
+                # A computed constant has no value and does have an
+                # expression. Printing the name alone left `COUNT_BITS =
+                # Integer.SIZE - 3` searchable by name and silent about what
+                # it is, while the panel next to it showed the arithmetic.
+                value = str(entry.get("value", entry.get("expression", "")))
             parts.append(f"{name} = {value}" if value else str(name))
 
     # A parameter default is a declared value like any other, and often the

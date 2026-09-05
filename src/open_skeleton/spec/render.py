@@ -1390,9 +1390,20 @@ def render_spec_markdown(document: SpecDocument) -> str:
                 withheld = len(panel.rows) - MAX_PANEL_ROWS
                 if withheld > 0:
                     lines.append(
-                        f"\n_{withheld:,} further row(s) are carried in `spec.json` and "
-                        "`spec.index.json`, which scale with the repository where this "
-                        "document scales with what is interesting in it._\n"
+                        f"\n_{withheld:,} further row(s) are carried in `spec.json`, which "
+                        "scales with the repository where this document scales with what is "
+                        "interesting in it._\n"
+                    )
+                # A panel keeps at most its own limit, so rows beyond it reach
+                # no projection. Saying they are in `spec.json` -- which the
+                # previous wording did, along with `spec.index.json`, which
+                # carries identity and no metadata at all -- sent a reader to
+                # look somewhere they are not.
+                if panel.dropped_rows:
+                    lines.append(
+                        f"\n_A further {panel.dropped_rows:,} row(s) passed this panel's own "
+                        "limit and are in neither projection. They are in the ledger, which "
+                        "`open-skeleton claims` and `open-skeleton search` read._\n"
                     )
                 lines.append("\n")
             if panel.note:
