@@ -2210,9 +2210,16 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
             symbol=self.current_qualified_name,
             evidence_kind="import",
         )
+        # The leading dots are the whole difference between a sibling and the
+        # standard library, and stripping them made `from .warnings import
+        # local` and `from warnings import warn` the same reference. `pydantic`
+        # ships a `warnings.py`, and 26 of its `import warnings` edges resolved
+        # to it -- a wrong answer recorded as a fact, which is worse than the
+        # unresolved edge it replaced.
         module = "." * node.level + (node.module or "")
         for alias in node.names:
-            target = f"{module}.{alias.name}".strip(".")
+            body = f"{module.lstrip('.')}.{alias.name}".strip(".")
+            target = "." * node.level + body
             self._edge(
                 relationship="imports",
                 target_ref=target,

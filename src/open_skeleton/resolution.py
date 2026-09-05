@@ -73,6 +73,21 @@ def _dotted(path: str) -> str:
     return ".".join(part for part in parts if part)
 
 
+def _as_path(reference: str) -> str:
+    """A Python relative import written the way `./x` is written.
+
+    One leading dot means this package, and each dot after it means one level
+    up: `.a.b` is `./a/b`, `..a` is `../a`, `...a` is `../../a`. The remaining
+    dots separate names and become directory separators, which is what they
+    already mean.
+    """
+
+    level = len(reference) - len(reference.lstrip("."))
+    body = reference[level:].replace(".", "/")
+    prefix = "./" if level <= 1 else "../" * (level - 1)
+    return prefix + body if body else prefix.rstrip("/")
+
+
 def _relative_candidates(reference: str, source_path: str) -> list[str]:
     """Module names a `./x` or `../x` reference could name, from this file."""
 
@@ -105,6 +120,11 @@ def _candidates(reference: str, source_path: str) -> list[str]:
     itself. `super::` is absent because a parent module cannot be identified
     from a file stem, and inventing one would resolve edges to the wrong
     symbol rather than leave them honestly unresolved.
+
+    Python's relative import is the same idea in different punctuation: `.x`
+    is `./x` and `..x.y` is `../x/y`, one leading dot per level. It is handled
+    with the other relative form rather than beside it, because they are one
+    rule about position and not two rules about syntax.
     """
 
     reference = reference.strip()
@@ -112,6 +132,8 @@ def _candidates(reference: str, source_path: str) -> list[str]:
         return []
     if reference.startswith(("./", "../")):
         return _relative_candidates(reference, source_path)
+    if reference.startswith("."):
+        return _relative_candidates(_as_path(reference), source_path)
     if reference.startswith("crate::"):
         return [reference[len("crate::") :]]
     if reference.startswith(("super::", "self::")) or reference in {"super", "self", "crate"}:
@@ -270,6 +292,37 @@ def _index(symbols: Iterable[SymbolRecord]) -> dict[str, list[SymbolRecord]]:
     return found
 
 
+PYTHON_SUFFIXES = (".py", ".pyi")
+
+
+def _package_root_modules(files: Sequence[FileRecord]) -> frozenset[str]:
+    """Top-level module names that an absolute Python import cannot mean.
+
+    Empty unless the snapshot root holds an `__init__.py`, which makes the
+    root the inside of a package: a module beside it is `package.module` to
+    everyone else and `.module` from within, never the bare name. So
+    `pydantic`, which ships `warnings.py`, resolved 26 `import warnings` edges
+    to its own file, and each was the standard library.
+
+    A root without `__init__.py` is a project root. There `import mypkg.thing`
+    really does name `mypkg/thing.py`, so nothing is withheld.
+    """
+
+    paths = {item.path for item in files}
+    if "__init__.py" not in paths:
+        return frozenset()
+    names: set[str] = set()
+    for path in paths:
+        head, _, rest = path.partition("/")
+        if not rest:
+            stem, dot, suffix = head.rpartition(".")
+            if dot and f".{suffix}" in PYTHON_SUFFIXES and stem != "__init__":
+                names.add(stem)
+        elif rest == "__init__.py":
+            names.add(head)
+    return frozenset(names)
+
+
 def resolve_import_targets(
     files: Sequence[FileRecord],
     symbols: Sequence[SymbolRecord],
@@ -294,12 +347,24 @@ def resolve_import_targets(
     by_name = _index(symbols)
     known = {item.path for item in files}
     roots = _crate_roots(files)
+    package_modules = _package_root_modules(files)
     resolved: list[EdgeRecord] = []
     for edge in edges:
         if edge.relationship != "imports" or edge.target_symbol_id:
             resolved.append(edge)
             continue
         if edge.source_path not in known:
+            resolved.append(edge)
+            continue
+        # An absolute import from inside a package goes to `sys.path`, which
+        # is the directory above this snapshot. Resolving it to a file at the
+        # root is how `import warnings` became `pydantic/warnings.py`.
+        if (
+            package_modules
+            and edge.source_path.endswith(PYTHON_SUFFIXES)
+            and not edge.target_ref.startswith(".")
+            and edge.target_ref.split(".", 1)[0] in package_modules
+        ):
             resolved.append(edge)
             continue
         # `crate::` means this crate. A workspace where two members both

@@ -12,10 +12,19 @@ path of edge IDs, and a name with no target is not a path.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 
+from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.models import EdgeRecord, FileRecord, SymbolRecord
-from open_skeleton.resolution import resolve_call_targets, resolve_import_targets
+from open_skeleton.resolution import (
+    _as_path,
+    _package_root_modules,
+    resolve_call_targets,
+    resolve_import_targets,
+)
+from open_skeleton.scanner import scan_repository
 
 
 def _file(path: str, language: str = "Rust") -> FileRecord:
@@ -302,3 +311,125 @@ class CallResolutionTests(TestCase):
             )
         ]
         self.assertIsNone(self._resolve([], edges)["i1"])
+
+
+class RelativeImportTests(TestCase):
+    """A leading dot is the difference between a sibling and the standard library.
+
+    `visit_ImportFrom` built the module name with its dots and then stripped
+    them, so `from .warnings import local` and `from warnings import warn`
+    reached the ledger as one reference. `pydantic` ships a `warnings.py`, and
+    26 of its `import warnings` edges resolved to that file -- a wrong answer
+    recorded as a fact, which is worse than the unresolved edge it replaced.
+    """
+
+    SOURCES = {
+        "pkg/__init__.py": "",
+        "pkg/warnings.py": "def local(): pass\n",
+        "pkg/sub/__init__.py": "",
+        "pkg/sub/sibling.py": "X = 1\n",
+        "pkg/sub/deep.py": "from ..warnings import local\nfrom . import sibling\n",
+        "pkg/main.py": (
+            "import warnings\n"
+            "from warnings import warn\n"
+            "from .warnings import local\n"
+            "from . import warnings as sibling\n"
+        ),
+    }
+
+    def _edges(self, sources: dict[str, str]) -> dict[tuple[str, str], bool]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in sources.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return {
+            (edge.source_path, edge.target_ref): bool(edge.target_symbol_id)
+            for edge in result.edges
+            if edge.relationship == "imports"
+        }
+
+    def test_the_reader_keeps_the_level(self) -> None:
+        edges = self._edges(self.SOURCES)
+        written = {reference for path, reference in edges if path == "pkg/main.py"}
+        self.assertEqual(
+            sorted(written), [".warnings", ".warnings.local", "warnings", "warnings.warn"]
+        )
+
+    def test_a_relative_import_resolves_to_its_sibling(self) -> None:
+        edges = self._edges(self.SOURCES)
+        self.assertTrue(edges[("pkg/main.py", ".warnings.local")])
+        self.assertTrue(edges[("pkg/main.py", ".warnings")])
+
+    def test_a_parent_relative_import_resolves(self) -> None:
+        edges = self._edges(self.SOURCES)
+        self.assertTrue(edges[("pkg/sub/deep.py", "..warnings.local")])
+        self.assertTrue(edges[("pkg/sub/deep.py", ".sibling")])
+
+    def test_an_absolute_import_does_not_resolve_to_a_package_sibling(self) -> None:
+        # The root holds `__init__.py`, so it is the inside of a package: a
+        # module beside it is `pkg.warnings` to everyone else and `.warnings`
+        # from within, never the bare name.
+        edges = self._edges(self.SOURCES)
+        self.assertFalse(edges[("pkg/main.py", "warnings")])
+        self.assertFalse(edges[("pkg/main.py", "warnings.warn")])
+
+    def test_a_project_root_still_resolves_its_own_package(self) -> None:
+        # No `__init__.py` at the root, so `import mypkg.thing` really does
+        # name `mypkg/thing.py` and nothing is withheld.
+        edges = self._edges(
+            {
+                "mypkg/__init__.py": "",
+                "mypkg/thing.py": "def go(): pass\n",
+                "app.py": "from mypkg.thing import go\n",
+            }
+        )
+        self.assertTrue(edges[("app.py", "mypkg.thing.go")])
+
+
+class RelativePathSpellingTests(TestCase):
+    """Python's relative import is `./x` in different punctuation."""
+
+    def test_one_dot_is_this_directory(self) -> None:
+        self.assertEqual(_as_path(".sibling"), "./sibling")
+
+    def test_a_dotted_tail_becomes_a_path(self) -> None:
+        self.assertEqual(_as_path(".a.b"), "./a/b")
+
+    def test_each_extra_dot_is_one_level_up(self) -> None:
+        self.assertEqual(_as_path("..a"), "../a")
+        self.assertEqual(_as_path("...a.b"), "../../a/b")
+
+    def test_a_bare_level_names_the_directory(self) -> None:
+        self.assertEqual(_as_path("."), ".")
+        self.assertEqual(_as_path(".."), "..")
+
+
+class PackageRootTests(TestCase):
+    """A root holding `__init__.py` is the inside of a package."""
+
+    def _files(self, *paths: str) -> list[FileRecord]:
+        return [
+            FileRecord(
+                path=path,
+                size_bytes=1,
+                sha256="0" * 64,
+                language="Python",
+                line_count=1,
+                role="source",
+            )
+            for path in paths
+        ]
+
+    def test_a_package_root_names_its_own_modules(self) -> None:
+        found = _package_root_modules(
+            self._files("__init__.py", "warnings.py", "sub/__init__.py", "sub/deep.py")
+        )
+        self.assertEqual(sorted(found), ["sub", "warnings"])
+
+    def test_a_project_root_names_nothing(self) -> None:
+        self.assertEqual(
+            _package_root_modules(self._files("app.py", "mypkg/__init__.py")), frozenset()
+        )
