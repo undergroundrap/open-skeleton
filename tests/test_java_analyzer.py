@@ -22,6 +22,7 @@ from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.java_lexical import (
+    IDENTITY_CONSTANTS,
     JavaMember,
     constant_index,
     declared_constants,
@@ -477,6 +478,33 @@ class JavaDeclaredValueTests(TestCase):
         # tell the literal from the name.
         found = declared_constants(tokenize('class P { static final String L = PREFIX + "x"; }\n'))
         self.assertEqual(found["L"]["expression"], 'PREFIX+"x"')
+
+    def test_a_serial_version_is_not_a_tunable(self) -> None:
+        # Named by the serialization specification rather than by the program.
+        # Every `Serializable` class declares one -- 46 of the 304 constants in
+        # `java.util.concurrent` -- and changing it breaks deserialisation of
+        # everything already written, so it is not a dial. Spreading the
+        # printed rows across files is what made it obvious: three of the first
+        # five rows of that package's tunable index were `serialVersionUID`.
+        self.assertIn("serialVersionUID", IDENTITY_CONSTANTS)
+        result = _analyze(
+            {
+                "P.java": (
+                    "import java.io.Serializable;\n"
+                    "public class P implements Serializable {\n"
+                    "  private static final long serialVersionUID = 1L;\n"
+                    "  static final int MAX = 10;\n"
+                    "}\n"
+                )
+            }
+        )
+        tunables: dict[str, Any] = {}
+        for symbol in result.symbols:
+            metadata = symbol.metadata or {}
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            tunables.update(metadata.get("tunables") or {})
+        self.assertEqual(sorted(tunables), ["MAX"])
 
     def test_a_constant_is_indexed_by_its_declared_type(self) -> None:
         # A computed constant has no value to inspect, and Java wrote the type

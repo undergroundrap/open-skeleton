@@ -33,6 +33,7 @@ from open_skeleton.spec.render import (
     RenderedClaim,
     _excerpt,
     _spread_by_category,
+    _spread_by_source,
     render_spec_index_json,
     render_spec_json,
 )
@@ -628,6 +629,41 @@ class WithheldRowTests(TestCase):
             ledger.save_snapshot(snapshot)
             ledger.save_analysis(analyze_snapshot(snapshot))
             return render_spec_markdown(build_spec(ledger, load_profile()))
+
+
+class SpreadRowTests(TestCase):
+    """Twenty-five rows about the repository, not about its first files.
+
+    Rows arrive in path order and the document prints the first twenty-five,
+    which on this repository meant `symbol_index` printed rows about 3 of the
+    52 files it held rows for and `signatures` 4 of 92.
+    `_spread_by_category` made the same argument for findings and fixed it the
+    same way; this applies its rule with the file in place of the category.
+    """
+
+    ROWS = tuple(
+        (f"N{index}", str(index), f"pkg/file{index // 20}.py:{index}") for index in range(100)
+    )
+
+    def test_every_file_is_represented_before_any_file_repeats(self) -> None:
+        chosen = _spread_by_source(self.ROWS, 5)
+        files = [row[2].split(":")[0] for row in chosen]
+        self.assertEqual(len(set(files)), 5)
+
+    def test_selection_changes_but_order_does_not(self) -> None:
+        # The chosen rows are returned in the order the panel had them, so the
+        # table still reads grouped by file rather than shuffled.
+        chosen = _spread_by_source(self.ROWS, 12)
+        self.assertEqual(chosen, sorted(chosen, key=self.ROWS.index))
+
+    def test_a_panel_within_the_limit_is_untouched(self) -> None:
+        self.assertEqual(_spread_by_source(self.ROWS[:5], 25), list(self.ROWS[:5]))
+
+    def test_rows_without_a_location_keep_their_order(self) -> None:
+        # A census grouped by language cites no file. Every row lands in one
+        # bucket and the order is exactly what it was.
+        rows = tuple((f"lang{index}", str(index)) for index in range(40))
+        self.assertEqual(_spread_by_source(rows, 3), list(rows[:3]))
 
 
 class DocumentedValueTests(TestCase):

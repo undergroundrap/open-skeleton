@@ -863,6 +863,57 @@ def _unread_files(coverage: Iterable[dict[str, Any]]) -> tuple[int, tuple[str, .
     return total, tuple(sorted(languages))
 
 
+def _row_source(row: tuple[str, ...]) -> str:
+    """The file a panel row cites, or an empty string when it cites none.
+
+    Read from the last cell that looks like a location, because that is where
+    every panel that has one puts it. A panel without one -- a census grouped
+    by language -- yields the same key for every row, and the spread below
+    then leaves the order exactly as it was.
+    """
+
+    for cell in reversed(row):
+        text = str(cell).strip("` ")
+        head = text.split(":", 1)[0]
+        if "/" in head and "." in head.rsplit("/", 1)[-1]:
+            return head
+    return ""
+
+
+def _spread_by_source(rows: tuple[tuple[str, ...], ...], limit: int) -> list[tuple[str, ...]]:
+    """The rows to print, chosen so more than one file is represented.
+
+    Rows arrive in path order and printing the first `limit` of them prints
+    the files whose names sort first: 3 of 52 for this repository's symbol
+    index. `_spread_by_category` made the same argument for findings and fixed
+    it the same way, by visiting each group round-robin so the first row of
+    each is seen before the second row of any.
+
+    Selection changes; order does not. The chosen rows are returned in the
+    order the panel had them, so the table still reads grouped by file.
+    """
+
+    if len(rows) <= limit:
+        return list(rows)
+    grouped: dict[str, list[int]] = {}
+    for index, row in enumerate(rows):
+        grouped.setdefault(_row_source(row), []).append(index)
+    chosen: list[int] = []
+    depth = 0
+    while len(chosen) < limit:
+        added = False
+        for bucket in grouped.values():
+            if depth < len(bucket):
+                chosen.append(bucket[depth])
+                added = True
+                if len(chosen) == limit:
+                    break
+        if len(chosen) == limit or not added:
+            break
+        depth += 1
+    return [rows[index] for index in sorted(chosen)]
+
+
 def _spread_by_category(claims: list[RenderedClaim], limit: int) -> list[RenderedClaim]:
     """The most important findings, one category at a time.
 
@@ -1385,7 +1436,7 @@ def render_spec_markdown(document: SpecDocument) -> str:
                     + "|".join("---:" if item == "right" else "---" for item in panel.alignments)
                     + "|\n"
                 )
-                for row in panel.rows[:MAX_PANEL_ROWS]:
+                for row in _spread_by_source(panel.rows, MAX_PANEL_ROWS):
                     lines.append("| " + " | ".join(_escape(cell) for cell in row) + " |\n")
                 withheld = len(panel.rows) - MAX_PANEL_ROWS
                 if withheld > 0:

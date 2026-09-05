@@ -560,6 +560,13 @@ NUMERIC_TYPES = frozenset(
     }
 )
 TEXT_TYPES = frozenset({"String", "CharSequence"})
+# Named by the serialization specification rather than by the program. Every
+# `Serializable` class declares one -- 46 of the 304 constants in
+# `java.util.concurrent` -- and none of them is a number anyone changes to
+# alter behaviour: changing it breaks deserialisation of everything already
+# written. It stays out of both indexes and stays searchable, since "what is
+# this class's serial version" is a real question.
+IDENTITY_CONSTANTS = frozenset({"serialVersionUID"})
 
 
 def constant_index(entry: dict[str, object]) -> str:
@@ -1333,7 +1340,10 @@ class JavaLexicalAnalyzer:
                 file_enums = declared_enums(tokens)
                 file_shapes = declared_shapes(tokens)
                 file_constants = declared_constants(tokens)
-                indexed = {name: constant_index(entry) for name, entry in file_constants.items()}
+                indexed = {
+                    name: "" if name in IDENTITY_CONSTANTS else constant_index(entry)
+                    for name, entry in file_constants.items()
+                }
                 file_strings = {
                     name: entry for name, entry in file_constants.items() if indexed[name] == "text"
                 }

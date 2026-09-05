@@ -33,11 +33,11 @@ go stale the first time a panel is added, this tests each one: it asks whether
 the subject of a row the panel kept is a name the index carries, since the
 dropped rows come from the same generator as the kept ones.
 
-It also reports how much of the repository a printed panel represents, since
-rows are ordered by path and a table of twenty-five may be twenty-five rows
-about the four files whose names sort first. That is not a defect on its own
--- some order has to be chosen -- but it decides whether a reader who trusts
-the table is reading the repository or its first few files.
+It also reports how much of the repository a printed panel represents. That
+number is why the renderer now visits each file round-robin when it chooses
+its twenty-five rows: before it did, `symbol_index` printed rows about 3 of
+the 52 files it held rows for, and `signatures` 4 of 92. A reader who trusted
+those tables was reading the files whose names sort first.
 
     python benchmarks/generalization/run_document_budget.py --source .
 
@@ -59,7 +59,7 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec.profile import load_profile
-from open_skeleton.spec.render import MAX_PANEL_ROWS, build_spec
+from open_skeleton.spec.render import MAX_PANEL_ROWS, _spread_by_source, build_spec
 
 
 # The column a row cites its source in is the last one for every panel that
@@ -113,7 +113,9 @@ def examine(repository: Path) -> list[dict[str, object]]:
         if projected <= printed and not unreachable:
             continue
         everywhere = _cited_paths(panel.rows)
-        shown = _cited_paths(panel.rows[:MAX_PANEL_ROWS])
+        # The renderer's own selection, so this measures the document
+        # rather than a copy of how the document used to choose.
+        shown = _cited_paths(tuple(_spread_by_source(panel.rows, MAX_PANEL_ROWS)))
         found.append(
             {
                 "panel": panel.name,
@@ -203,9 +205,9 @@ def main() -> int:
     )
     print(
         "The files column is how many of the files a panel holds rows about are represented "
-        "in the twenty-five it prints. Rows are ordered by path, so a low ratio means the "
-        "printed table describes the repository's first few files rather than the "
-        "repository.\n"
+        "in the twenty-five it prints. The renderer visits each file round-robin, so a "
+        "ratio well below twenty-five now means the panel genuinely covers few files, "
+        "rather than that the table is showing whichever files sort first.\n"
     )
     return 0
 
