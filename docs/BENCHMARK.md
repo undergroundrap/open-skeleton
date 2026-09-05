@@ -354,27 +354,31 @@ This asks whether that split holds, because a withheld row is fine when a
 reader can reach it and is told where, and a hole when the document says it is
 somewhere it is not. It reports three numbers per panel — printed, carried in
 `spec.json`, and dropped by the panel before either projection saw them — and
-tests, rather than assumes, whether a dropped row is recoverable:
-`spec.index.json` carries each symbol's identity and nothing from its
-metadata, so a panel made of symbol identity keeps its content reachable there
-and a panel made of metadata does not.
+tests, rather than assumes, whether a dropped row is recoverable, by reading
+the index the engine publishes rather than a model of it.
 
 Its first run found the sentence under every truncated table to be wrong
-twice. On `java.util.concurrent` the ledger holds 254 numeric tunables,
-`spec.json` holds 120 because the panel has a limit of its own, and
-`spec.index.json` holds none of them — yet the note read "95 further row(s)
-are carried in `spec.json` and `spec.index.json`". A reader sent to look for
+twice. On `java.util.concurrent` the ledger held 254 numeric tunables,
+`spec.json` held 120 because the panel has a limit of its own, and
+`spec.index.json` held none of them — yet the note read "95 further row(s) are
+carried in `spec.json` and `spec.index.json`". A reader sent to look for
 `MAX_CAP` there found nothing, and had no way to tell whether the engine had
-ever read it. The note now names only what each projection carries, and a
-panel that dropped rows says so and points at the ledger, which
-`open-skeleton search` reads.
+ever read it.
 
-The same run showed the second thing worth knowing, which is not yet fixed:
-rows are ordered by path, so a printed table of twenty-five is twenty-five
-rows about the files whose names sort first. On this repository `symbol_index`
-prints rows about 3 of the 52 files it holds rows for, and `signatures` 4 of
-92. Some order has to be chosen, and this one decides whether a reader who
-trusts the table is reading the repository or its first few files.
+Two changes followed, in that order. The note now names only what each
+projection carries. Then the index was made to carry what each symbol
+declares, not only what it is called, since a file that calls itself the
+complete inventory should be one: the same check now reports 88 rows dropped
+on that package and none about a subject the index lacks.
+
+The same run showed the second thing worth knowing. Rows arrived in path
+order, so a printed table of twenty-five was twenty-five rows about the files
+whose names sort first: `symbol_index` printed rows about 3 of the 52 files it
+held rows for, and `signatures` 4 of 92. The renderer now visits each file
+round-robin when it chooses which rows to print — the rule
+`_spread_by_category` already applied to findings, with the file in place of
+the category — and both print rows from 25 files. Selection changed; order did
+not, so the tables still read grouped by file.
 
 Exit status is zero. This measures what the document withholds; it is not a
 gate.
