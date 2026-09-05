@@ -21,6 +21,7 @@ from open_skeleton.analyzers.rust_lexical import (
     _name_index,
     _struct_fields,
     _trait_implementations,
+    _use_targets,
     tokenize,
 )
 from open_skeleton.models import AnalysisResult
@@ -965,3 +966,64 @@ class ValuelessConstantTests(TestCase):
         for symbol in result.symbols:
             for entry in (symbol.metadata.get("string_constants") or {}).values():
                 self.assertIn("value", entry)
+
+
+class RustUseGroupTests(TestCase):
+    """A braced `use` imports several names, and this reader recorded one.
+
+    `use crate::parts::{FormFactor, make}` reached the ledger as
+    `crate::parts` and both names were gone, which is why a crate writing
+    `use super::{a, b, c}` nineteen times produced 76 unresolved `super`
+    edges. Across the Rust on this machine, 216 of 649 `use` statements carry
+    braces and hold roughly 600 names between them.
+    """
+
+    def _targets(self, source: str) -> list[str]:
+        found, _ = _use_targets(tokenize(source), 1)
+        return sorted(found)
+
+    def test_a_group_becomes_one_name_each(self) -> None:
+        self.assertEqual(
+            self._targets("use crate::parts::{FormFactor, make};"),
+            ["crate::parts::FormFactor", "crate::parts::make"],
+        )
+
+    def test_a_plain_path_is_unchanged(self) -> None:
+        self.assertEqual(self._targets("use crate::rear::SLOT_PITCH;"), ["crate::rear::SLOT_PITCH"])
+
+    def test_a_nested_group_keeps_each_prefix(self) -> None:
+        self.assertEqual(
+            self._targets("use crate::{parts::{FormFactor, make}, rear};"),
+            ["crate::parts::FormFactor", "crate::parts::make", "crate::rear"],
+        )
+
+    def test_self_names_the_prefix_itself(self) -> None:
+        self.assertEqual(
+            self._targets("use crate::parts::{self, make};"),
+            ["crate::parts", "crate::parts::make"],
+        )
+
+    def test_a_glob_names_the_module_it_reaches_into(self) -> None:
+        # The items behind a `*` are not written here, and naming them would
+        # be this reader inventing them.
+        self.assertEqual(self._targets("use std::io::*;"), ["std::io"])
+
+    def test_an_alias_is_not_an_imported_name(self) -> None:
+        # `use a::B as C` imports `a::B`; `C` is what this file calls it.
+        self.assertEqual(self._targets("use crate::parts::make as build;"), ["crate::parts::make"])
+
+    def test_an_alias_inside_a_group_does_not_become_a_member(self) -> None:
+        self.assertEqual(
+            self._targets("use crate::parts::{FormFactor as F, make};"),
+            ["crate::parts::FormFactor", "crate::parts::make"],
+        )
+
+    def test_a_relative_group_keeps_its_level(self) -> None:
+        self.assertEqual(self._targets("use super::{a, b};"), ["super::a", "super::b"])
+
+    def test_a_glob_does_not_stall_the_scan(self) -> None:
+        # `_collect` broke on the star without moving, and `_group` called it
+        # again at the same position: a hang rather than a wrong answer.
+        self.assertEqual(
+            self._targets("use crate::{parts::*, rear};"), ["crate::parts", "crate::rear"]
+        )

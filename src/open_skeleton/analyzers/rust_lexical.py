@@ -1350,21 +1350,109 @@ def _module_name(path: str) -> str:
     return "::".join(item.replace("-", "_") for item in parts if item) or "crate"
 
 
-def _use_target(tokens: list[Token], start: int) -> tuple[str, int]:
-    """Collect the path of a `use` statement, stopping at `;`, `{`, or `as`."""
+# A `use` group can nest -- `use a::{b::{c, d}, e}` -- and a runaway depth
+# would be a malformed file rather than a deep one.
+MAX_USE_DEPTH = 8
+
+
+def _use_targets(tokens: list[Token], start: int) -> tuple[list[str], int]:
+    """Every name one `use` statement imports, and the index after its `;`.
+
+    A braced group imports several names and this reader recorded the prefix
+    alone, so `use crate::parts::{FormFactor, make}` was `crate::parts` and
+    both names were lost. Across the Rust on this machine that was two names
+    in five: 216 of 649 `use` statements carry braces.
+
+    Three members mean something other than a plain name. `self` names the
+    prefix itself, which is what `use a::{self, b}` says. `*` names the module
+    it globs, because the items behind it are not written here and inventing
+    them would be a guess. `as` renames the binding and does not change what
+    was imported, so collection stops at it.
+    """
+
+    found: list[str] = []
+    cursor = _collect(tokens, start, "", found, 0)
+    while cursor < len(tokens):
+        token = tokens[cursor]
+        cursor += 1
+        if token.kind == "punctuation" and token.value == ";":
+            break
+    return found, cursor
+
+
+def _collect(tokens: list[Token], start: int, prefix: str, found: list[str], depth: int) -> int:
+    """Read one path, expanding a group into one entry per member."""
 
     pieces: list[str] = []
     cursor = start
+
+    def joined() -> str:
+        return "::".join(filter(None, [prefix, *pieces]))
+
     while cursor < len(tokens):
         token = tokens[cursor]
-        if token.kind == "punctuation" and token.value in {";", "{"}:
-            break
+        if token.kind == "punctuation":
+            if token.value == ";":
+                break
+            if token.value == "{":
+                if depth >= MAX_USE_DEPTH:
+                    break
+                return _group(tokens, cursor + 1, joined(), found, depth + 1)
+            if token.value == "}":
+                break
+            if token.value == ",":
+                break
+            if token.value == "*":
+                # The module a glob reaches into. Its items are not written
+                # here, and naming them would be this reader inventing them.
+                # The cursor moves past the star: leaving it made `use
+                # std::io::*` a position neither this nor `_group` advanced
+                # from, which is a hang rather than a wrong answer.
+                cursor += 1
+                break
         if token.kind == "identifier":
             if token.value == "as":
+                # `use a::{B as C, d}` imports `a::B`; `C` is what this file
+                # calls it. Stepping over both keeps the group loop from
+                # reading the new name as another member and recording an
+                # import of `a::C`, which nothing exports.
+                cursor += 1
+                if cursor < len(tokens) and tokens[cursor].kind == "identifier":
+                    cursor += 1
                 break
             pieces.append(token.value)
         cursor += 1
-    return "::".join(pieces), cursor
+
+    target = joined()
+    if target:
+        found.append(target)
+    return cursor
+
+
+def _group(tokens: list[Token], start: int, prefix: str, found: list[str], depth: int) -> int:
+    """Read the members of a `{...}` group, each against the same prefix."""
+
+    cursor = start
+    while cursor < len(tokens):
+        token = tokens[cursor]
+        if token.kind == "punctuation":
+            if token.value == "}":
+                return cursor + 1
+            if token.value in {",", ";"}:
+                cursor += 1
+                continue
+        if token.kind == "identifier" and token.value == "self":
+            # `use a::{self, b}` imports `a` as well as `a::b`.
+            if prefix:
+                found.append(prefix)
+            cursor += 1
+            continue
+        # A member that consumes nothing would leave this loop where it was.
+        # Whatever it is, it is not a name, and stepping over it ends the
+        # group rather than the process.
+        moved = _collect(tokens, cursor, prefix, found, depth)
+        cursor = moved if moved > cursor else cursor + 1
+    return cursor
 
 
 class RustLexicalAnalyzer:
@@ -1607,8 +1695,8 @@ class RustLexicalAnalyzer:
                 excerpt = lines[token.line - 1] if token.line - 1 < len(lines) else ""
 
                 if token.value == "use":
-                    target, cursor = _use_target(tokens, index + 1)
-                    if target:
+                    targets, cursor = _use_targets(tokens, index + 1)
+                    for target in targets:
                         import_receipt = receipt(
                             file_record.path, token.line, "import", module, excerpt
                         )
