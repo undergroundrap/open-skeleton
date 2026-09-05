@@ -25,13 +25,12 @@ Three numbers per panel, and the third is the one that matters:
    them either.
 
 A dropped row is not automatically lost. `spec.index.json` carries every
-symbol's identity -- `qualified_name`, `kind`, `path`, `start_line` -- so a
-panel made of symbol identity keeps its content reachable there. What the
-index does not carry is `metadata`, and a panel built from metadata loses its
-dropped rows completely. Rather than list which panels are which, which would
-go stale the first time a panel is added, this tests each one: it asks whether
-the subject of a row the panel kept is a name the index carries, since the
-dropped rows come from the same generator as the kept ones.
+symbol's identity and everything it declares, so a row whose subject is one of
+those names is reachable there. This asks the real index rather than modelling
+it -- for a while the index held identity alone, a panel built from declared
+values lost its dropped rows to every projection, and the document said they
+were there anyway. That is what this check was built to find, and it would
+have stopped finding it the moment its model of the index went stale.
 
 It also reports how much of the repository a printed panel represents. That
 number is why the renderer now visits each file round-robin when it chooses
@@ -59,7 +58,12 @@ from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec.profile import load_profile
-from open_skeleton.spec.render import MAX_PANEL_ROWS, _spread_by_source, build_spec
+from open_skeleton.spec.render import (
+    MAX_PANEL_ROWS,
+    _spread_by_source,
+    build_spec,
+    render_spec_index_json,
+)
 
 
 # The column a row cites its source in is the last one for every panel that
@@ -89,19 +93,20 @@ def examine(repository: Path) -> list[dict[str, object]]:
         ledger.initialize()
         snapshot = scan_repository(repository)
         ledger.save_snapshot(snapshot)
-        result = analyze_snapshot(snapshot)
-        ledger.save_analysis(result)
+        ledger.save_analysis(analyze_snapshot(snapshot))
         document = build_spec(ledger, load_profile(None))
 
-    # What `spec.index.json` carries: a symbol's identity and nothing from its
-    # metadata. A row whose subject is one of these names survives the panel's
-    # cap somewhere a reader can reach.
+    # Read out of the index the engine actually publishes, so this cannot go
+    # on answering a question about an older one.
     indexed: set[str] = set()
-    for symbol in result.symbols:
-        name = symbol.qualified_name
+    for symbol in json.loads(render_spec_index_json(document))["symbols"]:
+        name = str(symbol["qualified_name"])
         indexed.add(name)
         indexed.add(name.rsplit(".", 1)[-1])
         indexed.add(name.rsplit("::", 1)[-1])
+        for entries in (symbol.get("declared") or {}).values():
+            if isinstance(entries, dict):
+                indexed.update(str(key) for key in entries)
 
     # Panels live in sections, and a panel of the same name can appear in more
     # than one. Each occurrence is truncated on its own, so each is counted.
@@ -197,11 +202,10 @@ def main() -> int:
             )
 
     print(
-        f"\n{dropped_total:,} row(s) were dropped by a panel, of which {lost_total:,} are in "
-        "no projection at all: `spec.index.json` carries a symbol's identity and nothing "
-        "from its metadata, so a metadata panel's dropped rows are recoverable only by "
-        "querying the ledger. A withheld row is fine when a reader can reach it and is told "
-        "where; it is a hole when the document says it is somewhere it is not.\n"
+        f"\n{dropped_total:,} row(s) were dropped by a panel, of which {lost_total:,} are "
+        "about subjects `spec.index.json` does not carry. A withheld row is fine when a "
+        "reader can reach it and is told where; it is a hole when the document says it is "
+        "somewhere it is not.\n"
     )
     print(
         "The files column is how many of the files a panel holds rows about are represented "

@@ -26,7 +26,13 @@ from open_skeleton.spec.concordance import (
 from open_skeleton.spec.consequences import Consequence, derive
 from open_skeleton.spec.diagrams import Diagram, build_diagrams
 from open_skeleton.spec.dossiers import Dossier, build_dossiers, render_dossiers
-from open_skeleton.spec.panels import Panel, PanelContext, build_panel, short_form
+from open_skeleton.spec.panels import (
+    PANEL_METADATA_KEYS,
+    Panel,
+    PanelContext,
+    build_panel,
+    short_form,
+)
 from open_skeleton.spec.probes import LedgerCorpus, ProbeResult, evaluate_section, run_probe
 from open_skeleton.spec.profile import VERDICTS, SpecProfile, SpecSection, SpecSelector
 from open_skeleton.spec.roles import MultiRole, derive_roles
@@ -272,6 +278,11 @@ class SpecDocument:
         were 37% of a six-megabyte file that a consumer had to parse in full
         to read a section. Splitting them means an agent that wants every name
         still gets it, and one that wants the document is not charged for it.
+
+        A symbol carries what it declares as well as what it is called. For a
+        while it did not, and a panel that truncated then lost its dropped
+        rows to every projection -- 88 numeric tunables on
+        `java.util.concurrent` -- while the document said they were here.
         """
 
         return {
@@ -739,10 +750,30 @@ def build_spec(
                 "end_line": item["end_line"],
                 "language": item.get("language"),
                 "analyzer": item.get("analyzer"),
+                # What this symbol declares, when it declares anything.
+                # Without it a panel that truncated lost its dropped rows to
+                # every projection, while the document said they were here.
+                **(
+                    {"declared": declared}
+                    if (declared := _declared_values(item.get("metadata")))
+                    else {}
+                ),
             }
             for item in symbols
         ),
     )
+
+
+def _declared_values(metadata: Any) -> dict[str, Any]:
+    """The declarations a panel would have shown, for one symbol.
+
+    Empty for a symbol that declares none, so the index does not grow a key
+    for every name it already carried.
+    """
+
+    if not isinstance(metadata, dict):
+        return {}
+    return {key: metadata[key] for key in sorted(PANEL_METADATA_KEYS) if metadata.get(key)}
 
 
 def _escape(value: str) -> str:
@@ -1445,16 +1476,19 @@ def render_spec_markdown(document: SpecDocument) -> str:
                         "scales with the repository where this document scales with what is "
                         "interesting in it._\n"
                     )
-                # A panel keeps at most its own limit, so rows beyond it reach
-                # no projection. Saying they are in `spec.json` -- which the
-                # previous wording did, along with `spec.index.json`, which
-                # carries identity and no metadata at all -- sent a reader to
-                # look somewhere they are not.
+                # A panel keeps at most its own limit, so rows beyond it are
+                # in no table anywhere. What they were built from is in the
+                # index, which carries what each symbol declares as well as
+                # what it is called. It did not always: saying these rows were
+                # in `spec.index.json` was wrong for as long as that file held
+                # identity alone, and correcting the sentence is what led to
+                # correcting the file.
                 if panel.dropped_rows:
                     lines.append(
                         f"\n_A further {panel.dropped_rows:,} row(s) passed this panel's own "
-                        "limit and are in neither projection. They are in the ledger, which "
-                        "`open-skeleton claims` and `open-skeleton search` read._\n"
+                        "limit and are in no table. What they were read from is in "
+                        "`spec.index.json`, under the declaring symbol, and in the ledger, "
+                        "which `open-skeleton search` reads._\n"
                     )
                 lines.append("\n")
             if panel.note:

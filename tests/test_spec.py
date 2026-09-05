@@ -19,6 +19,7 @@ from open_skeleton.spec.capabilities import Capability
 from open_skeleton.spec.panels import (
     MAX_MESSAGE_CHARS,
     MAX_TUNABLES,
+    PANEL_METADATA_KEYS,
     Panel,
     PanelContext,
     _truncate_message,
@@ -608,7 +609,10 @@ class WithheldRowTests(TestCase):
         self.assertIn("are carried in `spec.json`", rendered)
         self.assertNotIn("`spec.index.json`, which scale", rendered)
         self.assertIn("passed this panel's own limit", rendered)
-        self.assertIn("in neither projection", rendered)
+        # The index carries what each symbol declares now, so pointing only at
+        # the ledger would be the second wrong pointer under this table.
+        self.assertIn("in no table", rendered)
+        self.assertIn("`spec.index.json`, under the declaring symbol", rendered)
 
     def test_a_panel_within_its_limit_says_nothing_about_the_ledger(self) -> None:
         rendered = self._render(constants=30)
@@ -664,6 +668,66 @@ class SpreadRowTests(TestCase):
         # bucket and the order is exactly what it was.
         rows = tuple((f"lang{index}", str(index)) for index in range(40))
         self.assertEqual(_spread_by_source(rows, 3), list(rows[:3]))
+
+
+class IndexCompletenessTests(TestCase):
+    """The complete inventory has to be complete.
+
+    `spec.index.json` carried a symbol's identity and nothing it declared, so
+    a panel built from declared values lost its dropped rows to every
+    projection -- 88 numeric tunables on `java.util.concurrent` -- while the
+    document said they were there.
+    """
+
+    def _index(self, sources: dict[str, str]) -> dict[str, Any]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in sources.items():
+                (root / name).write_text(body, encoding="utf-8")
+            ledger = EvidenceLedger(root / "evidence.sqlite3")
+            ledger.initialize()
+            snapshot = scan_repository(root)
+            ledger.save_snapshot(snapshot)
+            ledger.save_analysis(analyze_snapshot(snapshot))
+            document = build_spec(ledger, load_profile())
+        index: dict[str, Any] = json.loads(render_spec_index_json(document))
+        return index
+
+    def test_a_declared_value_reaches_the_index(self) -> None:
+        index = self._index(
+            {"Policy.java": "public class P { static final int MAX_CAP = 32767; }\n"}
+        )
+        tunables: dict[str, Any] = {}
+        for symbol in index["symbols"]:
+            tunables.update((symbol.get("declared") or {}).get("tunables") or {})
+        self.assertIn("MAX_CAP", tunables)
+        self.assertEqual(tunables["MAX_CAP"]["value"], "32767")
+
+    def test_a_computed_value_reaches_it_as_an_expression(self) -> None:
+        index = self._index(
+            {"Policy.java": "public class P { static final int BITS = Integer.SIZE - 3; }\n"}
+        )
+        tunables: dict[str, Any] = {}
+        for symbol in index["symbols"]:
+            tunables.update((symbol.get("declared") or {}).get("tunables") or {})
+        self.assertEqual(tunables["BITS"]["expression"], "Integer.SIZE-3")
+
+    def test_a_symbol_that_declares_nothing_carries_no_key(self) -> None:
+        # The index already held every name. It must not grow a key for each
+        # of them merely to say the symbol declares nothing.
+        index = self._index({"Policy.java": "public class P { void run() {} }\n"})
+        self.assertTrue(index["symbols"])
+        self.assertTrue(all("declared" not in symbol for symbol in index["symbols"]))
+
+    def test_the_key_set_covers_every_key_a_panel_reads(self) -> None:
+        # The set lives beside the panels so a panel added later can see it.
+        # This is what makes that more than an intention: a panel reaching for
+        # a key the index does not carry would lose its dropped rows again,
+        # silently, the way the first one did.
+        source = Path("src/open_skeleton/spec/panels.py").read_text(encoding="utf-8")
+        read = set(re.findall(r'\.get\("metadata", \{\}\)\.get\("([a-z_]+)"', source))
+        self.assertTrue(read, "no panel metadata reads found -- has the call shape changed?")
+        self.assertEqual(sorted(read - PANEL_METADATA_KEYS), [])
 
 
 class DocumentedValueTests(TestCase):

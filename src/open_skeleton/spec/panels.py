@@ -55,6 +55,41 @@ DECLARED_KINDS = frozenset(
 )
 
 
+# Everything a panel reads out of a symbol's metadata. It lives here, beside
+# the panels, because a panel added later has to be able to see it -- and
+# `tests/test_spec.py` reads this file and fails if a panel reaches for a key
+# this set does not name.
+#
+# `spec.index.json` carries exactly these per symbol. Without them a panel
+# that truncated lost its dropped rows to every projection: 88 numeric
+# tunables on `java.util.concurrent`, and more the larger the repository.
+#
+# `state_fields` is deliberately absent. A diagram renders it and no panel
+# does, and it is 7.9 MiB of zod's metadata against 1.5 MiB for all of these
+# together. What belongs in the index is what a truncated table dropped.
+PANEL_METADATA_KEYS = frozenset(
+    {
+        "collection_constants",
+        "config_settings",
+        "control_flow",
+        "data_containers",
+        "documented_facts",
+        "embedded_literals",
+        "external_calls",
+        "external_origins",
+        "external_references",
+        "imported_names",
+        "model_fields",
+        "object_keys",
+        "payload_shapes",
+        "routes",
+        "signatures",
+        "string_constants",
+        "tunables",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class PanelContext:
     """Everything a panel is allowed to read, all pinned to one snapshot."""
