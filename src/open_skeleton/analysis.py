@@ -8,7 +8,7 @@ import hashlib
 import re
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -37,7 +37,7 @@ from open_skeleton.models import (
     SymbolRecord,
     utc_now,
 )
-from open_skeleton.policy import scoped_category
+from open_skeleton.policy import exercises_the_product, scoped_category
 from open_skeleton.resolution import resolve_call_targets, resolve_import_targets
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
@@ -952,12 +952,22 @@ def _scope_claims_by_evidence_role(
     repository whose only Rust is a differential reference implementation,
     every one of those receipts is a benchmark.
 
-    Conservative in three ways. A claim resting on any product source stays a
+    Conservative in two ways. A claim resting on any product source stays a
     product claim, since one real site makes the statement true of the system.
-    A claim whose evidence spans two exercising roles at once is left alone
-    rather than assigned to whichever looks more likely. And a receipt that
-    resolves to no known file leaves the claim untouched, so a gap in
-    bookkeeping cannot silently demote a finding.
+    And a receipt that resolves to no known file leaves the claim untouched, so
+    a gap in bookkeeping cannot silently demote a finding.
+
+    It was conservative in a third way that turned out to be the opposite. A
+    claim whose evidence spanned two exercising roles at once was left alone,
+    which sounds like declining to guess and means filing it as a statement
+    about the product -- the one answer known to be false when no receipt
+    touches product source. A crate that keeps its own `tests/` directory
+    produces exactly that: relocated under `benchmarks/`, its panic census is
+    one claim over receipts that are part `harness` and part `test`, and all
+    of them stayed product claims. Such a claim is now filed under the role
+    supplying the most evidence, ties broken by name so the outcome is
+    reproducible. A reader asking what the system does is equally well served
+    by either prefix and badly served by neither.
     """
 
     role_by_path = {str(item.path): str(item.role) for item in snapshot.files}
@@ -970,11 +980,20 @@ def _scope_claims_by_evidence_role(
         if not paths or None in paths:
             scoped.append(claim)
             continue
-        roles = {role_by_path.get(path or "") for path in paths}
-        if len(roles) != 1:
+        found = [str(role_by_path.get(path or "") or "") for path in paths]
+        roles = set(found)
+        if len(roles) != 1 and any(not exercises_the_product(item) for item in roles):
+            # One product receipt makes the statement true of the system.
             scoped.append(claim)
             continue
-        role = str(next(iter(roles)) or "")
+        if len(roles) == 1:
+            role = str(next(iter(roles)))
+        else:
+            # Every receipt exercises the system and they disagree about how.
+            # Whichever is chosen the claim stops describing the product,
+            # which is the part that was wrong.
+            counted = Counter(found)
+            role = min(sorted(roles), key=lambda item: (-counted[item], item))
         category = scoped_category(claim.category, role)
         if category == claim.category:
             scoped.append(claim)

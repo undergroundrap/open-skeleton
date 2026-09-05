@@ -67,6 +67,9 @@ class ScopeClaimsByEvidenceRoleTests(TestCase):
         (root / "benchmarks").mkdir()
         (root / "src" / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
         (root / "tests" / "test_app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        # A second suite file, so a claim can rest on more evidence from
+        # one exercising role than from the other.
+        (root / "tests" / "test_more.py").write_text("VALUE = 1\n", encoding="utf-8")
         (root / "benchmarks" / "run_bench.py").write_text("VALUE = 1\n", encoding="utf-8")
         self.snapshot = scan_repository(root)
         self.created_at = utc_now()
@@ -137,12 +140,37 @@ class ScopeClaimsByEvidenceRoleTests(TestCase):
         result = self._scope(claim, "src/app.py", "benchmarks/run_bench.py")
         self.assertEqual(result.category, "storage")
 
-    def test_evidence_spanning_two_exercising_roles_is_left_alone(self) -> None:
-        # Both roles are non-product, but naming it after either would assert
-        # something the evidence does not say. Left as it was, and visible.
+    def test_evidence_spanning_two_exercising_roles_still_leaves_the_product(self) -> None:
+        # This was pinned the other way, on the grounds that naming the claim
+        # after either role asserts something the evidence does not say. True,
+        # and not the whole comparison: left alone the claim stays filed as a
+        # statement about the product, and when no receipt touches product
+        # source that is the one answer known to be false.
+        #
+        # The role differential found it against a crate that keeps its own
+        # `tests/` directory: relocated under `benchmarks/`, its panic census
+        # is one claim over receipts that are part harness and part test, and
+        # all three stayed product claims.
         claim = self._claim("tests/test_app.py", "benchmarks/run_bench.py")
         result = self._scope(claim, "tests/test_app.py", "benchmarks/run_bench.py")
-        self.assertEqual(result.category, "storage")
+        self.assertNotEqual(result.category, "storage")
+        self.assertIn(result.category, {"test_storage", "harness_storage"})
+
+    def test_a_mixed_exercising_claim_is_filed_where_its_evidence_is(self) -> None:
+        # Two receipts from the suite and one from a benchmark: the suite
+        # carries it. Reproducible from the snapshot rather than from
+        # dictionary order, which is the whole reason to count rather than
+        # pick.
+        claim = self._claim("tests/test_app.py", "tests/test_more.py", "benchmarks/run_bench.py")
+        result = self._scope(
+            claim, "tests/test_app.py", "tests/test_more.py", "benchmarks/run_bench.py"
+        )
+        self.assertEqual(result.category, "test_storage")
+
+    def test_a_tie_between_exercising_roles_is_broken_by_name(self) -> None:
+        claim = self._claim("benchmarks/run_bench.py", "tests/test_app.py")
+        result = self._scope(claim, "benchmarks/run_bench.py", "tests/test_app.py")
+        self.assertEqual(result.category, "harness_storage")
 
     def test_an_unresolvable_receipt_cannot_demote_a_finding(self) -> None:
         # A gap in bookkeeping is not evidence that a claim is about a test.
