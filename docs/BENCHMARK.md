@@ -339,6 +339,48 @@ one arrived holding 8,707 claims.
 Exit status is non-zero when anything crashed or any document disagreed with
 itself, which makes this usable as a gate over a corpus a team already trusts.
 
+## Gap census: what the engine could not answer, across many repositories
+
+```
+python benchmarks/generalization/run_gap_census.py --root .venv/Lib/site-packages
+python benchmarks/generalization/run_gap_census.py --repo one --repo two
+```
+
+Every other instrument here asks whether an answer is right. This asks which
+questions came back empty and in how many repositories, which is the only form
+of that question that cannot be answered by fitting. Nothing is ranked by how
+bad one repository looks; a gap earns attention only by breadth.
+
+Two of its findings need no judgement, and they are the ones to read first. A
+probe that names a file the snapshot holds and matched nothing is a defect. So
+is a probe that names a dependency the manifest declares and matched nothing —
+a `dependency_name` probe matches edges, so the manifest is evidence the probe
+never read. Both are checks against something outside the probe, and that is
+what makes them decidable.
+
+The obvious third check does not exist, because it cannot. A section absent
+"despite its own probes matching" is impossible: `evaluate_section` defines
+`absent` as every probe matching nothing. A version of this instrument carried
+such a check for one commit, read zero on every corpus, and looked like a
+clean bill of health rather than a question that could never be asked.
+
+Which is why the list of absent concerns is labelled as the shape of the
+corpus rather than ranked as findings. Against the 70 packages in
+`site-packages` it reports Payment Processing, Secrets Management, Design
+Tokens and eleven others as absent in 70 of 70 — all true, all facts about 70
+Python libraries that take no payments, and none of them a reason to build
+anything. Against a mixed corpus of Rust crates and Node projects the list
+changes and stays just as uninformative. A reader acting on it would be
+building for the corpus.
+
+What that same run does say about the engine is in the other three lists: 8%
+of 48,016 import references resolve to a symbol, 55 of 70 repositories hold
+files in a language no analyzer reads, and 500 probes have never matched
+anything in any repository examined.
+
+Exit status is zero. It measures what to build next; wiring it into CI would
+make an honest report of an unusual repository a red build.
+
 ## Document budget: what the specification knows and does not show
 
 ```

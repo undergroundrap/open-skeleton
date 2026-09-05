@@ -31,6 +31,18 @@ Three questions, in the order they are worth acting on:
    shape of the reference rather than its text, because the text is a fact
    about one repository and the shape is a fact about a language.
 
+Concern absences are reported as what they are, which is mostly the shape of
+the corpus. "Payment Processing absent in 70 of 70 repositories" is true of 70
+Python libraries that take no payments and says nothing about this engine, and
+ranking it above the things that do would be fitting with extra steps.
+
+A false absence cannot be found by asking the section, because `absent` is
+defined as every one of its probes matching nothing -- there is no such thing
+as a section that came back absent while its own evidence said otherwise. It
+can only be found with evidence the probe did not use, which is what the first
+list does: a probe naming a file the snapshot holds, and a probe naming a
+dependency the manifest declares.
+
     python benchmarks/generalization/run_gap_census.py --root .venv/Lib/site-packages
     python benchmarks/generalization/run_gap_census.py --repo one --repo two
 
@@ -122,6 +134,75 @@ def _missed_globs(zero: set[tuple[str, str]], paths: Sequence[str]) -> set[tuple
     return missed
 
 
+# Files that declare a dependency by name. A probe naming one of those names
+# and matching no edge is the dependency check's version of a glob that names
+# a file sitting in the snapshot.
+MANIFESTS = (
+    "package.json",
+    "cargo.toml",
+    "pyproject.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "gemfile",
+    "composer.json",
+    "requirements.txt",
+)
+MAX_MANIFEST_BYTES = 400_000
+
+
+def _declared_dependencies(target: Path, paths: Sequence[str]) -> str:
+    """The text of every manifest in the repository, lowercased, joined.
+
+    Text rather than a parsed dependency list on purpose. Every manifest
+    format states its dependencies differently and this check does not need to
+    know which is which: it asks whether a name the probe was looking for is
+    written down anywhere a dependency is written down.
+    """
+
+    found: list[str] = []
+    for path in paths:
+        if PurePosixPath(path).name.casefold() not in MANIFESTS:
+            continue
+        item = target / path
+        try:
+            if item.stat().st_size > MAX_MANIFEST_BYTES:
+                continue
+            found.append(item.read_text(encoding="utf-8", errors="replace").casefold())
+        except OSError:
+            continue
+    return "\n".join(found)
+
+
+def _missed_dependencies(zero: set[tuple[str, str]], manifests: str) -> set[tuple[str, str]]:
+    """Dependency probes that found nothing the manifest declares outright.
+
+    The term is matched as a quoted or delimited name rather than a substring,
+    because `ava` inside `java` is not a dependency on `ava` and a census that
+    reported it would be ranking coincidence. A glob term contributes its stem
+    -- `@aws-sdk/*` looks for `@aws-sdk/`.
+    """
+
+    missed: set[tuple[str, str]] = set()
+    if not manifests:
+        return missed
+    for kind, term in zero:
+        if kind != "dependency_name":
+            continue
+        # The separator goes with the star: `@aws-sdk/*` looks for
+        # `"@aws-sdk/`, and keeping the slash in the stem made every scoped
+        # package silently unmatchable.
+        stem = term.casefold().split("*", 1)[0].rstrip("-_/")
+        if len(stem) < 3:
+            continue
+        for boundary in (f'"{stem}"', f"'{stem}'", f'"{stem}/', f"{stem} ="):
+            if boundary in manifests:
+                missed.add((kind, term))
+                break
+    return missed
+
+
 class Census:
     def __init__(self) -> None:
         self.repositories = 0
@@ -154,9 +235,10 @@ class Census:
         zero_here: set[tuple[str, str]] = set()
         matched_here: set[tuple[str, str]] = set()
         for section in payload.get("sections") or []:
+            probes = section.get("probes") or []
             if str(section.get("verdict")) == "absent":
                 self.section_absent[str(section.get("title") or section.get("section_id"))] += 1
-            for probe in section.get("probes") or []:
+            for probe in probes:
                 for term in probe.get("terms") or ():
                     key = (str(probe.get("kind")), str(term))
                     if int(probe.get("match_count") or 0) > 0:
@@ -167,7 +249,10 @@ class Census:
         unanswered = zero_here - matched_here
         for key in unanswered:
             self.probe_zero[key] += 1
-        for key in _missed_globs(unanswered, [item.path for item in snapshot.files]):
+        paths = [item.path for item in snapshot.files]
+        for key in _missed_globs(unanswered, paths):
+            self.probe_missed[key] += 1
+        for key in _missed_dependencies(unanswered, _declared_dependencies(target, paths)):
             self.probe_missed[key] += 1
 
         # A language no analyzer produced a record for, which is not the same
@@ -197,8 +282,9 @@ class Census:
         print(f"\n## Repositories examined: {self.repositories}\n")
 
         print(f"### Probes that missed something the repository holds ({len(self.probe_missed)})\n")
-        print("The file the probe names is in the snapshot and the probe found")
-        print("nothing. No judgement is needed about these: they are defects.\n")
+        print("The file the probe names is in the snapshot, or the dependency it")
+        print("names is in the manifest, and the probe found nothing. No judgement")
+        print("is needed about these: they are defects.\n")
         if not self.probe_missed:
             print("  none")
         for (kind, term), count in self.probe_missed.most_common(show):
@@ -216,7 +302,13 @@ class Census:
         for (kind, term), count in never[:show]:
             print(f"  {count:3}/{self.repositories}  {kind}: {term}")
 
-        print("\n### Concerns absent in the most repositories\n")
+        print("\n### Concerns absent, which is mostly the shape of the corpus\n")
+        print("A concern nothing in the corpus exercises reports absent everywhere,")
+        print("and that is a fact about the corpus. It cannot be told apart from a")
+        print("gap by asking the section: `absent` means every probe matched")
+        print("nothing, so no section can report absent while its own evidence")
+        print("disagrees. The list above is where a false absence shows up,")
+        print("because it uses evidence the probe did not.\n")
         for title, count in self.section_absent.most_common(show):
             print(f"  {count:3}/{self.repositories}  {title}")
 
