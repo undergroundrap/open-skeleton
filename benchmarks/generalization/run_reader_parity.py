@@ -66,18 +66,23 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "def run(path):\n"
             '    endpoint = os.getenv("SERVICE_URL")\n'
             '    raise ValueError("bad path")\n'
+            "\n"
+            "def test_run_rejects_a_bad_path():\n"
+            "    assert True\n"
         ),
     ),
     "TypeScript": (
         "policy.ts",
         (
             'import fs from "node:fs";\n'
+            'import { describe, it } from "vitest";\n'
             "export interface Order { identifier: string; total: number }\n"
             "export const MAX_RETRIES: number = 10;\n"
             'export const SERVICE_NAME: string = "checkout";\n'
             'export type Method = "GET" | "PUT" | "HEAD";\n'
             "export const endpoint = process.env.SERVICE_URL;\n"
             'export function run(p: string) { throw new Error("bad path"); }\n'
+            'describe("run", () => { it("rejects a bad path", () => {}); });\n'
         ),
     ),
     "Rust": (
@@ -92,6 +97,8 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             '    let _ = std::env::var("SERVICE_URL");\n'
             '    panic!("bad path")\n'
             "}\n"
+            "#[test]\n"
+            "fn run_rejects_a_bad_path() { assert!(true); }\n"
         ),
     ),
     "Java": (
@@ -106,6 +113,10 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             '        String endpoint = System.getenv("SERVICE_URL");\n'
             '        throw new IllegalStateException("bad path");\n'
             "    }\n"
+            "}\n"
+            "class PolicyTest {\n"
+            "    @Test\n"
+            "    void runRejectsABadPath() {}\n"
             "}\n"
             "enum Method { GET, PUT, HEAD }\n"
         ),
@@ -123,6 +134,10 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             '        var endpoint = Environment.GetEnvironmentVariable("SERVICE_URL");\n'
             '        throw new InvalidOperationException("bad path");\n'
             "    }\n"
+            "}\n"
+            "public class PolicyTest {\n"
+            "    [Test]\n"
+            "    public void RunRejectsABadPath() {}\n"
             "}\n"
             "public enum Method { Get, Put, Head }\n"
         ),
@@ -153,6 +168,9 @@ SNIPPETS: dict[str, tuple[str, str]] = {
             "    throw 'bad path'\n"
             "}\n"
             "Export-ModuleMember -Function Set-Thing\n"
+            "Describe 'Set-Thing' {\n"
+            "    It 'rejects a bad path' { }\n"
+            "}\n"
         ),
     ),
 }
@@ -187,6 +205,12 @@ CLAIM_SURFACES = {
     # outnumbers `System.getenv` fifty to nine across `java.base`, and `$env:`
     # appears 156 times in the 155 PowerShell files Windows installs.
     "configuration": frozenset({"configuration_read"}),
+    # "How much of this is tested" is among the first questions anyone asks a
+    # repository, and a reader either recognises its language's test
+    # declarations or reports a suite of nothing. Each snippet uses the
+    # framework the corpus uses rather than the one a manual leads with: the
+    # 687 C# files on this machine declare 702 `[Test]` and not one `[Fact]`.
+    "tests": frozenset({"testing"}),
 }
 EDGE_SURFACES = {"imports": "imports"}
 SURFACES = (*VALUE_SURFACES, *CLAIM_SURFACES, *EDGE_SURFACES)

@@ -461,6 +461,110 @@ def _record_components(clean: str, start: int) -> list[tuple[str, str, int]]:
     return found
 
 
+# Attributes that mark a method as a test. `Test` and `TestCase` are NUnit,
+# which is what the 687 C# files on this machine use -- 702 of the first, 14
+# of the second, and not one `Fact`. The other three are the same concept in
+# xUnit and MSTest, included because each name means a test method and nothing
+# else in the language, not because a manual mentioned them.
+TEST_ATTRIBUTE = re.compile(r"\[\s*(?:Test|TestCase|TestMethod|Fact|Theory)\b")
+IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+# `TestFixture` marks a class and `SetUp` marks a hook. Neither is a test, and
+# counting them would report a suite larger than the one that runs.
+NOT_A_METHOD = frozenset(
+    {
+        "if",
+        "for",
+        "foreach",
+        "while",
+        "switch",
+        "catch",
+        "return",
+        "new",
+        "using",
+        "lock",
+        "fixed",
+        "sizeof",
+        "typeof",
+        "nameof",
+        "await",
+    }
+)
+
+
+def test_methods(clean: str) -> list[int]:
+    """The line of every method carrying a test attribute, once each.
+
+    An attribute sits above the method it marks, so each match scans forward
+    to the next name followed by a parameter list. Attributes stack --
+    `[Test]` over `[Category("slow")]` over the method -- and both land on the
+    same line, which is why the result is deduplicated rather than counted per
+    attribute. A `[TestCase(1)]` repeated five times over one method is five
+    cases of one test, and reporting five would describe a suite that does not
+    exist.
+    """
+
+    found: dict[int, None] = {}
+    for match in TEST_ATTRIBUTE.finditer(clean):
+        cursor = _past_attributes(clean, match.start())
+        head = _declaration_name(clean, cursor)
+        if head is not None:
+            found.setdefault(_line_of(clean, head), None)
+    return sorted(found)
+
+
+def _past_attributes(clean: str, start: int) -> int:
+    """The offset after every attribute group stacked above a declaration.
+
+    `[Test]` over `[Category("slow")]` over the method: without this the scan
+    reads `Category` as the method, since an attribute has the same shape as
+    a call.
+    """
+
+    cursor = start
+    while cursor < len(clean) and clean[cursor].isspace():
+        cursor += 1
+    while cursor < len(clean) and clean[cursor] == "[":
+        depth = 0
+        while cursor < len(clean):
+            if clean[cursor] == "[":
+                depth += 1
+            elif clean[cursor] == "]":
+                depth -= 1
+                if depth == 0:
+                    cursor += 1
+                    break
+            cursor += 1
+        while cursor < len(clean) and clean[cursor].isspace():
+            cursor += 1
+    return cursor
+
+
+def _declaration_name(clean: str, start: int) -> int | None:
+    """Offset of the name in the declaration head at `start`, if it is a method.
+
+    The name of a method is the identifier immediately before its parameter
+    list, which is how the Java reader finds one too. A head that reaches a
+    `{`, `}` or `;` first declares something that is not a method.
+    """
+
+    cursor = start
+    last: int | None = None
+    while cursor < len(clean):
+        character = clean[cursor]
+        if character in "{};":
+            return None
+        if character == "(":
+            return last
+        name = IDENTIFIER.match(clean, cursor)
+        if name is None:
+            cursor += 1
+            continue
+        if name.group(0) not in NOT_A_METHOD:
+            last = name.start()
+        cursor = name.end()
+    return None
+
+
 def throw_sites(source: str, clean: str) -> list[tuple[str | None, str | None, int]]:
     """`(exception type, literal message, line)` for every throw.
 
@@ -583,6 +687,7 @@ class CSharpLexicalAnalyzer:
             throws = throw_sites(source, clean)
             settings = environment_reads(source, clean)
             file_shapes = declared_shapes(clean)
+            tests = test_methods(clean)
 
             module = namespace or Path(file_record.path).stem
             names: dict[str, int] = {}
@@ -721,6 +826,23 @@ class CSharpLexicalAnalyzer:
                         line,
                         "environment_read",
                         _excerpt(lines, line, file_record.path),
+                    ).evidence_id,
+                    file_record.path,
+                )
+
+            if tests:
+                claim(
+                    (
+                        f"{file_record.path} declares {len(tests):,} test method(s). A suite "
+                        "is what states which behaviour is intended to survive a change."
+                    ),
+                    "testing",
+                    "medium",
+                    receipt(
+                        file_record.path,
+                        tests[0],
+                        "testing",
+                        _excerpt(lines, tests[0], file_record.path),
                     ).evidence_id,
                     file_record.path,
                 )

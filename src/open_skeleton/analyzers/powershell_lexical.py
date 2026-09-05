@@ -511,6 +511,40 @@ def declared_shapes(clean: str) -> dict[str, dict[str, Any]]:
     }
 
 
+# Pester states a suite as `Describe`, groups within it as `Context`, and each
+# test as `It`. The lookahead for whitespace keeps `Itemize` out; the argument
+# check below keeps `Describe = $CurrentDescribe` out, which is a hashtable key
+# in Pester's own source.
+PESTER_BLOCK = re.compile(
+    # `\r?` before the anchor. This reader made the same mistake once
+    # already, and the standing check named this pattern by name the first
+    # time the tests ran after it was written.
+    r"(?im)^[ \t]*(?P<name>Describe|Context|It)(?=[ \t])(?P<rest>[^\r\n]*)\r?$"
+)
+# What a block's name can start with. A quoted string is the ordinary form; a
+# variable or a `-Name` is rarer and still names a block. An `=` is an
+# assignment and names nothing.
+BLOCK_ARGUMENT_STARTS = ("'", '"', "$", "@", "-")
+
+
+def test_blocks(source: str, clean: str) -> list[tuple[str, int]]:
+    """`(keyword, line)` for every Pester block this file declares.
+
+    `function It { ... }` is Pester defining the keyword rather than using it,
+    and it does not match: the line starts with `function`. `Describe =
+    $CurrentDescribe` does start with the word, and is rejected on its
+    argument -- an assignment names no block.
+    """
+
+    found: list[tuple[str, int]] = []
+    for match in PESTER_BLOCK.finditer(clean):
+        rest = source[match.start("rest") : match.end("rest")].strip()
+        if not rest.startswith(BLOCK_ARGUMENT_STARTS):
+            continue
+        found.append((match.group("name").lower(), _line_of(clean, match.start("name"))))
+    return found
+
+
 EXPORT_MEMBER = re.compile(r"(?i)\bExport-ModuleMember\b")
 
 
@@ -624,6 +658,7 @@ class PowerShellLexicalAnalyzer:
             functions = declared_functions(clean)
             file_values = declared_values(source, clean)
             file_shapes = declared_shapes(clean)
+            blocks_declared = test_blocks(source, clean)
             file_numbers = {
                 name: entry
                 for name, entry in file_values.items()
@@ -782,6 +817,28 @@ class PowerShellLexicalAnalyzer:
                         line,
                         "environment_read",
                         _excerpt(lines, line, file_record.path),
+                    ).evidence_id,
+                    file_record.path,
+                )
+
+            examples = [line for keyword, line in blocks_declared if keyword == "it"]
+            if examples:
+                groups = len(blocks_declared) - len(examples)
+                grouped = f" in {groups:,} group(s)" if groups else ""
+                claim(
+                    (
+                        f"{file_record.path} declares {len(examples):,} Pester test(s)"
+                        f"{grouped}. A suite is what states which behaviour is intended to "
+                        "survive a change."
+                    ),
+                    "testing",
+                    "medium",
+                    receipt(
+                        file_record.path,
+                        examples[0],
+                        examples[0],
+                        "testing",
+                        _excerpt(lines, examples[0], file_record.path),
                     ).evidence_id,
                     file_record.path,
                 )

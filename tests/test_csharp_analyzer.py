@@ -29,6 +29,7 @@ from open_skeleton.analyzers.csharp_lexical import (
     environment_reads,
     imported_namespaces,
     public_members,
+    test_methods,
     throw_sites,
 )
 from open_skeleton.scanner import scan_repository
@@ -428,3 +429,59 @@ class CSharpShapeTests(TestCase):
                 metadata = json.loads(metadata)
             models.update(metadata.get("model_fields") or {})
         self.assertIn("Order", models)
+
+
+class CSharpTestDeclarationTests(TestCase):
+    """How many tests a C# repository declares.
+
+    The corpus chose the attributes: across the 687 C# files on this machine
+    there are 702 `[Test]`, 62 `[SetUp]`, 18 `[TestFixture]` and 14
+    `[TestCase]` -- NUnit -- and zero `[Fact]`, which is the attribute xUnit
+    is introduced with. Reading it back: 682 attributes resolve to 670 test
+    methods across 106 files.
+    """
+
+    def test_an_attributed_method_is_a_test(self) -> None:
+        source = "public class S { [Test]\n public void Works() {} }\n"
+        self.assertEqual(test_methods(blank_noise(source)), [2])
+
+    def test_stacked_attributes_name_one_test(self) -> None:
+        # An attribute has the same shape as a call, so the scan used to stop
+        # at `Category` and report the attribute as the method.
+        source = (
+            'public class S {\n    [Test]\n    [Category("slow")]\n    public void Works() {}\n}\n'
+        )
+        self.assertEqual(test_methods(blank_noise(source)), [4])
+
+    def test_repeated_cases_are_one_test(self) -> None:
+        # `[TestCase(1..3)]` over one method is three cases of one test, and
+        # reporting three would describe a suite that does not exist.
+        source = (
+            "public class S {\n"
+            "    [TestCase(1)]\n"
+            "    [TestCase(2)]\n"
+            "    [TestCase(3)]\n"
+            "    public void Works(int n) {}\n"
+            "}\n"
+        )
+        self.assertEqual(test_methods(blank_noise(source)), [5])
+
+    def test_a_fixture_and_a_hook_are_not_tests(self) -> None:
+        source = "[TestFixture]\npublic class S {\n    [SetUp]\n    public void Prepare() {}\n}\n"
+        self.assertEqual(test_methods(blank_noise(source)), [])
+
+    def test_an_attribute_in_a_comment_is_not_a_test(self) -> None:
+        source = "public class S { // [Test] public void Works() {}\n }\n"
+        self.assertEqual(test_methods(blank_noise(source)), [])
+
+    def test_tests_become_a_claim(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "SuiteTests.cs").write_text(
+                "namespace S;\npublic class Suite {\n  [Test]\n  public void Works() {}\n}\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        claims = [item.claim for item in result.claims if item.category == "testing"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("1 test method(s)", claims[0])

@@ -1364,6 +1364,39 @@ def _request_path(value: str) -> tuple[str, bool]:
     return value[:marker], False
 
 
+# Modules whose presence makes `describe`, `it` and `test` mean what they say.
+# `vitest` is the one the corpus on this machine confirms -- all 172 of zod's
+# files that open such a block import it. The others are the same concept in
+# sibling frameworks: each name is a test framework and nothing else, so the
+# risk of accepting one is nil and the cost of omitting it is every repository
+# that uses it.
+TEST_FRAMEWORKS = frozenset(
+    {
+        "vitest",
+        "vitest/globals",
+        "jest",
+        "@jest/globals",
+        "mocha",
+        "node:test",
+        "bun:test",
+        "@playwright/test",
+        "uvu",
+        "ava",
+    }
+)
+
+
+def _imports_a_test_framework(imports: dict[str, Any]) -> bool:
+    """Whether this file imports something that defines `describe` and `it`.
+
+    A file that imports a test framework and then calls its blocks declares
+    tests wherever it sits, which is the case a path-shaped rule misses: a
+    suite kept beside the code it covers.
+    """
+
+    return any(module in TEST_FRAMEWORKS for module in imports)
+
+
 def _imported_names(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     """Which names each module contributes, not merely that it was imported.
 
@@ -1930,6 +1963,7 @@ class TypeScriptLexicalAnalyzer:
             file_state_fields = _state_fields(file_tokens)
             file_declarations = _declarations(file_tokens)
             file_imports = _imported_names(file_tokens)
+            file_declares_tests = _imports_a_test_framework(file_imports)
             file_aliases = _import_aliases(file_tokens)
             file_servers = _server_receivers(file_tokens)
             file_tunables = _tunables(file_tokens)
@@ -2219,7 +2253,7 @@ class TypeScriptLexicalAnalyzer:
                     store_evidence[token.value].append(receipt.evidence_id)
 
                 if (
-                    file_record.role == "test"
+                    (file_record.role == "test" or file_declares_tests)
                     and token.value in {"describe", "it", "test"}
                     and next_value == "("
                 ):

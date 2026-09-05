@@ -19,6 +19,7 @@ from open_skeleton.analyzers.typescript_lexical import (
     _exported_names,
     _external_origins,
     _imported_names,
+    _imports_a_test_framework,
     _literal_unions,
     _module_names,
     _module_state,
@@ -1002,3 +1003,54 @@ class TypeScriptShapeTests(TestCase):
                 metadata = json.loads(metadata)
             models.update(metadata.get("model_fields") or {})
         self.assertIn("Order", models)
+
+
+class TypeScriptTestDeclarationTests(TestCase):
+    """`describe` and `it` are ordinary words until the file says otherwise.
+
+    Every other reader has a marker that means one thing -- `@Test`,
+    `#[test]`, `[Test]`, a `Describe` block. This reader counted its blocks
+    only in a file whose path already made it a test, which misses a suite
+    kept beside the code it covers.
+
+    Across zod's 391 files, 172 open such a block and 168 of those import a
+    test framework; not one file imports a framework without opening a block.
+    The four that open a block without importing are `types.ts` and
+    `schemas.ts` -- they have a `test(` property and are not tests at all, so
+    a rule that caught them would be worse than one that does not.
+    """
+
+    def test_a_framework_import_is_recognised(self) -> None:
+        source = 'import { describe, it } from "vitest";\n'
+        self.assertTrue(_imports_a_test_framework(_imported_names(_tokens(source))))
+
+    def test_an_ordinary_import_is_not(self) -> None:
+        source = 'import fs from "node:fs";\n'
+        self.assertFalse(_imports_a_test_framework(_imported_names(_tokens(source))))
+
+    def test_a_suite_beside_its_code_is_counted(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "policy.ts").write_text(
+                'import { describe, it } from "vitest";\n'
+                "export const MAX = 1;\n"
+                'describe("policy", () => { it("holds", () => {}); });\n',
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        claims = [item.claim for item in result.claims if item.category == "testing"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("2 JavaScript test blocks", claims[0])
+
+    def test_a_bare_call_in_product_code_is_not_a_test(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "policy.ts").write_text(
+                'import fs from "node:fs";\n'
+                "export function check(pattern: RegExp, value: string) {\n"
+                "  return test(value);\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        self.assertEqual([c for c in result.claims if c.category == "testing"], [])

@@ -31,9 +31,14 @@ from open_skeleton.analyzers.powershell_lexical import (
     imported_modules,
     parameter_blocks,
     publishes_a_module,
+    test_blocks,
     throw_sites,
 )
 from open_skeleton.scanner import scan_repository
+
+
+def _test_blocks(source: str) -> list[tuple[str, int]]:
+    return test_blocks(source, _blank_noise(source))
 
 
 def _imports(source: str) -> list[tuple[str, int]]:
@@ -448,3 +453,49 @@ class PowerShellShapeTests(TestCase):
                 metadata = json.loads(metadata)
             models.update(metadata.get("model_fields") or {})
         self.assertIn("Order", models)
+
+
+class PowerShellTestDeclarationTests(TestCase):
+    """How many tests a PowerShell repository declares.
+
+    Pester is what the corpus uses: 483 `It`, 162 `Describe` and 79 `Context`
+    blocks across the 155 files Windows ships. Reading it back with the same
+    bytes the pipeline reads: 493 tests in 226 groups across 40 files.
+    """
+
+    def test_an_it_block_is_a_test(self) -> None:
+        found = _test_blocks("Describe 'Thing' {\n    It 'works' { }\n}\n")
+        self.assertEqual(found, [("describe", 1), ("it", 2)])
+
+    def test_a_function_definition_is_not_a_block(self) -> None:
+        # Pester's own source defines all three keywords, once each.
+        self.assertEqual(_test_blocks("function It { param($name) }\n"), [])
+
+    def test_an_assignment_is_not_a_block(self) -> None:
+        # `Describe = $CurrentDescribe` is a hashtable key in Pester's source.
+        self.assertEqual(_test_blocks("Describe               = $CurrentDescribe\n"), [])
+
+    def test_a_longer_word_is_not_a_block(self) -> None:
+        self.assertEqual(_test_blocks("Itemize 'not a block' { }\n"), [])
+
+    def test_a_block_in_comment_based_help_is_not_a_block(self) -> None:
+        self.assertEqual(_test_blocks("<#\nDescribe 'in help' {\n#>\n"), [])
+
+    def test_windows_line_endings_are_read(self) -> None:
+        # This reader made the same mistake once already, and the standing
+        # check named this pattern the first time the tests ran after it was
+        # written. Every Pester block in every CRLF file went unread.
+        found = _test_blocks("Describe 'Thing' {\r\n    It 'works' { }\r\n}\r\n")
+        self.assertEqual([keyword for keyword, _ in found], ["describe", "it"])
+
+    def test_tests_become_a_claim(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Thing.Tests.ps1").write_text(
+                "Describe 'Thing' {\n    It 'works' { }\n    It 'also works' { }\n}\n",
+                encoding="utf-8",
+            )
+            result = analyze_snapshot(scan_repository(root))
+        claims = [item.claim for item in result.claims if item.category == "testing"]
+        self.assertEqual(len(claims), 1)
+        self.assertIn("2 Pester test(s) in 1 group(s)", claims[0])
