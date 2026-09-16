@@ -340,6 +340,9 @@ def _reference(definition: str, target: re.Match[str]) -> ForeignKey:
 # Each pattern names the table it acts on. `SELECT` takes the table after
 # `FROM`, which is the one a reader is looking for even when the projection is
 # a join: what else the query touches is not decided here.
+# Tables named before a claim starts counting instead. A sentence listing
+# forty table names is an inventory, and the projections carry those.
+MAX_NAMED_TABLES = 8
 STATEMENTS: dict[str, re.Pattern[str]] = {
     "SELECT": re.compile(
         rf"\bSELECT\b.{{0,400}}?\bFROM\s+(?P<table>{_QUALIFIED})", re.IGNORECASE | re.DOTALL
@@ -583,6 +586,12 @@ class SqlSchemaAnalyzer:
         ]
 
         eligible: list[tuple[FileRecord, str]] = []
+        # Statements per table across every file, and one receipt per table.
+        # A table inserted into in one file and deleted from in another is
+        # pruned, so reading this per file would report it unpruned twice.
+        lifecycle: dict[str, Counter[str]] = {}
+        lifecycle_receipts: dict[str, str] = {}
+        lifecycle_files: set[str] = set()
         for file_record in candidates:
             source_path = snapshot.root / Path(file_record.path)
             try:
@@ -842,6 +851,14 @@ class SqlSchemaAnalyzer:
                     f"`{named}` ({', '.join(sorted(parts))})"
                     for named, parts in sorted(by_table.items())
                 )
+                for verb, counted in statements.items():
+                    for table_name, count in counted.items():
+                        lifecycle.setdefault(table_name, Counter())[verb] += count
+                        lifecycle_files.add(path)
+                        lifecycle_receipts.setdefault(
+                            table_name,
+                            receipt(path, lines, 1, "sql_statements", None).evidence_id,
+                        )
                 total = sum(sum(counts.values()) for counts in statements.values())
                 claims.append(
                     self._claim(
@@ -923,6 +940,66 @@ class SqlSchemaAnalyzer:
                         )
                     )
 
+        # Across every file, which operations a table never sees. Both
+        # directions are exact set facts and neither needs a threshold.
+        unpruned = sorted(
+            table
+            for table, counts in lifecycle.items()
+            if counts.get("INSERT") and not counts.get("DELETE")
+        )
+        read_only = sorted(
+            table
+            for table, counts in lifecycle.items()
+            if counts.get("SELECT") and not (counts.get("INSERT") or counts.get("UPDATE"))
+        )
+        for named_tables, template in (
+            (
+                unpruned,
+                (
+                    "{count:,} table(s) are inserted into and never deleted from anywhere in "
+                    "this source: {named}. Whatever they accumulate is kept unless something "
+                    "outside this repository removes it."
+                ),
+            ),
+            (
+                read_only,
+                (
+                    "{count:,} table(s) are selected from and never written anywhere in this "
+                    "source: {named}. This source reads them; something else puts the rows "
+                    "there."
+                ),
+            ),
+        ):
+            if not named_tables:
+                continue
+            named = ", ".join(f"`{table}`" for table in named_tables[:MAX_NAMED_TABLES])
+            if len(named_tables) > MAX_NAMED_TABLES:
+                named += f" and {len(named_tables) - MAX_NAMED_TABLES:,} more"
+            supporting = tuple(
+                sorted(
+                    {
+                        lifecycle_receipts[table]
+                        for table in named_tables
+                        if table in lifecycle_receipts
+                    }
+                )
+            )[:24]
+            if not supporting:
+                continue
+            claims.append(
+                self._claim(
+                    snapshot,
+                    created_at,
+                    text=template.format(count=len(named_tables), named=named),
+                    category="storage",
+                    supporting=supporting,
+                    importance="medium",
+                    path="",
+                    paths=tuple(sorted(lifecycle_files)),
+                    role="source",
+                )
+            )
+
         coverage = CoverageRecord(
             analyzer=ANALYZER_VERSION,
             language="SQL",
@@ -955,6 +1032,7 @@ class SqlSchemaAnalyzer:
         importance: str,
         path: str,
         role: str = "source",
+        paths: tuple[str, ...] = (),
     ) -> ClaimRecord:
         # A table declared in a test fixture is a real fact about the suite and
         # a false one about the system. This reader already said so in prose --
@@ -980,7 +1058,9 @@ class SqlSchemaAnalyzer:
             created_at=created_at,
             verified_at=created_at,
             supporting_evidence=supporting,
-            invalidation_keys=(f"file:{path}",),
+            # A claim aggregated across the repository goes stale when any
+            # contributing file changes, not only when one of them does.
+            invalidation_keys=tuple(f"file:{item}" for item in (paths or (path,))),
             alternative_hypotheses=(
                 (
                     "This is the DDL as written, not the schema as deployed. A statement "

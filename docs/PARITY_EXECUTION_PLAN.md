@@ -201,3 +201,35 @@ door claim counts every entry around a facade, and on this repository that is
 
 What remains in package 2 is state lifecycle, which is package 3's subject and
 should not be started here.
+
+## Work package 3, first slice: which operations a table never sees
+
+The SQL reader already parsed `SELECT`, `INSERT`, `UPDATE` and `DELETE` per
+table and reported how many statements a file issues. What it never reported
+is the shape of the set — the operations a table never sees — and both
+absences are exact, consequential, and need no threshold:
+
+- a table inserted into and never deleted from has no pruning path in this
+  source, so whatever it accumulates it keeps;
+- a table selected from and never written here is populated by something else,
+  which makes this source a consumer of it rather than its owner.
+
+Aggregated across files, which is the whole reason this is not a per-file
+claim: a table inserted into in one file and deleted from in another is
+pruned, and a per-file reading would call it unpruned twice. The claim carries
+every contributing file as an invalidation key for the same reason.
+
+Whether it was worth building was decided by measuring conditionally rather
+than absolutely. Seven of the 70 packages in `site-packages` issue any SQL at
+all, and four of those seven have at least one table written and never deleted
+from — `adodbapi` 2 of 2 tables, `coverage` 6 of 8, `pip` 1 of 1, `requests`
+1 of 1. This repository reports 9 of 22, which is the right answer for an
+append-only evidence ledger. That is the distinction that ruled the bypass
+criterion out and rules this in: a fact present in most repositories that hold
+the concept, rather than one present once across four that hold it.
+
+One limit worth stating. A `SELECT` whose table name is its last token does
+not register, while `INSERT`, `UPDATE` and `DELETE` match without a
+terminator. That runs in the safe direction — a missed read leaves a table out
+of the read-only list rather than putting a wrong one in, and a missed write
+would be the dangerous case, which cannot happen.

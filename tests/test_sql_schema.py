@@ -388,3 +388,90 @@ class TestScopedSqlTests(TestCase):
         # The table is a list of categories that change meaning with role,
         # not a rule that everything gains a prefix.
         self.assertEqual(scoped_category("public_api", "test"), "public_api")
+
+
+class TableLifecycleTests(TestCase):
+    """Which operations a table never sees, across every file.
+
+    The absences are the statement: a table inserted into and never deleted
+    from has no pruning path in this source, and a table selected from and
+    never written here is populated somewhere else. Both are exact set facts
+    and neither needs a threshold.
+
+    Measured before they were built, and measured conditionally, which is what
+    decided it: seven of the 70 packages in `site-packages` issue any SQL, and
+    four of those seven have at least one table written and never deleted
+    from. A fact that appears in most repositories holding the concept is
+    worth a claim; one that appears once in four is not.
+    """
+
+    def _claims(self, sources: dict[str, str]) -> list[str]:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in sources.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+        return [item.claim for item in result.claims if "table(s) are" in item.claim]
+
+    SCHEMA = "CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT);\n"
+
+    def test_a_table_written_and_never_deleted_from_is_reported(self) -> None:
+        found = self._claims(
+            {
+                "schema.sql": self.SCHEMA,
+                "store.py": 'QUERY = "INSERT INTO events (body) VALUES (?)"\n',
+            }
+        )
+        self.assertTrue(any("never deleted from" in item for item in found))
+        self.assertTrue(any("`events`" in item for item in found))
+
+    def test_a_delete_in_another_file_is_still_a_pruning_path(self) -> None:
+        # The whole reason this is not a per-file claim. A table inserted into
+        # in one file and deleted from in another is pruned, and reading it
+        # per file would call it unpruned twice.
+        found = self._claims(
+            {
+                "schema.sql": self.SCHEMA,
+                "store.py": 'QUERY = "INSERT INTO events (body) VALUES (?)"\n',
+                "prune.py": 'SWEEP = "DELETE FROM events WHERE id < ?"\n',
+            }
+        )
+        self.assertFalse(any("never deleted from" in item for item in found))
+
+    def test_a_table_only_read_is_reported_as_read_only(self) -> None:
+        # The query carries a clause because a `SELECT` whose table name is its
+        # last token does not register. That runs in the safe direction: a
+        # missed read leaves a table out of this list rather than putting a
+        # wrong one in, since a write of any kind matches without a terminator.
+        found = self._claims(
+            {
+                "schema.sql": self.SCHEMA,
+                "report.py": 'QUERY = "SELECT body FROM events WHERE id = ?"\n',
+            }
+        )
+        self.assertTrue(any("never written" in item for item in found))
+
+    def test_a_table_written_elsewhere_is_not_read_only(self) -> None:
+        found = self._claims(
+            {
+                "schema.sql": self.SCHEMA,
+                "report.py": 'QUERY = "SELECT body FROM events WHERE id = ?"\n',
+                "store.py": 'QUERY = "INSERT INTO events (body) VALUES (?)"\n',
+            }
+        )
+        self.assertFalse(any("never written" in item for item in found))
+
+    def test_an_update_counts_as_writing(self) -> None:
+        found = self._claims(
+            {
+                "schema.sql": self.SCHEMA,
+                "report.py": 'QUERY = "SELECT body FROM events WHERE id = ?"\n',
+                "touch.py": 'QUERY = "UPDATE events SET body = ? WHERE id = ?"\n',
+            }
+        )
+        self.assertFalse(any("never written" in item for item in found))
+
+    def test_a_repository_with_no_sql_says_nothing(self) -> None:
+        self.assertEqual(self._claims({"app.py": "VALUE = 1\n"}), [])
