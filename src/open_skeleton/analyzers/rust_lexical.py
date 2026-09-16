@@ -1169,7 +1169,15 @@ def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
 
     Lexical resolution means a name, not a target. `parse(x)` records `parse`
     without deciding which `parse` it is, which is the same guarantee the rest
-    of this analyzer makes. Three things that look like calls are excluded
+    of this analyzer makes.
+
+    A call carries what it was called on, one level deep: `a.clone` for a
+    method call and `parser::parse_source` for a path call. Not because either
+    can be resolved from here -- a method needs the receiver's type, which is
+    not written at the call site -- but because without it a bare name means
+    two things at once. `a.clone()` and `clone()` both reached the ledger as
+    `clone`, and binding that to a free function of the same name is a coin
+    toss written down as an edge. Three things that look like calls are excluded
     because none of them is one: a declaration's own name after `fn`, control
     flow that takes a parenthesis, and a type in constructor position such as
     `Some(x)` or `Ok(x)`. Macros need no exclusion -- `println!(...)` puts a
@@ -1219,8 +1227,29 @@ def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
             continue
         if _is_macro_parameter(tokens, index):
             continue
-        found.append((name, token.line))
+        found.append((f"{_call_qualifier(tokens, index)}{name}", token.line))
     return found
+
+
+def _call_qualifier(tokens: list[Token], index: int) -> str:
+    """What the call at `index` was called on, with its separator, or nothing.
+
+    One level, which is the depth the Python reader records and the depth that
+    settles the question this exists for: whether a bare name is a free call.
+    `a.b.clone()` gives `b.clone`, and the rest of the chain would not help --
+    resolving a method needs the receiver's type either way.
+    """
+
+    if index >= 2 and tokens[index - 1].value == "." and tokens[index - 2].kind == "identifier":
+        return f"{tokens[index - 2].value}."
+    if (
+        index >= 3
+        and tokens[index - 1].value == ":"
+        and tokens[index - 2].value == ":"
+        and tokens[index - 3].kind == "identifier"
+    ):
+        return f"{tokens[index - 3].value}::"
+    return ""
 
 
 def _client_calls(tokens: list[Token]) -> list[tuple[str, str, int]]:

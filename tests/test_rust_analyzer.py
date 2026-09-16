@@ -441,10 +441,13 @@ class CallSiteTests(TestCase):
     def test_a_plain_call_is_recorded(self) -> None:
         self.assertEqual(_call_sites(tokenize("fn f() { parse(x); }\n")), [("parse", 1)])
 
-    def test_a_method_call_is_recorded(self) -> None:
-        self.assertIn(
-            "method", [name for name, _ in _call_sites(tokenize("fn f() { a.method(y); }\n"))]
-        )
+    def test_a_method_call_is_recorded_with_its_receiver(self) -> None:
+        # The receiver is the point. Without it `a.method()` and `method()`
+        # are the same reference, and binding that to a free function of the
+        # same name is a coin toss written down as an edge.
+        found = [name for name, _ in _call_sites(tokenize("fn f() { a.method(y); }\n"))]
+        self.assertIn("a.method", found)
+        self.assertNotIn("method", found)
 
     def test_a_declaration_is_not_a_call(self) -> None:
         self.assertEqual(_call_sites(tokenize("fn run(x: u32) {}\n")), [])
@@ -556,14 +559,49 @@ class CallSitePrecisionTests(TestCase):
 
     def test_a_turbofish_call_is_recorded(self) -> None:
         # `value.parse::<u64>()` puts the type between the name and the paren.
-        self.assertEqual(_call_sites(tokenize("fn f() { v.parse::<u64>(); }")), [("parse", 1)])
+        self.assertEqual(_call_sites(tokenize("fn f() { v.parse::<u64>(); }")), [("v.parse", 1)])
 
     def test_a_nested_turbofish_is_recorded(self) -> None:
         found = _call_sites(tokenize("fn f() { collect::<Vec<String>>(x); }"))
         self.assertEqual([name for name, _ in found], ["collect"])
 
-    def test_a_path_call_records_its_last_segment(self) -> None:
-        self.assertEqual([name for name, _ in _call_sites(tokenize("fn f() { a::b(z); }"))], ["b"])
+    def test_a_path_call_records_one_level_of_its_path(self) -> None:
+        # One level, which is the depth the Python reader records. A longer
+        # path would not help: what the depth settles is whether a bare name
+        # is a free call, and one segment settles it.
+        self.assertEqual(
+            [name for name, _ in _call_sites(tokenize("fn f() { a::b(z); }"))], ["a::b"]
+        )
+        self.assertEqual(
+            [name for name, _ in _call_sites(tokenize("fn f() { crate::a::b(z); }"))], ["a::b"]
+        )
+
+
+class RustCallQualifierTests(TestCase):
+    """A bare name has to mean a free call, or nothing downstream can use it.
+
+    `resolution.py` names this as the whole barrier: a reader that records its
+    receivers joins `CALL_RECEIVER_ANALYZERS` and its calls resolve with no
+    further work there. Rust was not on the list because `a.clone()` and
+    `clone()` reached the ledger as the same reference, and one measured run
+    bound 254 calls to `new`, the name every Rust constructor has.
+    """
+
+    def _names(self, source: str) -> list[str]:
+        return [name for name, _ in _call_sites(tokenize(source))]
+
+    def test_a_free_call_stays_bare(self) -> None:
+        self.assertEqual(self._names("fn f() { parse(x); }"), ["parse"])
+
+    def test_a_chain_records_the_nearest_receiver(self) -> None:
+        # `a.b.clone()` gives `b.clone`. The rest of the chain would not help:
+        # resolving a method needs the receiver's type either way.
+        self.assertEqual(self._names("fn f() { a.b.clone(); }"), ["b.clone"])
+
+    def test_an_associated_function_carries_its_type(self) -> None:
+        # `Foo::new()` is the case that produced 254 wrong bindings, because
+        # `new` is the name every constructor has.
+        self.assertEqual(self._names("fn f() { Foo::new(); }"), ["Foo::new"])
 
 
 class ConstantPrecisionTests(TestCase):
@@ -731,7 +769,7 @@ class NegatedCallTests(TestCase):
         # identifier, bang, delimiter. A keyword is never a macro name.
         source = "fn a() { if !(case.is_changed() || other.is_changed()) {} }"
         found = {name for name, _ in _call_sites(tokenize(source))}
-        self.assertEqual(found, {"is_changed"})
+        self.assertEqual(found, {"case.is_changed", "other.is_changed"})
 
     def test_a_real_macro_invocation_is_still_a_macro(self) -> None:
         source = "fn a() { let v = vec![1, 2]; step(x); }"

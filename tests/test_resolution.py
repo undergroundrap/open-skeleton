@@ -286,15 +286,37 @@ class CallResolutionTests(TestCase):
         self.assertIsNone(found["pkg/graphics.py=>new"])
 
     def test_a_reader_that_hides_receivers_has_its_calls_left_alone(self) -> None:
-        # Given `text(1)` and `w.text()`, the Rust and TypeScript readers both
-        # record `text`. Binding that to the free function of the same name is
-        # a coin toss, and an agent walking the graph could not tell.
+        # Given `text(1)` and `w.text()`, the TypeScript reader records `text`
+        # for both. Binding that to the free function of the same name is a
+        # coin toss, and an agent walking the graph could not tell.
+        symbols = [
+            _sym("s1", "src/app.ts", "app.text"),
+            _sym("s2", "src/app.ts", "app.caller"),
+        ]
+        edges = [_call("src/app.ts", "text", "s2", analyzer="typescript-lexical/v1")]
+        self.assertIsNone(self._resolve(symbols, edges)["src/app.ts=>text"])
+
+    def test_a_reader_that_records_receivers_has_its_bare_calls_resolved(self) -> None:
+        # The Rust reader records `a.text` for a method call, so a bare `text`
+        # is a free call and nothing else. That is the whole barrier this list
+        # exists for: a reader that records its receivers joins it.
         symbols = [
             _sym("s1", "src/lib.rs", "lib::text"),
             _sym("s2", "src/lib.rs", "lib::caller"),
         ]
         edges = [_call("src/lib.rs", "text", "s2", analyzer="rust-lexical/v1")]
-        self.assertIsNone(self._resolve(symbols, edges)["src/lib.rs=>text"])
+        self.assertEqual(self._resolve(symbols, edges)["src/lib.rs=>text"], "s1")
+
+    def test_a_method_call_is_still_not_bound_to_a_free_function(self) -> None:
+        # `a.text()` names a method on a value whose type is not written at the
+        # call site. The receiver is recorded so that this case can be refused,
+        # not so that it can be guessed.
+        symbols = [
+            _sym("s1", "src/lib.rs", "lib::text"),
+            _sym("s2", "src/lib.rs", "lib::caller"),
+        ]
+        edges = [_call("src/lib.rs", "a.text", "s2", analyzer="rust-lexical/v1")]
+        self.assertIsNone(self._resolve(symbols, edges)["src/lib.rs=>a.text"])
 
     def test_an_import_relationship_is_not_touched_by_the_call_pass(self) -> None:
         edges = [

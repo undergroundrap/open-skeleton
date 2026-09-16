@@ -57,7 +57,7 @@ INDEX_STEMS = ("index", "mod", "__init__")
 #
 # This is the whole barrier: a reader that records its receivers joins the
 # list and its calls resolve with no further work here.
-CALL_RECEIVER_ANALYZERS = ("python-ast/",)
+CALL_RECEIVER_ANALYZERS = ("python-ast/", "rust-lexical/")
 
 
 def _dotted(path: str) -> str:
