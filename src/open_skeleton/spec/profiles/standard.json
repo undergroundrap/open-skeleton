@@ -493,12 +493,25 @@
               "terms": [
                 "imports"
               ]
+            },
+            {
+              "name": "Module ownership",
+              "kind": "sourced_claim_category",
+              "terms": [
+                "module_ownership"
+              ]
             }
           ],
           "diagrams": [
             "module_dependency",
             "function_flow"
-          ]
+          ],
+          "findings": {
+            "categories": [
+              "module_ownership"
+            ],
+            "limit": 12
+          }
         },
         {
           "id": "stack.dependencies",
@@ -994,7 +1007,7 @@
           "number": "5.0",
           "title": "Data Flow by Module",
           "concern": "Where data enters each module, where it rests, and where it leaves.",
-          "framing": "A dependency diagram shows which modules reference which. It does not show which are reachable from outside, which write something that outlives a request, and which send bytes to another host \u2014 the three facts needed to answer where sensitive data can go.",
+          "framing": "A dependency diagram shows which modules reference which. It does not show which are reachable from outside, which write something that outlives a request, and which send bytes to another host — the three facts needed to answer where sensitive data can go.",
           "panels": [
             "data_flow"
           ],
@@ -2154,7 +2167,7 @@
           "number": "7.7",
           "title": "Stated Performance Budgets",
           "concern": "Performance targets the repository states, whether or not anything checks them.",
-          "framing": "A budget is a want, and it is kept apart from \u00a77.6 for that reason. Nobody in the repository said any of these were met, and this analysis does not say so either. A target with no measurement beside it is the interesting case, not an omission.",
+          "framing": "A budget is a want, and it is kept apart from §7.6 for that reason. Nobody in the repository said any of these were met, and this analysis does not say so either. A target with no measurement beside it is the interesting case, not an omission.",
           "probes": [
             {
               "name": "Stated budgets",
@@ -2956,7 +2969,7 @@
           "number": "9.12",
           "title": "Function Signatures",
           "concern": "How each function is called: parameters, types, defaults.",
-          "framing": "The symbol index names a function. It does not say what the function takes, which of those are required, or what a caller gets back \u2014 the three things that decide whether a call compiles.",
+          "framing": "The symbol index names a function. It does not say what the function takes, which of those are required, or what a caller gets back — the three things that decide whether a call compiles.",
           "panels": [
             "signatures"
           ],
@@ -2969,7 +2982,7 @@
           "number": "9.13",
           "title": "Calls Through Imported Names",
           "concern": "Which functions of each dependency this code actually calls.",
-          "framing": "A manifest names a package and an import edge names a module. Neither says whether what is called is `os.path.join` or `os.system` \u2014 the same import, and not the same risk.",
+          "framing": "A manifest names a package and an import edge names a module. Neither says whether what is called is `os.path.join` or `os.system` — the same import, and not the same risk.",
           "panels": [
             "external_calls"
           ],

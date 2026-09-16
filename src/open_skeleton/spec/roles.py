@@ -69,6 +69,9 @@ CATEGORY_FAMILY: dict[str, str] = {
     "application_entry": "delivery",
     "compiler_configuration": "delivery",
     "concentration": "maintenance",
+    # Who owns a module and who reaches past a package's door are facts
+    # about what a change costs, which is what this concern collects.
+    "module_ownership": "maintenance",
     "orphan_candidate": "maintenance",
     "documentation_drift": "maintenance",
     "api_documentation_drift": "maintenance",

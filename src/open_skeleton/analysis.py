@@ -39,6 +39,7 @@ from open_skeleton.models import (
 )
 from open_skeleton.policy import exercises_the_product, scoped_category
 from open_skeleton.resolution import resolve_call_targets, resolve_import_targets
+from open_skeleton.topology import MAX_NAMED, describe
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
 EXPONENTIAL_BASE_PATTERN = re.compile(
@@ -931,6 +932,95 @@ def _attribute_claim_yield(
 AnalysisEventCallback = Callable[[str, int, int], None]
 
 
+def _ownership_claims(
+    snapshot: Snapshot,
+    created_at: str,
+    symbols: Sequence[SymbolRecord],
+    edges: Sequence[EdgeRecord],
+) -> list[ClaimRecord]:
+    """Who owns a module, and who reaches past a package's door.
+
+    Both statements are exact and neither is a ranking: a module with exactly
+    one importer, and a package entered from outside either through its facade
+    or around it. Each cites the evidence behind the edges it counted, which is
+    what makes it a path rather than an assertion.
+
+    One claim per package and one for every sole-owned module together, rather
+    than one claim each. A repository with two hundred singly-owned modules has
+    one fact about its shape, not two hundred findings.
+    """
+
+    topology = describe(snapshot.files, symbols, edges)
+    found: list[ClaimRecord] = []
+
+    def claim(text: str, supporting: tuple[str, ...], keys: tuple[str, ...]) -> None:
+        if not supporting:
+            return
+        found.append(
+            ClaimRecord(
+                claim_id=stable_id(
+                    "claim", (snapshot.snapshot_id, "module_ownership", text, PIPELINE_VERSION)
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                claim=text,
+                category="module_ownership",
+                status="verified",
+                confidence=1.0,
+                importance="medium",
+                produced_by=PIPELINE_VERSION,
+                created_at=created_at,
+                verified_at=created_at,
+                supporting_evidence=supporting,
+                invalidation_keys=keys,
+            )
+        )
+
+    for door in topology.doors:
+        if not door.around:
+            text = (
+                f"Every import of `{door.package}` from outside it -- {door.through:,} of "
+                f"them -- names `{door.facade}`. Callers depend on what that file exports "
+                "and on nothing behind it."
+            )
+        else:
+            text = (
+                f"{door.around:,} import(s) from outside `{door.package}` name a module "
+                f"inside it rather than `{door.facade}`, and {door.through:,} name the "
+                "package itself. A caller naming a module inside depends on that module, "
+                "so moving it breaks that caller even when the facade is unchanged."
+            )
+        claim(
+            text,
+            tuple(sorted({*door.through_evidence, *door.around_evidence}))[:24],
+            (f"file:{door.facade}",),
+        )
+
+    if topology.sole_owned:
+        named = ", ".join(
+            f"`{target}` (only by `{owner}`)"
+            for target, owner in sorted(topology.sole_owned.items())[:MAX_NAMED]
+        )
+        more = (
+            f" and {len(topology.sole_owned) - MAX_NAMED:,} more"
+            if len(topology.sole_owned) > MAX_NAMED
+            else ""
+        )
+        claim(
+            (
+                f"{len(topology.sole_owned):,} module(s) are imported by exactly one other "
+                f"module: {named}{more}. A change to one reaches a single caller, which is "
+                "read from resolved imports and says nothing about callers this engine "
+                "could not resolve."
+            ),
+            # A set: one `from . import a, b` statement writes one evidence
+            # record and two edges, so two sole-owned modules can cite the
+            # same receipt, and the ledger holds each pair once.
+            tuple(sorted({item for item in topology.sole_evidence.values() if item}))[:24],
+            tuple(f"file:{target}" for target in sorted(topology.sole_owned)[:MAX_NAMED]),
+        )
+    return found
+
+
 def _scope_claims_by_evidence_role(
     snapshot: Snapshot,
     claims: Sequence[ClaimRecord],
@@ -1204,6 +1294,21 @@ def analyze_snapshot(
             )
         )
 
+    # Resolved after every analyzer has contributed, because a reference is
+    # often satisfied by a symbol another reader declared: a TypeScript module
+    # importing from a `.tsx` file crosses two analyzers, and neither one alone
+    # holds both halves. Calls after imports, because a call is bound by what
+    # its file imported and that binding does not exist until the import edge
+    # names a symbol.
+    #
+    # Held in a local rather than built inside the record, because ownership is
+    # read from the resolved targets and nothing could read them there.
+    resolved_edges = resolve_call_targets(
+        symbols,
+        resolve_import_targets(snapshot.files, symbols, edges),
+    )
+    claims.extend(_ownership_claims(snapshot, created_at, symbols, resolved_edges))
+
     return AnalysisResult(
         snapshot_id=snapshot.snapshot_id,
         analyzer_version=PIPELINE_VERSION,
@@ -1212,22 +1317,7 @@ def analyze_snapshot(
         symbols=tuple(
             sorted(symbols, key=lambda item: (item.path, item.start_line, item.symbol_id))
         ),
-        # Resolved after every analyzer has contributed, because a reference
-        # is often satisfied by a symbol another reader declared: a TypeScript
-        # module importing from a `.tsx` file crosses two analyzers, and
-        # neither one alone holds both halves.
-        # Calls after imports, because a call is bound by what its file
-        # imported and that binding does not exist until the import edge
-        # names a symbol.
-        edges=tuple(
-            sorted(
-                resolve_call_targets(
-                    symbols,
-                    resolve_import_targets(snapshot.files, symbols, edges),
-                ),
-                key=lambda item: item.edge_id,
-            )
-        ),
+        edges=tuple(sorted(resolved_edges, key=lambda item: item.edge_id)),
         evidence=tuple(sorted(evidence, key=lambda item: item.evidence_id)),
         # Merge first, then re-file. Merging folds claims that share an
         # identifier and unions their receipts, so afterwards a claim's

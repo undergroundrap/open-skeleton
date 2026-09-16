@@ -141,3 +141,33 @@ A tranche is handoff-ready only when:
 - both registered fixtures were exercised when the change affects document semantics;
 - private baseline text and provider output remain outside every Git worktree;
 - the roadmap names the next single work package and no unproven parity claim is made.
+
+## Work package 2, first slice: ownership from resolved edges
+
+Two statements, both exact, both carrying the evidence behind the edges they
+counted:
+
+- a module imported by exactly one other module, named with its owner;
+- a package whose directory holds a facade file, entered from outside either
+  through that file or around it, counted separately.
+
+Neither is a ratio, a threshold, or a ranking. A directory holding two facade
+files — a Rust crate with both `lib.rs` and `main.rs` — has two doors and is
+left out rather than resolved by preferring one, which is the refusal the
+import resolver already makes for an ambiguous target. An unresolved edge is
+not counted at all: it says nothing about ownership, and counting it would
+turn the shape of the resolver into a claim about the repository.
+
+The two fixtures and two further corpora say different things, which is what
+makes the statements worth having. This repository reports 185 imports from
+outside `src/open_skeleton` naming a module inside it and none naming the
+package; `hum-lang` reports the opposite for both its crates, every import
+from outside arriving through `lib.rs`. `java.util.concurrent` reports no
+door at all, correctly: Java has no facade file, and the concept is absent
+rather than approximated.
+
+What this slice does not do is rank fan-in or name a shared facade by weight.
+Those need a threshold, and a threshold is the thing the exit proof forbids.
+The remaining work in package 2 — state and store owners, bypass paths
+through a facade that a caller also imports — needs call edges resolved for
+more than Python, which is the next prerequisite rather than the next slice.

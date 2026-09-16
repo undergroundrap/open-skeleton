@@ -368,6 +368,9 @@ TEST_SCOPED_CATEGORIES = {
     # two of them as delivery behaviour. A non-final static field in a test
     # is the suite's shared state; `java.util.concurrent` relocated under
     # `tests/` reported two as the program's.
+    # A package reached only from the suite is a fact about the suite's
+    # access, not about how the product is assembled.
+    "module_ownership": "test_module_ownership",
     "process_termination": "test_process_termination",
     "process_local_state": "test_process_local_state",
 }
