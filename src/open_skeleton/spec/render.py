@@ -508,6 +508,7 @@ def build_spec(
         value_set_concordance=value_set_concordance,
         record_concordance=record_concordance,
         symbols=symbols,
+        edges=edges,
     )
 
     used: set[str] = set()

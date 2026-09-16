@@ -506,6 +506,9 @@
             "module_dependency",
             "function_flow"
           ],
+          "panels": [
+            "call_reach"
+          ],
           "findings": {
             "categories": [
               "module_ownership"

@@ -103,6 +103,10 @@ class PanelContext:
     record_concordance: tuple[ContractRecord, ...] = ()
     consequences: tuple[Consequence, ...] = ()
     symbols: tuple[dict[str, Any], ...] = ()
+    # Resolved call and import edges. A panel could not see these at all until
+    # three readers began recording their receivers, which is what turned a
+    # call edge from a word into a symbol.
+    edges: tuple[dict[str, Any], ...] = ()
     claim_locations: dict[str, str] = field(default_factory=dict)
     substitutes: tuple[Substitute, ...] = ()
     section_verdicts: dict[str, str] = field(default_factory=dict)
@@ -939,6 +943,76 @@ SECURITY_CONTROLS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
+def _call_reach(context: PanelContext) -> Panel:
+    """Which modules call into each module, counted from resolved edges.
+
+    A module's callers are the places a change to it is felt. Until the
+    readers recorded their receivers a call edge held a word -- `clone`,
+    `load`, `text` -- and counting those would have measured how common a name
+    is. An edge carrying a symbol measures reach.
+
+    Three rules, each of which removes something that is not reach. A call
+    inside one file is not counted: every function calls its neighbours, and a
+    module always reaches itself. An unresolved call is not counted, because
+    it names no definition. And the row is distinct calling modules rather
+    than calls, since twenty calls from one module are one relationship.
+
+    This is a table and not a set of findings on purpose. Ranking modules by
+    fan-in would need a threshold to say which are interesting, and the
+    document's own row budget is a decision about the page instead.
+    """
+
+    symbol_path = {
+        str(item.get("symbol_id")): str(item.get("path", "")) for item in context.symbols
+    }
+    symbol_name = {
+        str(item.get("symbol_id")): str(item.get("qualified_name", "")) for item in context.symbols
+    }
+    callers: dict[str, set[str]] = {}
+    calls: Counter[str] = Counter()
+    reached: dict[str, Counter[str]] = {}
+    for edge in context.edges:
+        if str(edge.get("relationship")) != "calls":
+            continue
+        target_id = str(edge.get("target_symbol_id") or "")
+        source = str(edge.get("source_path", ""))
+        target = symbol_path.get(target_id, "")
+        if not target_id or not target or not source or target == source:
+            continue
+        callers.setdefault(target, set()).add(source)
+        calls[target] += 1
+        reached.setdefault(target, Counter())[symbol_name.get(target_id, "")] += 1
+
+    rows = tuple(
+        (
+            target,
+            f"{len(sources):,}",
+            f"{calls[target]:,}",
+            ", ".join(f"`{name}`" for name, _ in reached[target].most_common(3) if name) or "—",
+        )
+        for target, sources in sorted(
+            callers.items(), key=lambda item: (-len(item[1]), -calls[item[0]], item[0])
+        )
+    )
+    return Panel(
+        name="call_reach",
+        title="Modules called from other modules",
+        columns=("Module", "Calling modules", "Calls", "Most-called definitions"),
+        alignments=("left", "right", "right", "left"),
+        rows=rows[:MAX_SYMBOL_ROWS],
+        total_rows=len(rows),
+        note=(
+            "Counted from call edges that resolved to a definition, which is "
+            "possible for Python, Rust and TypeScript, where the readers record "
+            "what a call was called on. A call within one file is excluded: a "
+            "module always reaches itself. A call this engine could not resolve "
+            "is excluded too, since it names no definition -- so a module absent "
+            "here is one nothing resolved into, which is not the same as one "
+            "nothing calls."
+        ),
+    )
+
+
 def _data_flow(context: PanelContext) -> Panel:
     """Where data enters each module, where it rests, and where it leaves.
 
@@ -1027,9 +1101,11 @@ def _data_flow(context: PanelContext) -> Panel:
         rows=rows[:MAX_SYMBOL_ROWS],
         total_rows=len(rows),
         note=(
-            "Granularity is the module on purpose. Call edges record a module "
-            "and a called name rather than a resolved function, so naming which "
-            "route reaches which table would be a guess presented as a trace. "
+            "Granularity is the module on purpose. A route and a table listed "
+            "on one row are two facts that are true together, not a path from "
+            "the first to the second: call edges now resolve to a definition "
+            "for three of the six readers, and one resolved edge is still not "
+            "a chain of them. "
             "A row listed with both a route and a table is one where those "
             "two facts are true together, not one where a path from the first "
             "to the second has been demonstrated. Storage is attributed to the "
@@ -1698,6 +1774,8 @@ def build_panel(name: str, context: PanelContext) -> Panel:
         return _traceability_matrix(context.capabilities)
     if name == "symbol_index":
         return _symbol_index(context.symbols)
+    if name == "call_reach":
+        return _call_reach(context)
     if name == "model_fields":
         return _model_fields(context.symbols)
     if name == "embedded_literals":

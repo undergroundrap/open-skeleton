@@ -171,3 +171,33 @@ Those need a threshold, and a threshold is the thing the exit proof forbids.
 The remaining work in package 2 — state and store owners, bypass paths
 through a facade that a caller also imports — needs call edges resolved for
 more than Python, which is the next prerequisite rather than the next slice.
+
+### Second slice: reach, and a bypass that is not there
+
+Calls resolve to a definition for Python, Rust and TypeScript now, so the
+document can say which modules call into each module. That is reported as a
+panel rather than as findings, deliberately: fan-in is what the work package
+names, and ranking modules by it would need a threshold to decide which are
+interesting, which is the one thing the exit proof forbids. A table lists what
+is there and the document's own row budget decides how much to print, which is
+a decision about the page rather than about the repository.
+
+On this repository the widest reach is `scanner.py` at 42 calling modules,
+then `analysis.py` at 39. `ledger.py`, the one file carrying a durable-storage
+claim, is reached by 18 modules across 46 calls — which is the store-owner
+half of this package's criterion, answered from resolved edges rather than
+from parsing claim text.
+
+The bypass criterion was measured and not built, and the measurement is the
+reason. The exact form — a module that imports a package's facade *and*
+imports something behind it, so it holds the door and goes around it anyway —
+occurs **once** across four repositories: `tests/test_analyzer_base.py`
+reaching both `analyzers/__init__.py` and `analyzers/base.py`. A claim
+category for a fact that appears once in four corpora would be fitting to an
+imagined repository, which is the same reason OpenAPI and named registries
+were left out of package 1. The looser form is already reported: the package
+door claim counts every entry around a facade, and on this repository that is
+185, 153 and 74.
+
+What remains in package 2 is state lifecycle, which is package 3's subject and
+should not be started here.

@@ -730,6 +730,71 @@ class IndexCompletenessTests(TestCase):
         self.assertEqual(sorted(read - PANEL_METADATA_KEYS), [])
 
 
+class CallReachTests(TestCase):
+    """Which modules call into each module, from edges that name a definition.
+
+    A call edge held a word until three readers began recording what a call
+    was called on -- `clone`, `load`, `text`. Counting those would have
+    measured how common a name is. An edge carrying a symbol measures reach,
+    which is the number that answers how many places a change here is felt in.
+    """
+
+    SYMBOLS = (
+        {"symbol_id": "s1", "path": "store.py", "qualified_name": "store.load"},
+        {"symbol_id": "s2", "path": "store.py", "qualified_name": "store.save"},
+        {"symbol_id": "s3", "path": "app.py", "qualified_name": "app.run"},
+    )
+
+    def _panel(self, *edges: dict[str, Any]) -> Any:
+        return build_panel("call_reach", PanelContext(symbols=self.SYMBOLS, edges=tuple(edges)))
+
+    def _call(self, source: str, target: str | None) -> dict[str, Any]:
+        return {
+            "relationship": "calls",
+            "source_path": source,
+            "target_symbol_id": target,
+        }
+
+    def test_a_cross_module_call_is_reach(self) -> None:
+        panel = self._panel(self._call("app.py", "s1"))
+        self.assertEqual(panel.rows[0][0], "store.py")
+        self.assertEqual(panel.rows[0][1], "1")
+        self.assertIn("store.load", panel.rows[0][3])
+
+    def test_two_callers_are_two_modules_and_one_row(self) -> None:
+        panel = self._panel(
+            self._call("app.py", "s1"),
+            self._call("tool.py", "s2"),
+        )
+        self.assertEqual(len(panel.rows), 1)
+        self.assertEqual(panel.rows[0][1], "2")
+        self.assertEqual(panel.rows[0][2], "2")
+
+    def test_twenty_calls_from_one_module_are_one_relationship(self) -> None:
+        panel = self._panel(*[self._call("app.py", "s1") for _ in range(20)])
+        self.assertEqual(panel.rows[0][1], "1")
+        self.assertEqual(panel.rows[0][2], "20")
+
+    def test_a_call_inside_one_file_is_not_reach(self) -> None:
+        # Every function calls its neighbours, and a module always reaches
+        # itself.
+        self.assertEqual(self._panel(self._call("store.py", "s1")).rows, ())
+
+    def test_an_unresolved_call_names_no_definition(self) -> None:
+        self.assertEqual(self._panel(self._call("app.py", None)).rows, ())
+
+    def test_an_import_edge_is_not_a_call(self) -> None:
+        edge = {"relationship": "imports", "source_path": "app.py", "target_symbol_id": "s1"}
+        self.assertEqual(self._panel(edge).rows, ())
+
+    def test_the_note_says_a_missing_module_is_not_an_uncalled_one(self) -> None:
+        # A module absent from this table is one nothing resolved into, which
+        # is a different statement from one nothing calls.
+        panel = self._panel(self._call("app.py", "s1"))
+        assert panel.note is not None
+        self.assertIn("not the same as one", panel.note)
+
+
 class DocumentedValueTests(TestCase):
     """Documentation is the artifact that goes stale in silence."""
 

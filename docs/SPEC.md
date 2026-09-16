@@ -184,6 +184,7 @@ Declared surface — the names and shapes a repository writes down:
 | `payload_shapes` | Literal keys of dictionaries a function returns |
 | `object_keys` | Field names coined as object literal keys |
 | `imported_names` | Which names each imported module actually contributes |
+| `call_reach` | Which modules call into each module, from calls that resolved to a definition |
 | `data_containers` | Module-level lookup tables with their sizes |
 
 Values and behaviour — decisions written into the code:

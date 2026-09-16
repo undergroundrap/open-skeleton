@@ -27,6 +27,10 @@ PROBE_KINDS = frozenset(
 
 PANEL_KINDS = frozenset(
     {
+        # Which modules call into each module, from call edges that
+        # resolve to a definition. Possible only since three readers began
+        # recording what a call was called on.
+        "call_reach",
         "language_census",
         "role_census",
         "largest_files",
