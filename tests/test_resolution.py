@@ -286,15 +286,31 @@ class CallResolutionTests(TestCase):
         self.assertIsNone(found["pkg/graphics.py=>new"])
 
     def test_a_reader_that_hides_receivers_has_its_calls_left_alone(self) -> None:
-        # Given `text(1)` and `w.text()`, the TypeScript reader records `text`
-        # for both. Binding that to the free function of the same name is a
-        # coin toss, and an agent walking the graph could not tell.
+        # No shipped reader is in this state any more -- all six record their
+        # receivers -- and the rule is what made getting there worth doing, so
+        # it is pinned against a reader that does not exist rather than
+        # deleted. A reader added tomorrow inherits the refusal by default.
+        symbols = [
+            _sym("s1", "src/app.hs", "app.text"),
+            _sym("s2", "src/app.hs", "app.caller"),
+        ]
+        edges = [_call("src/app.hs", "text", "s2", analyzer="haskell-lexical/v1")]
+        self.assertIsNone(self._resolve(symbols, edges)["src/app.hs=>text"])
+
+    def test_typescript_resolves_a_bare_call_and_refuses_a_method(self) -> None:
         symbols = [
             _sym("s1", "src/app.ts", "app.text"),
             _sym("s2", "src/app.ts", "app.caller"),
         ]
-        edges = [_call("src/app.ts", "text", "s2", analyzer="typescript-lexical/v1")]
-        self.assertIsNone(self._resolve(symbols, edges)["src/app.ts=>text"])
+        resolved = self._resolve(
+            symbols,
+            [
+                _call("src/app.ts", "text", "s2", analyzer="typescript-lexical/v1"),
+                _call("src/app.ts", "store.text", "s2", analyzer="typescript-lexical/v1"),
+            ],
+        )
+        self.assertEqual(resolved["src/app.ts=>text"], "s1")
+        self.assertIsNone(resolved["src/app.ts=>store.text"])
 
     def test_a_reader_that_records_receivers_has_its_bare_calls_resolved(self) -> None:
         # The Rust reader records `a.text` for a method call, so a bare `text`

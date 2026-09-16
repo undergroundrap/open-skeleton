@@ -657,10 +657,26 @@ class CallSiteTests(TestCase):
     def test_a_plain_call_is_recorded(self) -> None:
         self.assertEqual(self._names("const v = load(id);"), {"load"})
 
-    def test_a_method_call_records_the_method_name(self) -> None:
-        # Resolution is lexical: this records `save` without deciding which
-        # `save` it is, the same guarantee the rest of the module makes.
-        self.assertEqual(self._names("store.save(y);"), {"save"})
+    def test_a_method_call_records_its_receiver(self) -> None:
+        # Resolution is lexical: this records `store.save` without deciding
+        # which `save` it is, the same guarantee the rest of the module makes.
+        # The receiver is what keeps a bare name meaning a free call, so it is
+        # recorded even though nothing here can resolve a method.
+        self.assertEqual(self._names("store.save(y);"), {"store.save"})
+
+    def test_optional_chaining_and_non_null_reach_the_same_member(self) -> None:
+        self.assertEqual(self._names("store?.save(y);"), {"store.save"})
+        self.assertEqual(self._names("store!.save(y);"), {"store.save"})
+
+    def test_a_chain_records_the_nearest_receiver(self) -> None:
+        # `obj.a.b()` gives `a.b`. The rest of the chain would not help:
+        # resolving a method needs the receiver's type either way.
+        self.assertEqual(self._names("obj.a.b();"), {"a.b"})
+
+    def test_a_global_namespace_is_a_receiver_like_any_other(self) -> None:
+        # `Math.hypot` is the standard library, and recording it as `hypot`
+        # made it indistinguishable from a local function of that name.
+        self.assertEqual(self._names("Math.hypot(p, q);"), {"Math.hypot"})
 
     def test_control_flow_taking_a_parenthesis_is_not_a_call(self) -> None:
         source = "if (ready) { while (going) { for (const a of b) { switch (k) {} } } }"

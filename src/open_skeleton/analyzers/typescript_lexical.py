@@ -377,8 +377,16 @@ def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
     out to live in more than the reader it was found in.
 
     Resolution is lexical, so this records a name rather than a target:
-    `store.load(x)` records `load` without deciding which `load` it is, the
-    same guarantee the rest of this module makes. Four things that look like
+    `store.load(x)` records `store.load` without deciding which `load` it is,
+    the same guarantee the rest of this module makes.
+
+    The receiver is recorded because without it a bare name means two things.
+    `store.load(x)` and `load(x)` both reached the ledger as `load`, and
+    binding that to a free function of the same name is a coin toss written
+    down as an edge. One level is enough to settle it, which is the depth the
+    Python and Rust readers record: `obj.a.b()` gives `a.b`, and the rest of
+    the chain would not help, since resolving a method needs the receiver's
+    type and that is not written at the call site. Four things that look like
     calls are excluded because none of them is one -- control flow that takes
     a parenthesis, a `function` or `class` declaration's own name, a `new`
     expression's constructor, and an import or require, which name a module
@@ -407,8 +415,28 @@ def _call_sites(tokens: list[Token]) -> list[tuple[str, int]]:
             and previous.value in {"function", "class", "new"}
         ):
             continue
-        found.append((name, token.line))
+        found.append((f"{_call_receiver(tokens, index)}{name}", token.line))
     return found
+
+
+def _call_receiver(tokens: list[Token], index: int) -> str:
+    """What the call at `index` was called on, with its dot, or nothing.
+
+    Three spellings reach the same member and all three record it: `a.b()`,
+    `a?.b()` which optional-chains through it, and `a!.b()` which asserts
+    non-null on the way. The receiver is the identifier before the dot,
+    whatever punctuation sits between them.
+    """
+
+    cursor = index - 1
+    if cursor < 0 or tokens[cursor].value != ".":
+        return ""
+    cursor -= 1
+    while cursor >= 0 and tokens[cursor].value in {"?", "!"}:
+        cursor -= 1
+    if cursor < 0 or tokens[cursor].kind != "identifier":
+        return ""
+    return f"{tokens[cursor].value}."
 
 
 @dataclass(frozen=True, slots=True)
