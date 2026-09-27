@@ -10,6 +10,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.models import AnalysisResult, Snapshot
 from open_skeleton.scanner import dropped_file_count
@@ -124,21 +125,46 @@ def export_markdown(snapshot: Snapshot, path: Path) -> None:
     _atomic_write(path, lines())
 
 
+# One encoder for every line. `json.dumps` with any non-default option builds a
+# fresh encoder per call, which on a quarter of a million records was a
+# measurable share of the export.
+_JSON_LINE = json.JSONEncoder(sort_keys=True)
+
+
+def _fields(item: Any) -> dict[str, Any]:
+    """A record's fields without `asdict`'s deep copy.
+
+    `asdict` rebuilds every nested dict, list and tuple so the caller may
+    mutate the result. Nothing here mutates it: the dict is encoded and
+    dropped, and JSON renders the originals and the copies identically.
+    """
+
+    return {name: getattr(item, name) for name in item.__dataclass_fields__}
+
+
 def export_analysis_jsonl(result: AnalysisResult, path: Path) -> None:
+    encode = _JSON_LINE.encode
+
     def records() -> Iterable[str]:
-        yield json.dumps({"record_type": "analysis", **result.summary()}, sort_keys=True) + "\n"
-        for item in result.coverage:
-            yield json.dumps({"record_type": "coverage", **item.to_dict()}, sort_keys=True) + "\n"
-        for symbol in result.symbols:
-            yield json.dumps({"record_type": "symbol", **symbol.to_dict()}, sort_keys=True) + "\n"
-        for edge in result.edges:
-            yield json.dumps({"record_type": "edge", **edge.to_dict()}, sort_keys=True) + "\n"
-        for receipt in result.evidence:
-            yield (
-                json.dumps({"record_type": "evidence", **receipt.to_dict()}, sort_keys=True) + "\n"
-            )
-        for claim in result.claims:
-            yield json.dumps({"record_type": "claim", **claim.to_dict()}, sort_keys=True) + "\n"
+        yield encode({"record_type": "analysis", **result.summary()}) + "\n"
+        for coverage in result.coverage:
+            yield encode({"record_type": "coverage", **coverage.to_dict()}) + "\n"
+        for kind, items in (
+            ("symbol", result.symbols),
+            ("edge", result.edges),
+            ("evidence", result.evidence),
+            ("claim", result.claims),
+        ):
+            # Joined in batches so the file receives a few large writes rather
+            # than one per record.
+            batch: list[str] = []
+            for item in items:
+                batch.append(encode({"record_type": kind, **_fields(item)}))
+                if len(batch) == 4096:
+                    yield "\n".join(batch) + "\n"
+                    batch = []
+            if batch:
+                yield "\n".join(batch) + "\n"
 
     _atomic_write(path, records())
 
