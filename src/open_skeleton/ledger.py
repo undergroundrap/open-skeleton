@@ -695,13 +695,41 @@ class EvidenceLedger:
             ).fetchone()
             if snapshot_exists is None:
                 raise ValueError(f"Snapshot must be saved before analysis: {result.snapshot_id}")
+            # A larger page cache for this connection only. The default two
+            # megabytes is far smaller than the indexes a large analysis
+            # writes into, so pages were evicted and reread across the batch.
+            # Nothing is persisted and durability is unchanged.
+            connection.execute("PRAGMA cache_size = -65536")
+
+            # Upserts, not `INSERT OR REPLACE`, for every table other rows
+            # point into. REPLACE deletes the existing row before inserting
+            # its successor, and each delete fires the `ON DELETE` actions of
+            # every foreign key that references it: a scan of `edges` per
+            # replaced receipt or symbol, since those columns are unindexed.
+            # Re-analysing an unchanged repository -- same snapshot, same
+            # content-addressed identifiers -- took 404 seconds on clap where
+            # the first save took one. The deletes also cascaded through
+            # `claim_evidence`, silently stripping the receipts of any earlier
+            # claim that cited the same evidence. An identifier names one
+            # fact, so an update in place is the correct write, not only the
+            # fast one.
 
             connection.executemany(
                 """
-                INSERT OR REPLACE INTO evidence(
+                INSERT INTO evidence(
                     evidence_id, snapshot_id, path, start_line, end_line, symbol,
                     evidence_kind, excerpt_sha256, analyzer, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(evidence_id) DO UPDATE SET
+                    snapshot_id = excluded.snapshot_id,
+                    path = excluded.path,
+                    start_line = excluded.start_line,
+                    end_line = excluded.end_line,
+                    symbol = excluded.symbol,
+                    evidence_kind = excluded.evidence_kind,
+                    excerpt_sha256 = excluded.excerpt_sha256,
+                    analyzer = excluded.analyzer,
+                    created_at = excluded.created_at
                 """,
                 (
                     (
@@ -721,10 +749,20 @@ class EvidenceLedger:
             )
             connection.executemany(
                 """
-                INSERT OR REPLACE INTO symbols(
+                INSERT INTO symbols(
                     symbol_id, snapshot_id, path, qualified_name, kind, start_line,
                     end_line, language, analyzer, metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol_id) DO UPDATE SET
+                    snapshot_id = excluded.snapshot_id,
+                    path = excluded.path,
+                    qualified_name = excluded.qualified_name,
+                    kind = excluded.kind,
+                    start_line = excluded.start_line,
+                    end_line = excluded.end_line,
+                    language = excluded.language,
+                    analyzer = excluded.analyzer,
+                    metadata_json = excluded.metadata_json
                 """,
                 (
                     (
@@ -744,10 +782,19 @@ class EvidenceLedger:
             )
             connection.executemany(
                 """
-                INSERT OR REPLACE INTO edges(
+                INSERT INTO edges(
                     edge_id, snapshot_id, source_symbol_id, source_path, relationship,
                     target_ref, target_symbol_id, evidence_id, analyzer
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(edge_id) DO UPDATE SET
+                    snapshot_id = excluded.snapshot_id,
+                    source_symbol_id = excluded.source_symbol_id,
+                    source_path = excluded.source_path,
+                    relationship = excluded.relationship,
+                    target_ref = excluded.target_ref,
+                    target_symbol_id = excluded.target_symbol_id,
+                    evidence_id = excluded.evidence_id,
+                    analyzer = excluded.analyzer
                 """,
                 (
                     (

@@ -5,6 +5,7 @@
 import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -76,6 +77,61 @@ class LedgerAndExportTests(TestCase):
                 event_count = connection.execute("SELECT COUNT(*) FROM events").fetchone()
             self.assertEqual(file_count, (5,))
             self.assertEqual(event_count, (len(snapshot.events),))
+
+    def test_resaving_evidence_keeps_the_receipts_of_earlier_claims(self) -> None:
+        # Identifiers are content-addressed, so analysing an unchanged
+        # repository again writes the same receipts. Written with
+        # `INSERT OR REPLACE`, each one was deleted and reinserted, and the
+        # delete cascaded through `claim_evidence`: a claim saved earlier --
+        # by another reader version, say -- lost every receipt it shared with
+        # the new run, while still recorded as verified. It also scanned
+        # `edges` once per receipt, which made the second save of clap take
+        # 404 seconds where the first took one.
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repo"
+            root.mkdir()
+            create_sample_repository(root)
+            snapshot = scan_repository(root)
+            first = analyze_snapshot(snapshot)
+            ledger = EvidenceLedger(workspace / "state" / "evidence.sqlite3")
+            ledger.save_snapshot(snapshot)
+            ledger.save_analysis(first)
+
+            earlier = next(claim for claim in first.claims if claim.supporting_evidence)
+            relabelled = replace(
+                first,
+                created_at="2099-01-01T00:00:00.000+00:00",
+                claims=tuple(
+                    replace(claim, claim_id=f"{claim.claim_id}-next") for claim in first.claims
+                ),
+            )
+            ledger.save_analysis(relabelled)
+
+            with closing(sqlite3.connect(ledger.path)) as connection:
+                kept = connection.execute(
+                    "SELECT COUNT(*) FROM claim_evidence WHERE claim_id = ?",
+                    (earlier.claim_id,),
+                ).fetchone()
+                counts = [
+                    connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
+                    for table in ("evidence", "symbols", "edges")
+                ]
+                dangling = connection.execute(
+                    "SELECT COUNT(*) FROM edges WHERE evidence_id IS NULL"
+                ).fetchone()
+        self.assertEqual(kept, (len(set(earlier.supporting_evidence)),))
+        # Nothing was duplicated by writing the same facts twice, and no edge
+        # lost the receipt it points at along the way.
+        self.assertEqual(
+            counts,
+            [
+                len({item.evidence_id for item in first.evidence}),
+                len({item.symbol_id for item in first.symbols}),
+                len({item.edge_id for item in first.edges}),
+            ],
+        )
+        self.assertEqual(dangling, (sum(1 for item in first.edges if item.evidence_id is None),))
 
     def test_changed_evidence_projects_old_claims_as_stale(self) -> None:
         with TemporaryDirectory() as temporary:
