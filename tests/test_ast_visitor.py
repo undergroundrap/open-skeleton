@@ -12,6 +12,7 @@ from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers.ast_visitor import FastNodeVisitor, iter_child_nodes, walk
+from open_skeleton.analyzers.python_ast import _module_nodes, _module_nodes_of
 from open_skeleton.scanner import scan_repository
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "open_skeleton"
@@ -225,3 +226,41 @@ class FastNodeVisitorTests(TestCase):
         self.assertEqual(python.analyzed_files, 1)
         self.assertEqual(python.failed_files, 1)
         self.assertTrue(python.failures[0].startswith("deep.py: "))
+
+
+class ModuleTypeIndexTests(TestCase):
+    SELECTIONS: tuple[tuple[type, ...], ...] = (
+        (ast.Raise,),
+        (ast.FunctionDef, ast.AsyncFunctionDef),
+        (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.Compare),
+        (ast.Name, ast.arg, ast.Attribute, ast.keyword, ast.Constant),
+        # Abstract bases select every concrete subclass, as isinstance does.
+        (ast.stmt,),
+        (ast.expr, ast.excepthandler),
+        # A type no tree contains, and the root alone.
+        (ast.MatchStar,),
+        (ast.Module,),
+    )
+
+    def test_a_selection_is_the_filtered_walk_in_walk_order(self) -> None:
+        for label, tree in _trees():
+            assert isinstance(tree, ast.Module)
+            for types in self.SELECTIONS:
+                with self.subTest(tree=label, types=[item.__name__ for item in types]):
+                    expected = [id(node) for node in _module_nodes(tree) if isinstance(node, types)]
+                    self.assertEqual([id(node) for node in _module_nodes_of(tree, types)], expected)
+                    # Asked twice, the cached answer is the same answer.
+                    self.assertEqual([id(node) for node in _module_nodes_of(tree, types)], expected)
+
+    def test_the_index_does_not_keep_a_tree_alive(self) -> None:
+        # The index is keyed weakly on the tree; a value that referred back to
+        # its key would retain every parsed file of a run.
+        import gc
+        import weakref
+
+        tree = ast.parse("def f():\n    raise ValueError\n")
+        _module_nodes_of(tree, (ast.Module, ast.Raise))
+        reference = weakref.ref(tree)
+        del tree
+        gc.collect()
+        self.assertIsNone(reference())

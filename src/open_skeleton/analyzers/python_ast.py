@@ -15,6 +15,7 @@ from collections.abc import Iterable, Iterator
 from concurrent.futures import Executor
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -443,6 +444,66 @@ def _module_nodes(tree: ast.Module) -> Iterator[ast.AST]:
     yield from descendants
 
 
+# Every extractor above starts by discarding the nodes it does not read; most
+# read one or two types out of the hundred or so a module contains. So the
+# walk is also indexed by type, once per tree, and an extractor iterates only
+# the nodes of the types it names, still in `ast.walk` order. The loops keep
+# their own type checks, so a type left out of a list changes nothing but the
+# node count. Excluding the root from the stored index is deliberate, for the
+# reason given above.
+_MODULE_TYPE_INDEX: weakref.WeakKeyDictionary[ast.Module, dict[type, list[tuple[int, ast.AST]]]] = (
+    weakref.WeakKeyDictionary()
+)
+_MODULE_TYPE_SELECTIONS: weakref.WeakKeyDictionary[
+    ast.Module, dict[tuple[type, ...], list[ast.AST]]
+] = weakref.WeakKeyDictionary()
+
+
+def _module_nodes_of(tree: ast.Module, types: tuple[type, ...]) -> list[ast.AST]:
+    """The nodes `_module_nodes` yields that are instances of `types`, in its order.
+
+    The cached selection never holds the root either: it is prepended on the
+    way out, so no stored value refers to the key it is stored under.
+    """
+
+    selections = _MODULE_TYPE_SELECTIONS.get(tree)
+    if selections is None:
+        selections = {}
+        _MODULE_TYPE_SELECTIONS[tree] = selections
+    selected = selections.get(types)
+    if selected is None:
+        index = _MODULE_TYPE_INDEX.get(tree)
+        if index is None:
+            index = {}
+            nodes = iter(_module_nodes(tree))
+            next(nodes)
+            for position, node in enumerate(nodes, start=1):
+                index.setdefault(type(node), []).append((position, node))
+            _MODULE_TYPE_INDEX[tree] = index
+        groups = [entries for node_type, entries in index.items() if issubclass(node_type, types)]
+        # Each group is already in walk order, so sorting their concatenation
+        # is a merge of sorted runs. Positions are unique, so it compares
+        # integers and never reaches the nodes beside them.
+        ordered = groups[0] if len(groups) == 1 else sorted(chain.from_iterable(groups))
+        selected = [node for _, node in ordered]
+        selections[types] = selected
+    return [tree, *selected] if isinstance(tree, types) else selected
+
+
+_NAME_INDEX_TYPES: tuple[type, ...] = (
+    ast.Name,
+    ast.arg,
+    ast.Attribute,
+    ast.keyword,
+    ast.ExceptHandler,
+    ast.alias,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Constant,
+)
+
+
 MAX_RAISED_MESSAGE_CHARS = 60
 
 
@@ -477,7 +538,7 @@ def _raised_types(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.Raise,)):
         if not isinstance(node, ast.Raise) or node.exc is None:
             continue
         name = (_expr_name(node.exc) or "").split(".")[-1]
@@ -740,7 +801,9 @@ def _state_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
             entry["values"].add(literal)
             entry["entries"].add((literal, condition or "", statement.lineno))
 
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(
+        tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module, ast.Compare)
+    ):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
             body = [item for item in node.body if isinstance(item, ast.stmt)]
             guarded_assignments(body, None)
@@ -772,7 +835,7 @@ def _instance_tunables(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.ClassDef,)):
         if not isinstance(node, ast.ClassDef):
             continue
         for inner in _fast_walk(node):
@@ -862,7 +925,7 @@ def _name_index(tree: ast.Module) -> dict[str, int]:
         if name and not name.startswith("__"):
             found[name] = min(found.get(name, line), line)
 
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, _NAME_INDEX_TYPES):
         line = getattr(node, "lineno", 1)
         if isinstance(node, ast.Name):
             record(node.id, line)
@@ -949,7 +1012,7 @@ def _external_calls(
     # from a third-party package. This keeps the module without changing what
     # `via` has always meant.
     sources: dict[str, str] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.ImportFrom, ast.Import)):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 bound = alias.asname or alias.name
@@ -963,7 +1026,7 @@ def _external_calls(
                 sources[bound] = alias.name
 
     # `client = AsyncOpenAI(...)` makes `client` stand for the imported name.
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.Assign,)):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
             continue
         root = (_expr_name(node.value.func) or "").split(".")[0]
@@ -983,7 +1046,7 @@ def _external_calls(
                     sources.setdefault(attribute, sources.get(root, ""))
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.Call,)):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         dotted = _expr_name(node.func)
@@ -1043,7 +1106,7 @@ def _signatures(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.FunctionDef, ast.AsyncFunctionDef)):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         arguments = node.args
@@ -1086,7 +1149,7 @@ def _defined_exceptions(tree: ast.Module) -> list[tuple[str, str, int]]:
     """
 
     found: list[tuple[str, str, int]] = []
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.ClassDef,)):
         if not isinstance(node, ast.ClassDef):
             continue
         for base in node.bases:
@@ -1105,7 +1168,7 @@ def _caught_families(tree: ast.Module) -> list[tuple[str, int]]:
     """
 
     found: list[tuple[str, int]] = []
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.ExceptHandler,)):
         if not isinstance(node, ast.ExceptHandler):
             continue
         if node.type is None:
@@ -1142,7 +1205,7 @@ def _reference_literals(tree: ast.Module) -> set[int]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             found.add(id(node))
 
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.Compare, ast.Call, ast.Dict)):
         if isinstance(node, ast.Compare):
             mark(node.left)
             for operand in node.comparators:
@@ -1182,7 +1245,7 @@ def _declared_cli_flags(tree: ast.Module) -> tuple[dict[str, int], dict[str, int
 
     options: dict[str, int] = {}
     positionals: dict[str, int] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.Call,)):
         if not isinstance(node, ast.Call):
             continue
         function = node.func
@@ -1273,7 +1336,9 @@ def _declared_value_sets(tree: ast.Module) -> list[dict[str, Any]]:
             }
         )
 
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(
+        tree, (ast.ClassDef, ast.arg, ast.AnnAssign, ast.Call, ast.Compare)
+    ):
         if isinstance(node, ast.ClassDef):
             bases = {
                 base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
@@ -1378,7 +1443,7 @@ def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
         return f"{sign}{value!r}"
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.FunctionDef, ast.AsyncFunctionDef)):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         values: dict[str, int] = {}
@@ -1529,7 +1594,7 @@ def _imported_names(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.ImportFrom, ast.Import)):
         if isinstance(node, ast.ImportFrom):
             # A relative import has no module name at level > 0; the dots are
             # the target, so they are kept rather than dropped.
@@ -1567,7 +1632,7 @@ def _model_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.ClassDef,)):
         if not isinstance(node, ast.ClassDef):
             continue
         fields: list[dict[str, Any]] = []
@@ -1607,7 +1672,7 @@ def _payload_shapes(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in _module_nodes(tree):
+    for node in _module_nodes_of(tree, (ast.FunctionDef, ast.AsyncFunctionDef)):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         keys: set[str] = set()
