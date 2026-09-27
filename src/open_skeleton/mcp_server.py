@@ -157,6 +157,21 @@ class OpenSkeletonService:
             raise ValueError(f"Evidence not found: {evidence_id}")
         return receipt
 
+    def check_claims(self, claim_ids: list[str]) -> dict[str, Any]:
+        """Whether each claim still rests on the current source, without re-analysing.
+
+        Rescans the repository read-only, compares it with the snapshot the
+        claims were read from, and reports each claim as current, stale (with
+        the reasons and the receipts whose files moved) or not found. Writes
+        nothing: no snapshot, no ledger row.
+        """
+
+        snapshot_id = self._latest_snapshot_id()
+        current = {
+            item.path: (item.sha256, item.language) for item in scan_repository(self.root).files
+        }
+        return self.ledger.check_claims(snapshot_id, claim_ids, current)
+
     def list_symbols(
         self,
         query: str | None = None,
@@ -268,6 +283,9 @@ def create_mcp_server(service: OpenSkeletonService) -> Any:
     server.tool(title="Get analysis coverage", annotations=read_only)(service.analysis_coverage)
     server.tool(title="Search claims", annotations=read_only)(service.search_claims)
     server.tool(title="Get verified evidence excerpt", annotations=read_only)(service.get_evidence)
+    server.tool(title="Check claims against current source", annotations=read_only)(
+        service.check_claims
+    )
     server.tool(title="List semantic symbols", annotations=read_only)(service.list_symbols)
     server.tool(title="Get symbol relationships", annotations=read_only)(
         service.get_symbol_neighbors

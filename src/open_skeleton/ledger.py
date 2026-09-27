@@ -8,8 +8,9 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,81 @@ def _declared_text(metadata: dict[str, Any]) -> str:
                     continue
                 parts.append(f"{name}({parameter.get('name')} = {default})")
     return "\n".join(parts)
+
+
+@dataclass(frozen=True, slots=True)
+class FileChange:
+    """What moved between two file inventories, in the terms a claim depends on."""
+
+    added: frozenset[str]
+    removed: frozenset[str]
+    changed: frozenset[str]
+    # Languages of every added, removed or changed file, lowercased, taken
+    # from whichever side the file exists on.
+    languages: frozenset[str]
+
+    @property
+    def paths(self) -> frozenset[str]:
+        return self.added | self.removed | self.changed
+
+    @classmethod
+    def between(
+        cls,
+        previous: Mapping[str, tuple[str, str]],
+        current: Mapping[str, tuple[str, str]],
+    ) -> FileChange:
+        """Compare two `path -> (sha256, language)` inventories."""
+
+        added = frozenset(current.keys() - previous.keys())
+        removed = frozenset(previous.keys() - current.keys())
+        changed = frozenset(
+            path
+            for path in previous.keys() & current.keys()
+            if previous[path][0] != current[path][0]
+        )
+        languages = frozenset(
+            (current.get(path) or previous[path])[1].casefold()
+            for path in added | removed | changed
+        )
+        return cls(added=added, removed=removed, changed=changed, languages=languages)
+
+
+# Invalidation-key prefixes that no file inventory can evaluate. A claim
+# resting on one is reported with the key named, never quietly as current:
+# `git:HEAD` depends on repository history, which the scanner deliberately
+# never reads.
+UNEVALUABLE_KEY_PREFIXES = ("git:",)
+
+
+def staleness_reason(key: str, change: FileChange, symbol_paths: Mapping[str, str]) -> str | None:
+    """Why a change to the file inventory invalidates `key`, or None if it does not.
+
+    One rule set, shared by the stored stale projection and the read-only claim
+    check, so the two can never disagree about what went stale.
+    """
+
+    python_changed = any(path.endswith((".py", ".pyi")) for path in change.paths)
+    if key.startswith("file:") and key.removeprefix("file:") in change.paths:
+        return f"changed dependency {key}"
+    if key == "snapshot:file-set" and (change.added or change.removed):
+        return "repository file set changed"
+    if key == "python:import-graph" and python_changed:
+        return "Python import graph may have changed"
+    if key == "python:exception-handling" and python_changed:
+        return "Python exception handling may have changed"
+    if key.startswith("module:") and python_changed:
+        return f"module relationship may have changed: {key}"
+    # A census over one language -- "no `unsafe` in 632 Rust files" -- is
+    # invalidated by any file of that language changing, or appearing.
+    if key.startswith("language:") and key.removeprefix("language:").casefold() in (
+        change.languages
+    ):
+        return f"a {key.removeprefix('language:')} file changed"
+    if key.startswith("symbol:"):
+        path = symbol_paths.get(key.removeprefix("symbol:"))
+        if path is not None and path in change.paths:
+            return f"file declaring {key} changed"
+    return None
 
 
 class EvidenceLedger:
@@ -598,45 +674,96 @@ class EvidenceLedger:
             "unchanged_count": unchanged,
         }
 
+    def _inventory(self, snapshot_id: str) -> dict[str, tuple[str, str]]:
+        with self._session() as connection:
+            rows = connection.execute(
+                "SELECT path, sha256, language FROM files WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchall()
+        return {str(row["path"]): (str(row["sha256"]), str(row["language"])) for row in rows}
+
+    def _symbol_paths(
+        self, connection: sqlite3.Connection, snapshot_id: str, names: set[str]
+    ) -> dict[str, str]:
+        """Where each named symbol of a snapshot is declared, for `symbol:` keys."""
+
+        if not names:
+            return {}
+        paths: dict[str, str] = {}
+        ordered = sorted(names)
+        for start in range(0, len(ordered), 500):
+            batch = ordered[start : start + 500]
+            placeholders = ", ".join("?" for _ in batch)
+            for row in connection.execute(
+                f"""
+                SELECT qualified_name, path FROM symbols
+                WHERE snapshot_id = ? AND qualified_name IN ({placeholders})
+                """,
+                (snapshot_id, *batch),
+            ):
+                paths.setdefault(str(row["qualified_name"]), str(row["path"]))
+        return paths
+
+    def _stale_reasons(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        change: FileChange,
+        claim_ids: Sequence[str] | None = None,
+    ) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
+        """Stale reasons and unevaluable keys per claim, and each claim's text."""
+
+        query = """
+            SELECT c.claim_id, c.claim, k.invalidation_key
+            FROM claims c
+            JOIN invalidation_keys k ON k.claim_id = c.claim_id
+            WHERE c.snapshot_id = ?
+        """
+        parameters: list[str] = [snapshot_id]
+        if claim_ids is not None:
+            query += f" AND c.claim_id IN ({', '.join('?' for _ in claim_ids)})"
+            parameters.extend(claim_ids)
+        rows = connection.execute(
+            query + " ORDER BY c.claim_id, k.invalidation_key", parameters
+        ).fetchall()
+        symbol_paths = self._symbol_paths(
+            connection,
+            snapshot_id,
+            {
+                str(row["invalidation_key"]).removeprefix("symbol:")
+                for row in rows
+                if str(row["invalidation_key"]).startswith("symbol:")
+            },
+        )
+        reasons: dict[str, set[str]] = {}
+        unevaluable: dict[str, set[str]] = {}
+        texts: dict[str, str] = {}
+        for row in rows:
+            claim_id = str(row["claim_id"])
+            key = str(row["invalidation_key"])
+            texts[claim_id] = str(row["claim"])
+            if key.startswith(UNEVALUABLE_KEY_PREFIXES):
+                unevaluable.setdefault(claim_id, set()).add(key)
+                continue
+            reason = staleness_reason(key, change, symbol_paths)
+            if reason:
+                reasons.setdefault(claim_id, set()).add(reason)
+        return reasons, unevaluable, texts
+
     def project_stale_claims(
         self, previous_snapshot_id: str, current_snapshot_id: str
     ) -> list[dict[str, Any]]:
         """Project old claims as stale without rewriting their historical truth."""
 
-        difference = self.diff_snapshots(previous_snapshot_id, current_snapshot_id)
-        changed_paths = set(difference["added"] + difference["removed"] + difference["changed"])
-        file_set_changed = bool(difference["added"] or difference["removed"])
-        python_graph_changed = any(path.endswith(".py") for path in changed_paths)
+        change = FileChange.between(
+            self._inventory(previous_snapshot_id), self._inventory(current_snapshot_id)
+        )
         now = utc_now()
         stale: list[dict[str, Any]] = []
         with self._session() as connection:
-            rows = connection.execute(
-                """
-                SELECT c.claim_id, c.claim, k.invalidation_key
-                FROM claims c
-                JOIN invalidation_keys k ON k.claim_id = c.claim_id
-                WHERE c.snapshot_id = ?
-                ORDER BY c.claim_id, k.invalidation_key
-                """,
-                (previous_snapshot_id,),
-            ).fetchall()
-            reasons_by_claim: dict[str, set[str]] = {}
-            claim_text: dict[str, str] = {}
-            for row in rows:
-                key = str(row["invalidation_key"])
-                reason: str | None = None
-                if key.startswith("file:") and key.removeprefix("file:") in changed_paths:
-                    reason = f"changed dependency {key}"
-                elif key == "snapshot:file-set" and file_set_changed:
-                    reason = "repository file set changed"
-                elif key == "python:import-graph" and python_graph_changed:
-                    reason = "Python import graph may have changed"
-                elif key.startswith("module:") and python_graph_changed:
-                    reason = f"module relationship may have changed: {key}"
-                if reason:
-                    reasons_by_claim.setdefault(str(row["claim_id"]), set()).add(reason)
-                    claim_text[str(row["claim_id"])] = str(row["claim"])
-
+            reasons_by_claim, _, claim_text = self._stale_reasons(
+                connection, previous_snapshot_id, change
+            )
             for claim_id, reasons in reasons_by_claim.items():
                 reason = "; ".join(sorted(reasons))
                 connection.execute(
@@ -651,6 +778,110 @@ class EvidenceLedger:
                     {"claim_id": claim_id, "claim": claim_text[claim_id], "reason": reason}
                 )
         return sorted(stale, key=lambda item: item["claim_id"])
+
+    def check_claims(
+        self,
+        snapshot_id: str,
+        claim_ids: Sequence[str],
+        current: Mapping[str, tuple[str, str]],
+    ) -> dict[str, Any]:
+        """Whether each claim still rests on the source it was read from. Read-only.
+
+        `current` is a fresh `path -> (sha256, language)` inventory of the
+        repository. A claim is `stale` when one of its invalidation keys is
+        invalidated by the difference, or when a file one of its receipts cites
+        has changed or gone; `current` when neither holds; `not-found` when the
+        snapshot has no such claim. Keys no inventory can evaluate are listed
+        rather than assumed to hold, so `current` is never a guess.
+
+        Nothing is written: this answers "may I still rely on this?" between
+        edits without the cost of re-analysis or the side effect of a new
+        snapshot.
+        """
+
+        ordered = tuple(dict.fromkeys(str(item) for item in claim_ids if str(item)))
+        if len(ordered) > 500:
+            raise ValueError("A claim check accepts at most 500 IDs")
+        change = FileChange.between(self._inventory(snapshot_id), current)
+        with self._session() as connection:
+            known = (
+                {
+                    str(row["claim_id"]): dict(row)
+                    for row in connection.execute(
+                        f"""
+                    SELECT claim_id, claim, category, status FROM claims
+                    WHERE snapshot_id = ? AND claim_id IN ({", ".join("?" for _ in ordered)})
+                    """,
+                        (snapshot_id, *ordered),
+                    )
+                }
+                if ordered
+                else {}
+            )
+            reasons, unevaluable, _ = (
+                self._stale_reasons(connection, snapshot_id, change, tuple(known))
+                if known
+                else ({}, {}, {})
+            )
+            receipts: dict[str, list[dict[str, Any]]] = {}
+            if known:
+                for row in connection.execute(
+                    f"""
+                    SELECT ce.claim_id, ce.relationship, e.evidence_id, e.path,
+                           e.start_line, e.end_line
+                    FROM claim_evidence ce
+                    JOIN evidence e ON e.evidence_id = ce.evidence_id
+                    WHERE ce.claim_id IN ({", ".join("?" for _ in known)})
+                    ORDER BY ce.claim_id, ce.relationship, e.evidence_id
+                    """,
+                    tuple(known),
+                ):
+                    path = str(row["path"])
+                    if path not in change.changed and path not in change.removed:
+                        continue
+                    receipts.setdefault(str(row["claim_id"]), []).append(
+                        {
+                            "evidence_id": row["evidence_id"],
+                            "relationship": row["relationship"],
+                            "path": path,
+                            "start_line": row["start_line"],
+                            "end_line": row["end_line"],
+                            "file": "removed" if path in change.removed else "changed",
+                        }
+                    )
+        checked: list[dict[str, Any]] = []
+        for claim_id in ordered:
+            record = known.get(claim_id)
+            if record is None:
+                checked.append({"claim_id": claim_id, "verdict": "not-found"})
+                continue
+            claim_reasons = set(reasons.get(claim_id, set()))
+            moved = receipts.get(claim_id, [])
+            if moved:
+                claim_reasons.add("a cited receipt's file changed or was removed")
+            checked.append(
+                {
+                    "claim_id": claim_id,
+                    "claim": record["claim"],
+                    "category": record["category"],
+                    "recorded_status": record["status"],
+                    "verdict": "stale" if claim_reasons else "current",
+                    "reasons": sorted(claim_reasons),
+                    "moved_receipts": moved,
+                    "unevaluated_keys": sorted(unevaluable.get(claim_id, set())),
+                }
+            )
+        verdicts = [item["verdict"] for item in checked]
+        return {
+            "snapshot_id": snapshot_id,
+            "files_added": len(change.added),
+            "files_removed": len(change.removed),
+            "files_changed": len(change.changed),
+            "counts": {
+                verdict: verdicts.count(verdict) for verdict in ("current", "stale", "not-found")
+            },
+            "claims": checked,
+        }
 
     def stale_claims(self, evaluated_against_snapshot_id: str) -> list[dict[str, Any]]:
         with self._session() as connection:

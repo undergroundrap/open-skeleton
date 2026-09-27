@@ -219,6 +219,25 @@ def _parser() -> argparse.ArgumentParser:
     evidence.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
     evidence.add_argument("--state-dir", type=Path, help="State directory.")
 
+    check = subparsers.add_parser(
+        "check",
+        help=(
+            "Check whether claims still rest on the current source, without "
+            "re-analysing. Exit 0 if every claim is current, 1 if any is stale "
+            "or unknown, 2 if the check could not run."
+        ),
+    )
+    check.add_argument("claim_ids", nargs="+", metavar="CLAIM_ID")
+    check.add_argument("--path", default=".", help="Analyzed repository (default: .).")
+    check.add_argument("--state-dir", type=Path, help="State directory.")
+    check.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=2_000_000,
+        help="Must match the value the analysis was run with (default: 2,000,000).",
+    )
+    check.add_argument("--json", action="store_true")
+
     diff = subparsers.add_parser("diff", help="Compare snapshots and project stale claims.")
     diff.add_argument("path", nargs="?", default=".", help="Analyzed repository.")
     diff.add_argument("--state-dir", type=Path, help="State directory.")
@@ -957,6 +976,36 @@ def _evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    state_dir = _resolve_state_dir(root, args.state_dir)
+    ledger = EvidenceLedger(state_dir / "evidence.sqlite3")
+    history = ledger.snapshots_for_root(root, limit=1)
+    if not history:
+        raise ValueError("No analysis exists for this repository; run analyze first")
+    current = {
+        item.path: (item.sha256, item.language)
+        for item in scan_repository(
+            root, policy=ScanPolicy(max_file_bytes=args.max_file_bytes)
+        ).files
+    }
+    report = ledger.check_claims(str(history[0]["snapshot_id"]), args.claim_ids, current)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        for item in report["claims"]:
+            if item["verdict"] == "not-found":
+                print(f"NOT FOUND  {item['claim_id']}")
+                continue
+            print(f"{item['verdict'].upper():<10} {item['claim_id'][:16]}  {item['claim']}")
+            for reason in item["reasons"]:
+                print(f"           - {reason}")
+            for key in item["unevaluated_keys"]:
+                print(f"           ? not checkable from files: {key}")
+    counts = report["counts"]
+    return 0 if counts["stale"] == 0 and counts["not-found"] == 0 else 1
+
+
 def _diff(args: argparse.Namespace) -> int:
     root = _resolve_root(args.path)
     state_dir = _resolve_state_dir(root, args.state_dir)
@@ -1310,6 +1359,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_synthesis_plan(args)
         if args.command == "assemble-synthesis":
             return _assemble_synthesis(args)
+        if args.command == "check":
+            return _check(args)
         if args.command == "benchmark":
             return _benchmark(args)
         if args.command == "spec":
