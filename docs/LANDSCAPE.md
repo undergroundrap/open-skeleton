@@ -59,6 +59,11 @@ These are properties, checked by tests in this repository, not adjectives.
   extractors, differential checks against `javac -Xprint` across roughly
   18,000 JDK files with zero disagreements, reader-parity checks across
   languages, and an audit that looks for the shape of past mistakes.
+- **An agent can ask whether a fact still holds, cheaply.** `open-skeleton
+  check` and the `check_claims` MCP tool answer "may I still rely on this?"
+  for named claims with a read-only rescan -- a fraction of a second on a
+  small repository -- instead of a re-analysis, naming the receipts that moved
+  and any dependency no file inventory can evaluate.
 - **An agent loop can gate on it.** `scripts/turn_gate.py` separates "the work
   is wrong" (exit 1) from "the gate could not run" (exit 2), so a busy ledger
   never reads as a rejected change.
@@ -85,7 +90,7 @@ artifact this engine exists to replace.
   compiler.
 - **Raw indexing throughput.** Graph-only indexers report whole-repository
   indexing in milliseconds for average repositories and minutes for the Linux
-  kernel (vendor-stated). This engine takes 37 seconds end to end on Django
+  kernel (vendor-stated). This engine takes 35 seconds end to end on Django
   with four workers, because it writes about 270,000 hash-pinned receipts and
   the claims built on them. The receipts are the product, but the gap is real.
 - **Incremental re-analysis.** A one-line edit re-reads the whole repository.
@@ -102,8 +107,8 @@ artifact this engine exists to replace.
 ## Performance: what changed, and how it was proven
 
 The largest repository measured before this work, Django (5,698 files, 1.1
-million lines), took 101 seconds end to end. It now takes 65 seconds serially
-and 37 seconds with four workers, with byte-identical output. Details, per
+million lines), took 101 seconds end to end. It now takes 61 seconds serially
+and 35 seconds with four workers, with byte-identical output. Details, per
 stage and per repository, are in [PERFORMANCE.md](PERFORMANCE.md). The changes,
 in order of effect:
 
@@ -181,9 +186,11 @@ Ordered by what most limits the mission today.
    start. Independent adjudication on repositories nobody tuned against is the
    only result that would support a general claim, and the benchmark harness is
    already built to accept it.
-5. **A claim-check MCP tool.** "Is this claim still true at HEAD?" as a single
-   read-only call, so any agent -- including ones built on the retrieval
-   engines above -- can use this ledger as its verifier.
+5. **Finer-grained staleness.** `check_claims` now answers "is this still
+   true?" per claim, but at file granularity: an edit anywhere in a file stales
+   every claim citing it. Receipt excerpt hashes are computed differently by
+   different readers; normalising them would let an untouched span survive an
+   edit elsewhere in its file.
 
 ## Sources
 

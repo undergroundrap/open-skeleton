@@ -14,14 +14,16 @@ revision's sources.
 
 | Repository (revision) | Files | Lines | Before | Serial now | 2 workers | 4 workers |
 |---|---:|---:|---:|---:|---:|---:|
-| SINGLE-PLAYER-AI-MUD (`93ebd51`) | 29 | 16,438 | 2.17 s | 1.74 s | 1.73 s | 1.68 s |
-| urllib3 (`ed0ed07`) | 152 | 44,089 | 3.36 s | 3.40 s | 2.06 s | 1.72 s |
-| clap (`6cde738`) | 632 | 112,508 | 5.58 s | 4.69 s | 3.99 s | 3.68 s |
-| zod (`2bf7b06`) | 680 | 139,941 | 8.96 s | 7.62 s | 6.60 s | 5.67 s |
-| Django (`9e06baf`) | 5,698 | 1,116,514 | 101.09 s | 64.79 s | 45.68 s | 36.74 s |
+| SINGLE-PLAYER-AI-MUD (`93ebd51`) | 29 | 16,438 | 2.17 s | 1.52 s | 1.61 s | 1.58 s |
+| urllib3 (`ed0ed07`) | 152 | 44,089 | 3.36 s | 2.29 s | 1.87 s | 1.61 s |
+| clap (`6cde738`) | 632 | 112,508 | 5.58 s | 4.75 s | 3.79 s | 3.62 s |
+| zod (`2bf7b06`) | 680 | 139,941 | 8.96 s | 7.48 s | 6.26 s | 5.56 s |
+| Django (`9e06baf`) | 5,698 | 1,116,514 | 101.09 s | 60.64 s | 43.61 s | 34.53 s |
 
 Every row at every worker count produced the same ledger and export
-fingerprints as the serial run. The fixture is below the 1.5 MB threshold at
+fingerprints as the serial run, and those are the fingerprints the original
+revision produces: the output is byte-identical to what it was before any of
+this work. The fixture is below the 1.5 MB threshold at
 which a pool is started, so its worker columns are serial runs; the difference
 between them is noise.
 
@@ -29,13 +31,13 @@ Where the time goes on Django:
 
 | Stage | Before | Serial now | 4 workers |
 |---|---:|---:|---:|
-| Scan | 2.35 s | 1.59 s | 1.59 s |
-| Readers and cross-reader passes | 71.74 s | 43.45 s | 15.10 s |
-| Ledger write | 17.59 s | 13.95 s | 14.37 s |
-| JSONL and Markdown export | 9.41 s | 5.80 s | 5.67 s |
-| **Total** | **101.09 s** | **64.79 s** | **36.74 s** |
+| Scan | 2.35 s | 1.52 s | 1.59 s |
+| Readers and cross-reader passes | 71.74 s | 39.63 s | 13.80 s |
+| Ledger write | 17.59 s | 13.72 s | 13.71 s |
+| JSONL and Markdown export | 9.41 s | 5.78 s | 5.43 s |
+| **Total** | **101.09 s** | **60.64 s** | **34.53 s** |
 
-The readers now take less time than the ledger write. That write is serial by
+With four workers the readers now take about as long as the ledger write. That write is serial by
 design -- one transaction, so a failed run leaves nothing half-recorded -- and is
 the next thing to make faster; see "Where the remaining time is" below.
 
@@ -48,9 +50,9 @@ unindexed column:
 
 | Repository | First save | Second save before | Second save now |
 |---|---:|---:|---:|
-| urllib3 | 0.51 s | 61.48 s | 0.37 s |
-| clap | 1.31 s | 403.64 s | 0.85 s |
-| Django | 17.59 s | not measured (quadratic) | 10.89 s |
+| urllib3 | 0.51 s | 61.48 s | 0.36 s |
+| clap | 1.31 s | 403.64 s | 0.94 s |
+| Django | 17.59 s | not measured (quadratic) | 10.75 s |
 
 The same cascade deleted `claim_evidence` rows for any earlier claim that cited
 a replaced receipt, leaving it `verified` with nothing behind it.
@@ -59,8 +61,8 @@ a replaced receipt, leaving it `verified` with nothing behind it.
 ### Memory
 
 Peak resident memory of the measuring process on Django was 1,090 MiB before
-and 1,125 MiB serially now; with four workers it was 1,167 MiB for the parent.
-Sampling the parent and its workers together every 50 ms found at most 840 MiB
+and 1,124 MiB serially now; with four workers it was 1,156 MiB for the parent.
+Sampling the parent and its workers together every 50 ms found at most 830 MiB
 in flight at once, which is a lower bound -- a sample can fall between peaks.
 Workers hold one chunk of files and the snapshot, not the repository's records,
 so memory does not multiply by the worker count in practice; the threat model
@@ -93,9 +95,11 @@ the upsert fix and would dominate any run over a large repository.
 3. **AST traversal.** `ast.NodeVisitor` builds `"visit_" + class name` and
    looks it up for every node; `ast.walk` reaches children through two
    generators per node. `FastNodeVisitor` resolves the handler once per node
-   type and `walk` inlines the child loop. Order and dispatch are held to
-   node-for-node identity with the standard library over this repository's own
-   sources by `tests/test_ast_visitor.py`.
+   type and `walk` inlines the child loop. Seventeen per-module extractors also
+   stopped iterating every node to discard most of them: each reads a per-tree
+   index of nodes by type, in walk order. Order, dispatch and selection are
+   held to node-for-node identity with the standard library over this
+   repository's own sources by `tests/test_ast_visitor.py`.
 4. **Ledger upserts** for evidence, symbols and edges, and a larger page cache
    for the duration of the write.
 5. **Exports** encode each record's fields directly rather than through

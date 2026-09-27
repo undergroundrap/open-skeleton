@@ -82,7 +82,7 @@ The dashboard is available at `http://127.0.0.1:8765` and accepts loopback hosts
 `analyze` uses one worker process per core, up to eight, once a repository
 holds more than 1.5 MB of source. `--jobs 1` runs serially and `--jobs N` sets
 the count; the result is identical either way. On Django (5,698 files, 1.1
-million lines) a full analysis takes 37 seconds with four workers, against 101
+million lines) a full analysis takes 35 seconds with four workers, against 101
 seconds before parallel reading and the fixes in
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
@@ -113,6 +113,7 @@ open-skeleton status      latest snapshot and analysis status
 open-skeleton claims      filter atomic claims
 open-skeleton search      search the claim ledger
 open-skeleton evidence    inspect one immutable receipt
+open-skeleton check       ask whether claims still rest on the current source, without re-analysing
 open-skeleton diff        compare snapshots and project stale claims
 open-skeleton serve       run the read-only local dashboard
 open-skeleton synthesize  explicitly invoke an optional provider
@@ -197,6 +198,20 @@ and concluded nothing. `--min-yield` defaults to `0` deliberately: reading a
 file and having nothing to say about it is a legitimate answer, and a gate
 that demands findings teaches an analyzer to invent them.
 
+Between full runs, an agent can ask whether the specific facts it is relying
+on still hold:
+
+```powershell
+open-skeleton check CLAIM_ID [CLAIM_ID ...] --path C:\path\to\repository
+```
+
+This rescans read-only, compares against the analysed snapshot, and exits `0`
+when every claim is current, `1` when any is stale or unknown, and `2` when it
+could not run -- the same contract as the gate. A stale claim names its reasons
+and the receipts whose files moved; a key no file inventory can evaluate, such
+as `git:HEAD`, is listed rather than assumed to hold. The same check is the
+`check_claims` MCP tool.
+
 ## Precision under hostile input
 
 Every fixture used to build these analyzers was written by someone trying to
@@ -235,7 +250,7 @@ python -m pip install -e ".[mcp]"
 open-skeleton-mcp C:\path\to\repository --state-dir C:\safe\state\directory
 ```
 
-The server exposes status, coverage, claims, evidence, symbols, relationships, context packs, diffs, and an explicit refresh tool. Query tools are annotated read-only. Refresh writes the configured ledger and exports, never the target repository. See [docs/MCP.md](docs/MCP.md).
+The server exposes status, coverage, claims, evidence, a read-only claim check, symbols, relationships, context packs, diffs, and an explicit refresh tool. Query tools are annotated read-only. Refresh writes the configured ledger and exports, never the target repository. See [docs/MCP.md](docs/MCP.md).
 
 ## Optional synthesis providers
 

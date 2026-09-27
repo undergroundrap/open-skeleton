@@ -191,16 +191,19 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         export_analysis_markdown(result, workspace / "analysis.md")
         timed("export_s", started)
         stages["total_s"] = round(time.perf_counter() - begun, 3)
+        exported = hashlib.sha256(
+            (workspace / "analysis.jsonl").read_bytes() + (workspace / "analysis.md").read_bytes()
+        ).hexdigest()
+        # Taken before the re-save, so a run with `--no-resave` -- the only
+        # kind an older revision can finish on a large repository -- is
+        # compared with exactly what this run wrote the first time.
+        fingerprint = _ledger_fingerprint(workspace / "evidence.sqlite3")
+        resaved: str | None = None
         if resave:
             started = time.perf_counter()
             ledger.save_analysis(replace(result, created_at="2026-01-02T00:00:00.000+00:00"))
             timed("resave_s", started)
-        exported = hashlib.sha256(
-            (workspace / "analysis.jsonl").read_bytes() + (workspace / "analysis.md").read_bytes()
-        ).hexdigest()
-        # Fingerprinted before the re-save would be ideal, but the re-save is
-        # part of what is being checked: it must leave the same facts behind.
-        fingerprint = _ledger_fingerprint(workspace / "evidence.sqlite3")
+            resaved = _ledger_fingerprint(workspace / "evidence.sqlite3")
     return {
         "repository": root.name,
         "jobs": jobs,
@@ -215,6 +218,7 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         "peak_total_rss_mib": round(sampler.peak_kib / 1024, 1) if sampler.available else None,
         "exports_sha256": exported,
         "ledger_sha256": fingerprint,
+        "ledger_after_resave_sha256": resaved,
     }
 
 
@@ -256,7 +260,7 @@ def main() -> int:
         rows.extend(measured)
         reference = measured[0]
         for row in measured[1:]:
-            for key in ("exports_sha256", "ledger_sha256"):
+            for key in ("exports_sha256", "ledger_sha256", "ledger_after_resave_sha256"):
                 if row[key] != reference[key]:
                     mismatches.append(f"{root.name}: {key} differs at jobs={row['jobs']}")
     print(json.dumps({"runs": rows, "mismatches": mismatches}, indent=2))

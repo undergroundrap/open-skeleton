@@ -6,6 +6,12 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Added
 
+- `open-skeleton check` and the `check_claims` MCP tool: whether named claims
+  still rest on the current source, answered by a read-only rescan rather than
+  a re-analysis. Each claim is `current`, `stale` with its reasons and the
+  receipts whose files changed or disappeared, or `not-found`; keys no file
+  inventory can evaluate (`git:HEAD`) are listed, not assumed. Exit codes match
+  the turn gate: 0 current, 1 stale or unknown, 2 could not run
 - parallel analysis: `--jobs` on `analyze`, `benchmark`, the MCP server and the
   turn gate, and `OPEN_SKELETON_JOBS`. Python, TypeScript and Rust files are
   read across worker processes and merged in file order, so the ledger and the
@@ -149,11 +155,14 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Changed
 
+- the Python reader's per-module extractors iterate a per-tree index of nodes
+  by type, in walk order, instead of every node; urllib3 reads in 1.5 s rather
+  than 1.9 s serially, with identical output
 - the Python reader walks trees with `FastNodeVisitor` and an order-identical
   `walk`, held to node-for-node identity with the standard library
 - JSONL analysis export no longer deep-copies every record and reuses one
   encoder; output bytes are unchanged
-- Django end to end: 101 s before, 65 s serial, 37 s with four workers
+- Django end to end: 101 s before, 61 s serial, 35 s with four workers
 - the Python reader walks each module once and shares the walk across its
   seventeen whole-module extractors, and identifiers are hashed in one call;
   analysis of this repository fell from 6.7s to 4.2s with byte-identical
@@ -177,6 +186,11 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Fixed
 
+- stale projection ignored `language:` and `python:exception-handling`
+  invalidation keys, so a census such as "no `unsafe` in 632 Rust files" could
+  never go stale however much Rust changed. The stored projection and the new
+  claim check now share one rule set that evaluates them, and `symbol:` keys by
+  the file that declares the symbol
 - re-saving an analysis whose identifiers already exist -- re-analysing an
   unchanged repository -- used `INSERT OR REPLACE`, whose deletes fired an
   unindexed foreign-key cascade per row (404 s on clap against 1.3 s for the
