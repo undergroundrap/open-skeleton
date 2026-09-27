@@ -133,9 +133,10 @@ def run(
     fast: bool,
     minimum_coverage: float,
     minimum_yield: float,
+    jobs: int = 1,
 ) -> int:
     snapshot = scan_repository(repository)
-    result = analyze_snapshot(snapshot, hum_index=hum_index or None)
+    result = analyze_snapshot(snapshot, hum_index=hum_index or None, jobs=jobs)
 
     ledger = EvidenceLedger(state / "evidence.sqlite3")
     ledger.save_snapshot(snapshot)
@@ -289,6 +290,15 @@ def main() -> int:
             "(default 0.95). A partial index is the usual cause."
         ),
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help=(
+            "Worker processes for analysis; 0 (default) uses one per core, 1 is "
+            "serial. The verdict is identical at every value; only latency moves."
+        ),
+    )
     arguments = parser.parse_args()
 
     repository = arguments.repo.expanduser().resolve(strict=True)
@@ -332,6 +342,7 @@ def main() -> int:
             arguments.fast,
             arguments.min_coverage,
             arguments.min_yield,
+            jobs=arguments.jobs,
         )
     except (OSError, sqlite3.Error) as exc:
         # A gate that cannot run has not judged the work. Saying so with a

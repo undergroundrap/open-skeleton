@@ -164,6 +164,27 @@ class PythonAnalyzerTests(TestCase):
             self.assertEqual(candidates[0].status, "inferred")
             self.assertIn("not a deletion instruction", candidates[0].claim)
 
+    def test_an_import_reaches_a_prefix_only_at_a_dot(self) -> None:
+        # The census asks whether any import names a module or something
+        # inside it. `app.core.used` reaches `app.core`, but it does not reach
+        # `app.core.use`: the names share characters, not a package. Both
+        # halves are asserted, so a lookup that matched raw string prefixes
+        # would fail the second and one that ignored prefixes the first.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "app" / "core"
+            package.mkdir(parents=True)
+            (root / "main.py").write_text("import app.core.used\n", encoding="utf-8")
+            (package / "used.py").write_text("value = 1\n", encoding="utf-8")
+            (package / "use.py").write_text("value = 2\n", encoding="utf-8")
+
+            result = analyze_snapshot(scan_repository(root))
+            candidates = [item for item in result.claims if item.category == "orphan_candidate"]
+
+            self.assertEqual(len(candidates), 1)
+            self.assertTrue(candidates[0].claim.startswith("app/core/use.py "))
+            self.assertIn("while 1 sibling modules do", candidates[0].claim)
+
     def test_state_reconciliation_math_conflict_and_operator_harness(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

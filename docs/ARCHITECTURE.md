@@ -30,6 +30,11 @@ untrusted repository
 - `analyzers/project_metadata.py`: manifests, documentation, stylesheets and
   HTML asset graphs
 - `analyzers/hum_semantic_index.py`: versioned Hum-native graph adapter
+- `analyzers/ast_visitor.py`: an `ast.NodeVisitor` and `ast.walk` with the
+  standard traversal order and per-type dispatch resolved once, held to
+  node-for-node identity with the standard library by `tests/test_ast_visitor.py`
+- `parallel.py`: worker processes for per-file reading; order-preserving
+  chunking, serial fallback, and no nested pools
 - `analysis.py`: deterministic orchestration and cross-adapter conflicts
 - `ledger.py`: SQLite persistence, search, evidence verification, diffs, invalidation
 - `mcp_server.py`: repository-bound agent service and official-SDK tool registration
@@ -58,6 +63,17 @@ For `F` files and `B` included bytes:
 - Python AST and JS/TS lexical passes: `O(B)` for supported files
 - ledger writes: `O(symbols + edges + evidence + claims)`, excluding index constants
 - Markdown report sorting: `O(C log C)` for `C` claims
+
+The cross-reader passes are linear in the records they read. The orphan-module
+census was `O(modules × imports)` and dominated a Django-sized run until it was
+rewritten over a set of reached import prefixes.
+
+Per-file reading can run in worker processes. Python, TypeScript and Rust files
+are split into consecutive, byte-balanced chunks; every other reader runs whole
+in a worker; the merge happens in the parent in file order, so the result is
+identical at any worker count. The library default is serial; the CLI, the MCP
+server and the turn gate default to one worker per core, up to eight, and only
+start a pool above 1.5 MB of source.
 
 The scanner holds at most one bounded file payload. Analyzers currently retain normalized semantic records for one snapshot in memory before a transactional ledger write. Measured scaling results are in [PERFORMANCE.md](PERFORMANCE.md).
 

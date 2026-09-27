@@ -118,6 +118,32 @@ class CliTests(TestCase):
             self.assertTrue(Path(summary["markdown"]).is_file())
             self.assertTrue(Path(summary["json"]).is_file())
 
+    def test_analyze_accepts_a_worker_count_and_refuses_a_negative_one(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            state = Path(temporary) / "state"
+            root.mkdir()
+            create_sample_repository(root)
+            base = ["analyze", str(root), "--state-dir", str(state), "--quiet", "--json"]
+
+            outputs = []
+            for jobs in ("1", "0", "4"):
+                stdout = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(StringIO()):
+                    self.assertEqual(main([*base, "--jobs", jobs]), 0)
+                outputs.append(json.loads(stdout.getvalue()))
+            # The counts are the result; the worker count is not allowed to move them.
+            counted = ("symbol_count", "edge_count", "evidence_count", "claim_count")
+            self.assertEqual(
+                [[item[key] for key in counted] for item in outputs],
+                [[outputs[0][key] for key in counted]] * 3,
+            )
+
+            stderr = StringIO()
+            with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                self.assertEqual(main([*base, "--jobs", "-1"]), 2)
+            self.assertIn("jobs must be zero", stderr.getvalue())
+
     def test_spec_verify_fails_when_a_cited_source_changed(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "repo"

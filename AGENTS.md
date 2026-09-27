@@ -38,6 +38,7 @@ $env:PYTHONPATH = "src"
 
 - `scanner.py`: bounded file inventory only.
 - `analyzers/`: language/framework-specific deterministic facts.
+- `parallel.py`: worker processes may change how long analysis takes, never what it produces.
 - `ledger.py`: persistence and query APIs; migrations must remain backward compatible.
 - `providers/`: optional Codex, Claude, and local-model adapters behind strict schemas.
 - `mcp_server.py`: agent-facing read/query/analyze tools; no hidden mutation.

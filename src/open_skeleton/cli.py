@@ -103,6 +103,16 @@ def _parser() -> argparse.ArgumentParser:
         default=2_000_000,
         help="Maximum bytes read from one file (default: 2,000,000).",
     )
+    analyze.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help=(
+            "Worker processes for analysis; 0 (the default) uses one per core, up to "
+            "eight, and 1 runs serially. Output is identical at every value. "
+            "OPEN_SKELETON_JOBS sets the default."
+        ),
+    )
     analyze.add_argument("--quiet", action="store_true", help="Suppress progress events.")
     analyze.add_argument("--json", action="store_true", help="Print the analysis summary as JSON.")
     analyze.add_argument(
@@ -320,6 +330,16 @@ def _parser() -> argparse.ArgumentParser:
     benchmark.add_argument("path", help="Repository fixture directory.")
     benchmark.add_argument("--gold", required=True, type=Path, help="Gold benchmark JSON.")
     benchmark.add_argument("--output-dir", required=True, type=Path)
+    benchmark.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help=(
+            "Worker processes (default 1, so times compare with earlier runs; 0 uses "
+            "one per core). Scores are identical at every value. Traced peak memory "
+            "covers this process only, so it understates a parallel run."
+        ),
+    )
     benchmark.add_argument("--json", action="store_true")
 
     spec = subparsers.add_parser(
@@ -446,7 +466,7 @@ def _analyze(args: argparse.Namespace) -> int:
     )
     if not args.quiet:
         print("[analyzing] Running deterministic semantic adapters", file=sys.stderr)
-    result = analyze_snapshot(snapshot, hum_index=args.hum_index)
+    result = analyze_snapshot(snapshot, hum_index=args.hum_index, jobs=args.jobs)
     ledger_path = state_dir / "evidence.sqlite3"
     ledger = EvidenceLedger(ledger_path)
     previous_snapshots = ledger.snapshots_for_root(root, limit=1)
@@ -1116,7 +1136,7 @@ def _assemble_synthesis(args: argparse.Namespace) -> int:
 
 
 def _benchmark(args: argparse.Namespace) -> int:
-    result = run_benchmark(Path(args.path), args.gold, args.output_dir)
+    result = run_benchmark(Path(args.path), args.gold, args.output_dir, jobs=args.jobs)
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
     else:

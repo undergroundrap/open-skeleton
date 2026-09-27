@@ -28,6 +28,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Iterable
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,9 +41,16 @@ from open_skeleton.models import (
     CoverageRecord,
     EdgeRecord,
     EvidenceRecord,
+    FileRecord,
     Snapshot,
     SymbolRecord,
     utc_now,
+)
+from open_skeleton.parallel import (
+    CHUNKS_PER_WORKER,
+    chunk_by_weight,
+    gather_in_order,
+    submit_chunks,
 )
 from open_skeleton.policy import describes_the_product
 
@@ -1484,10 +1492,622 @@ def _group(tokens: list[Token], start: int, prefix: str, found: list[str], depth
     return cursor
 
 
+def _read_rust_files(
+    snapshot: Snapshot,
+    files: list[FileRecord],
+    context: tuple[str, dict[str, str]],
+) -> list[tuple[Any, ...]]:
+    """Read each file in order and return what it contributed, census parts included.
+
+    The per-file claims are complete here. The repository-wide ones -- the
+    `unsafe`, panic and test censuses -- are only counted, and the counts are
+    summed by the caller, so splitting `files` into consecutive parts and
+    concatenating the parts gives the same result as reading them together.
+    """
+
+    created_at, module_names = context
+    analyzer = RustLexicalAnalyzer()
+    symbols: list[SymbolRecord] = []
+    edges: list[EdgeRecord] = []
+    evidence: list[EvidenceRecord] = []
+    claims: list[ClaimRecord] = []
+    failures: list[str] = []
+    analyzed_files = 0
+    unsafe_receipts: list[str] = []
+    unsafe_files: set[str] = set()
+    panic_receipts: dict[str, list[str]] = defaultdict(list)
+    test_receipts: list[str] = []
+
+    def receipt(
+        path: str, line: int, kind: str, symbol: str | None, excerpt: str
+    ) -> EvidenceRecord:
+        record = EvidenceRecord(
+            evidence_id=stable_id(
+                "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
+            ),
+            snapshot_id=snapshot.snapshot_id,
+            path=path,
+            start_line=line,
+            end_line=line,
+            symbol=symbol,
+            evidence_kind=kind,
+            excerpt_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
+            analyzer=ANALYZER_VERSION,
+            created_at=created_at,
+        )
+        evidence.append(record)
+        return record
+
+    for file_record in files:
+        source_path = snapshot.root / Path(file_record.path)
+        try:
+            payload = source_path.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != file_record.sha256:
+                raise ValueError("content changed after snapshot")
+            source = payload.decode("utf-8", errors="strict")
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+            continue
+
+        lines = source.splitlines()
+        module = module_names[file_record.path]
+        tokens = tokenize(source)
+        file_names = _name_index(tokens)
+        file_flags = _declared_clap_flags(tokens)
+        # `--github-repo` is not a Rust identifier, so the name walk skips
+        # it and a reader searching for a flag finds nothing.
+        for flag, flag_line in file_flags.items():
+            file_names[flag] = min(file_names.get(flag, flag_line), flag_line)
+        file_statics = _mutable_statics(tokens)
+        file_impls = _impl_methods(tokens)
+        file_errors = _error_surface(tokens)
+        file_traits = _trait_implementations(tokens)
+        file_routes = _http_routes(tokens)
+        file_environment = _environment_reads(tokens)
+        file_public = _public_surface(tokens)
+        file_calls = _client_calls(tokens)
+        file_call_sites = _call_sites(tokens)
+        declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
+        file_constants = _constants(tokens)
+        file_enums = _declared_enums(tokens)
+        # Numbers to the tunable index, strings to the value panel.
+        # Both were arriving in the first, which put `SERVICE_NAME`
+        # in a table titled for numbers a maintainer would tune.
+        # A constant whose value this reader never saw stays in the
+        # tunable index, which renders a missing value as a dash. The
+        # string panel subscripts the value directly, and a Rust `static`
+        # declared in one place and assigned in another has none -- which
+        # is the case that panel's own comment warned about and this split
+        # walked straight into.
+        file_strings = {
+            name: entry
+            for name, entry in file_constants.items()
+            if "value" in entry and not declares_a_number(entry["value"])
+        }
+        file_constants = {
+            name: entry for name, entry in file_constants.items() if name not in file_strings
+        }
+        file_structs = _struct_fields(tokens)
+        if file_flags and describes_the_product(file_record.role):
+            first_flag_line = min(file_flags.values())
+            flag_excerpt = lines[first_flag_line - 1] if 0 < first_flag_line <= len(lines) else ""
+            named = ", ".join(f"`{flag}`" for flag in sorted(file_flags)[:12])
+            more = f" and {len(file_flags) - 12:,} more" if len(file_flags) > 12 else ""
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=(
+                        f"{file_record.path} declares a command-line interface -- "
+                        f"{len(file_flags):,} option(s): {named}{more}. These are the "
+                        "words a user types; a `fn main` says only that the crate can "
+                        "be started."
+                    ),
+                    category="command_line_interface",
+                    supporting=(
+                        receipt(
+                            file_record.path,
+                            first_flag_line,
+                            "command_line_interface",
+                            module,
+                            flag_excerpt,
+                        ).evidence_id,
+                    ),
+                    path=file_record.path,
+                )
+            )
+        module_symbol_id = stable_id(
+            "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
+        )
+        symbols.append(
+            SymbolRecord(
+                symbol_id=module_symbol_id,
+                snapshot_id=snapshot.snapshot_id,
+                path=file_record.path,
+                qualified_name=module,
+                kind="module",
+                start_line=1,
+                end_line=max(1, file_record.line_count),
+                language="Rust",
+                analyzer=ANALYZER_VERSION,
+                metadata={
+                    "analysis_level": "lexical",
+                    **({"name_index": file_names} if file_names else {}),
+                    **({"tunables": file_constants} if file_constants else {}),
+                    **({"model_fields": file_structs} if file_structs else {}),
+                    **({"collection_constants": file_enums} if file_enums else {}),
+                    **({"string_constants": file_strings} if file_strings else {}),
+                },
+            )
+        )
+
+        # A `pub` item in a test file is public to the suite, not to a
+        # consumer of the crate, and reporting it as the crate's surface
+        # says a caller can depend on something no caller can reach. The
+        # `fn main` claim above already applies this rule; this one did
+        # not, and the engine's own audit flagged the result.
+        if file_public and describes_the_product(file_record.role):
+            names = sorted({name for _, name, _ in file_public})
+            shown = ", ".join(names[:12])
+            remainder = len(names) - min(len(names), 12)
+            surface = (
+                f"{module} declares {len(names):,} name(s) as its public surface: "
+                f"{shown}{f', and {remainder:,} more' if remainder else ''}. "
+                "`pub(crate)` items are excluded: they are visible inside this crate "
+                "and to nobody depending on it."
+            )
+            first = file_public[0][2]
+            excerpt = lines[first - 1] if 0 < first <= len(lines) else ""
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=surface,
+                    category="public_api",
+                    supporting=(
+                        receipt(
+                            file_record.path, first, "public_surface", module, excerpt
+                        ).evidence_id,
+                    ),
+                    importance="high",
+                    path=file_record.path,
+                )
+            )
+
+        for setting, when, line in dict.fromkeys(file_environment):
+            excerpt = lines[line - 1] if 0 < line <= len(lines) else ""
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=(
+                        f"{file_record.path} reads environment setting {setting} at {when}."
+                        if when == "run time"
+                        else (
+                            f"{file_record.path} substitutes environment setting "
+                            f"{setting} at {when}, so its value is fixed in the built "
+                            "binary rather than read on the machine that runs it."
+                        )
+                    ),
+                    category="configuration_read",
+                    supporting=(
+                        receipt(
+                            file_record.path, line, "environment_read", module, excerpt
+                        ).evidence_id,
+                    ),
+                    importance="medium",
+                    path=file_record.path,
+                )
+            )
+
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token.kind != "identifier":
+                index += 1
+                continue
+            excerpt = lines[token.line - 1] if token.line - 1 < len(lines) else ""
+
+            if token.value == "use":
+                targets, cursor = _use_targets(tokens, index + 1)
+                for target in targets:
+                    import_receipt = receipt(
+                        file_record.path, token.line, "import", module, excerpt
+                    )
+                    edges.append(
+                        EdgeRecord(
+                            edge_id=stable_id(
+                                "edge",
+                                (
+                                    snapshot.snapshot_id,
+                                    module_symbol_id,
+                                    "imports",
+                                    target,
+                                    token.line,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            source_symbol_id=module_symbol_id,
+                            source_path=file_record.path,
+                            relationship="imports",
+                            target_ref=target,
+                            target_symbol_id=None,
+                            evidence_id=import_receipt.evidence_id,
+                            analyzer=ANALYZER_VERSION,
+                        )
+                    )
+                index = cursor
+                continue
+
+            if token.value == "unsafe":
+                unsafe_files.add(file_record.path)
+                unsafe_receipts.append(
+                    receipt(
+                        file_record.path, token.line, "unsafe_surface", module, excerpt
+                    ).evidence_id
+                )
+                index += 1
+                continue
+
+            if token.value in ITEM_KEYWORDS and index + 1 < len(tokens):
+                name_token = tokens[index + 1]
+                # `_declared_items` is the single decision about what this
+                # file declares, so a template inside a macro body is
+                # excluded here by the same rule rather than a second one
+                # that can drift away from it.
+                if (token.line, name_token.value) in declared_here:
+                    qualified = f"{module}::{name_token.value}"
+                    item_receipt = receipt(
+                        file_record.path, token.line, "symbol", qualified, excerpt
+                    )
+                    symbol_id = stable_id(
+                        "symbol",
+                        (
+                            snapshot.snapshot_id,
+                            file_record.path,
+                            qualified,
+                            token.line,
+                            ANALYZER_VERSION,
+                        ),
+                    )
+                    symbols.append(
+                        SymbolRecord(
+                            symbol_id=symbol_id,
+                            snapshot_id=snapshot.snapshot_id,
+                            path=file_record.path,
+                            qualified_name=qualified,
+                            kind=ITEM_KEYWORDS[token.value],
+                            start_line=token.line,
+                            end_line=token.line,
+                            language="Rust",
+                            analyzer=ANALYZER_VERSION,
+                            metadata={},
+                        )
+                    )
+                    edges.append(
+                        EdgeRecord(
+                            edge_id=stable_id(
+                                "edge",
+                                (
+                                    snapshot.snapshot_id,
+                                    module_symbol_id,
+                                    "contains",
+                                    qualified,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            source_symbol_id=module_symbol_id,
+                            source_path=file_record.path,
+                            relationship="contains",
+                            target_ref=qualified,
+                            target_symbol_id=symbol_id,
+                            evidence_id=item_receipt.evidence_id,
+                            analyzer=ANALYZER_VERSION,
+                        )
+                    )
+                    if (
+                        name_token.value == "main"
+                        and token.value == "fn"
+                        and describes_the_product(file_record.role)
+                    ):
+                        claims.append(
+                            analyzer.build_claim(
+                                snapshot,
+                                created_at,
+                                text=f"{file_record.path} declares a `fn main` entry point.",
+                                category="application_entry",
+                                supporting=(item_receipt.evidence_id,),
+                                path=file_record.path,
+                            )
+                        )
+                index += 2
+                continue
+
+            if token.value == "test" and index >= 2:
+                previous = tokens[index - 1]
+                if previous.kind == "punctuation" and previous.value == "[":
+                    test_receipts.append(
+                        receipt(
+                            file_record.path, token.line, "test_attribute", module, excerpt
+                        ).evidence_id
+                    )
+                index += 1
+                continue
+
+            if token.value in PANIC_METHODS and index >= 1:
+                previous = tokens[index - 1]
+                following = tokens[index + 1] if index + 1 < len(tokens) else None
+                is_call = following is not None and following.value == "("
+                if previous.kind == "punctuation" and previous.value == "." and is_call:
+                    family = "unchecked" if token.value in UNCHECKED_METHODS else "documented"
+                    panic_receipts[family].append(
+                        receipt(
+                            file_record.path, token.line, "panic_site", module, excerpt
+                        ).evidence_id
+                    )
+                index += 1
+                continue
+
+            if token.value in PANIC_MACROS and index + 1 < len(tokens):
+                following = tokens[index + 1]
+                if following.kind == "punctuation" and following.value == "!":
+                    family = next(
+                        name for name, members in PANIC_FAMILIES.items() if token.value in members
+                    )
+                    panic_receipts[family].append(
+                        receipt(
+                            file_record.path, token.line, "panic_site", module, excerpt
+                        ).evidence_id
+                    )
+                index += 1
+                continue
+
+            index += 1
+
+        fallible = file_errors["fallible_functions"]
+        # An integration test under `tests/` declares its own fallible
+        # helpers, and reporting them as the crate's error surface
+        # describes the suite: `crates/warmboot-core/tests/compat.rs` was
+        # once the whole of what warmboot appeared to say about how it
+        # handles failure.
+        #
+        # That was first fixed here by naming one role and dropping the
+        # claim, which was half a rule twice over. Half, because a
+        # benchmark is not a test and a reference implementation's error
+        # surface went on being reported as the crate's -- nine claims of
+        # it, measured by relocating a real crate under `benchmarks/`.
+        # Half again, because dropping the claim loses a true fact: a
+        # suite's own error handling is worth knowing, filed as the
+        # suite's. `analyze_snapshot` re-files by the role of the
+        # evidence, so the claim is made here and named correctly there.
+        if fallible:
+            first_line = fallible[0][1]
+            error_receipt = receipt(file_record.path, first_line, "error_surface", module, excerpt)
+            named = ", ".join(
+                f"{name} ({count})"
+                for name, count in sorted(
+                    file_errors["error_types"].items(), key=lambda pair: (-pair[1], pair[0])
+                )[:5]
+            )
+            propagated = int(file_errors["propagation_sites"])
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=(
+                        f"{module} declares {len(fallible)} fallible function(s) returning "
+                        f"Result or Option, and propagates with `?` at {propagated} site(s). "
+                        + (
+                            f"Declared error types: {named}."
+                            if named
+                            else "No error type is named in those signatures."
+                        )
+                    ),
+                    category="error_surface",
+                    supporting=(error_receipt.evidence_id,),
+                    importance="medium",
+                    path=file_record.path,
+                )
+            )
+
+        for method, route_path, route_line in file_routes:
+            # A route declared in a test file describes the fixture, not the
+            # served surface. Filing both under one category is how a suite
+            # of test doubles gets counted as an API.
+            mounted = method == "MOUNT"
+            category = "http_route"
+            if file_record.role == "test":
+                category = "test_route"
+            elif mounted:
+                category = "route_mount"
+            route_receipt = receipt(
+                file_record.path, route_line, category, f"{method} {route_path}", excerpt
+            )
+            text = (
+                f"{route_path} mounts a sub-router, so every path it contains is served "
+                f"beneath this prefix."
+                if mounted
+                else f"{method} {route_path} is registered as a route in {module}."
+            )
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=text,
+                    category=category,
+                    supporting=(route_receipt.evidence_id,),
+                    importance="high" if category == "http_route" else "medium",
+                    path=file_record.path,
+                )
+            )
+
+        for callee, call_line in file_call_sites:
+            edges.append(
+                EdgeRecord(
+                    edge_id=stable_id(
+                        "edge",
+                        (
+                            snapshot.snapshot_id,
+                            module_symbol_id,
+                            "calls",
+                            callee,
+                            call_line,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    source_symbol_id=module_symbol_id,
+                    source_path=file_record.path,
+                    relationship="calls",
+                    target_ref=callee,
+                    target_symbol_id=None,
+                    evidence_id=receipt(
+                        file_record.path, call_line, "call_site", callee, excerpt
+                    ).evidence_id,
+                    analyzer=ANALYZER_VERSION,
+                )
+            )
+
+        for method, target, call_line in file_calls:
+            call_receipt = receipt(
+                file_record.path, call_line, "external_call", f"{method} {target}", excerpt
+            )
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=(
+                        f"{module} issues a {method} request to {target}; that endpoint is "
+                        "served by something outside this module."
+                    ),
+                    category="external_call",
+                    supporting=(call_receipt.evidence_id,),
+                    importance="high",
+                    path=file_record.path,
+                )
+            )
+
+        for owner, trait_name, trait_line in file_traits:
+            if not describes_the_product(file_record.role):
+                continue
+            trait_receipt = receipt(
+                file_record.path,
+                trait_line,
+                "trait_implementation",
+                f"{module}::{owner}",
+                excerpt,
+            )
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=(
+                        f"{module}::{owner} implements {trait_name}, so it satisfies that "
+                        "contract wherever the trait is accepted."
+                    ),
+                    category="trait_implementation",
+                    supporting=(trait_receipt.evidence_id,),
+                    importance="medium",
+                    path=file_record.path,
+                )
+            )
+
+        for static_name, static_line, reason in file_statics:
+            qualified = f"{module}::{static_name}"
+            static_receipt = receipt(
+                file_record.path, static_line, "process_local_state", qualified, excerpt
+            )
+            claims.append(
+                analyzer.build_claim(
+                    snapshot,
+                    created_at,
+                    text=(
+                        f"{qualified} is {reason}; its contents are process-local, so a "
+                        "second instance of this program observes none of them."
+                    ),
+                    category="process_local_state",
+                    supporting=(static_receipt.evidence_id,),
+                    importance="high",
+                    path=file_record.path,
+                )
+            )
+
+        for owner, method, method_line in file_impls:
+            qualified = f"{module}::{owner}::{method}"
+            method_receipt = receipt(file_record.path, method_line, "symbol", qualified, excerpt)
+            symbols.append(
+                SymbolRecord(
+                    symbol_id=stable_id(
+                        "symbol",
+                        (
+                            snapshot.snapshot_id,
+                            file_record.path,
+                            qualified,
+                            method_line,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    path=file_record.path,
+                    qualified_name=qualified,
+                    kind="method",
+                    start_line=method_line,
+                    end_line=method_line,
+                    language="Rust",
+                    analyzer=ANALYZER_VERSION,
+                    metadata={"analysis_level": "lexical", "implements_for": owner},
+                )
+            )
+            edges.append(
+                EdgeRecord(
+                    edge_id=stable_id(
+                        "edge",
+                        (
+                            snapshot.snapshot_id,
+                            module_symbol_id,
+                            "contains",
+                            qualified,
+                            method_receipt.evidence_id,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    source_symbol_id=module_symbol_id,
+                    source_path=file_record.path,
+                    relationship="contains",
+                    target_ref=qualified,
+                    target_symbol_id=None,
+                    evidence_id=method_receipt.evidence_id,
+                    analyzer=ANALYZER_VERSION,
+                )
+            )
+        analyzed_files += 1
+    return [
+        (
+            symbols,
+            edges,
+            evidence,
+            claims,
+            failures,
+            analyzed_files,
+            unsafe_receipts,
+            unsafe_files,
+            dict(panic_receipts),
+            test_receipts,
+        )
+    ]
+
+
 class RustLexicalAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
     eligibility = "language"
+
+    def __init__(self, executor: Executor | None = None, workers: int = 1) -> None:
+        self.executor = executor
+        self.workers = max(1, workers)
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
@@ -1531,584 +2151,33 @@ class RustLexicalAnalyzer:
             evidence.append(record)
             return record
 
-        def receipt(
-            path: str, line: int, kind: str, symbol: str | None, excerpt: str
-        ) -> EvidenceRecord:
-            record = EvidenceRecord(
-                evidence_id=stable_id(
-                    "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
-                ),
-                snapshot_id=snapshot.snapshot_id,
-                path=path,
-                start_line=line,
-                end_line=line,
-                symbol=symbol,
-                evidence_kind=kind,
-                excerpt_sha256=hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
-                analyzer=ANALYZER_VERSION,
-                created_at=created_at,
+        context = (created_at, module_names)
+        if self.executor is not None and len(eligible) > 1:
+            chunks = chunk_by_weight(
+                eligible,
+                [item.size_bytes for item in eligible],
+                CHUNKS_PER_WORKER * self.workers,
             )
-            evidence.append(record)
-            return record
-
-        for file_record in eligible:
-            source_path = snapshot.root / Path(file_record.path)
-            try:
-                payload = source_path.read_bytes()
-                if hashlib.sha256(payload).hexdigest() != file_record.sha256:
-                    raise ValueError("content changed after snapshot")
-                source = payload.decode("utf-8", errors="strict")
-            except (OSError, UnicodeDecodeError, ValueError) as exc:
-                failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
-                continue
-
-            lines = source.splitlines()
-            module = module_names[file_record.path]
-            tokens = tokenize(source)
-            file_names = _name_index(tokens)
-            file_flags = _declared_clap_flags(tokens)
-            # `--github-repo` is not a Rust identifier, so the name walk skips
-            # it and a reader searching for a flag finds nothing.
-            for flag, flag_line in file_flags.items():
-                file_names[flag] = min(file_names.get(flag, flag_line), flag_line)
-            file_statics = _mutable_statics(tokens)
-            file_impls = _impl_methods(tokens)
-            file_errors = _error_surface(tokens)
-            file_traits = _trait_implementations(tokens)
-            file_routes = _http_routes(tokens)
-            file_environment = _environment_reads(tokens)
-            file_public = _public_surface(tokens)
-            file_calls = _client_calls(tokens)
-            file_call_sites = _call_sites(tokens)
-            declared_here = {(line, name) for _, name, line in _declared_items(tokens)}
-            file_constants = _constants(tokens)
-            file_enums = _declared_enums(tokens)
-            # Numbers to the tunable index, strings to the value panel.
-            # Both were arriving in the first, which put `SERVICE_NAME`
-            # in a table titled for numbers a maintainer would tune.
-            # A constant whose value this reader never saw stays in the
-            # tunable index, which renders a missing value as a dash. The
-            # string panel subscripts the value directly, and a Rust `static`
-            # declared in one place and assigned in another has none -- which
-            # is the case that panel's own comment warned about and this split
-            # walked straight into.
-            file_strings = {
-                name: entry
-                for name, entry in file_constants.items()
-                if "value" in entry and not declares_a_number(entry["value"])
-            }
-            file_constants = {
-                name: entry for name, entry in file_constants.items() if name not in file_strings
-            }
-            file_structs = _struct_fields(tokens)
-            if file_flags and describes_the_product(file_record.role):
-                first_flag_line = min(file_flags.values())
-                flag_excerpt = (
-                    lines[first_flag_line - 1] if 0 < first_flag_line <= len(lines) else ""
-                )
-                named = ", ".join(f"`{flag}`" for flag in sorted(file_flags)[:12])
-                more = f" and {len(file_flags) - 12:,} more" if len(file_flags) > 12 else ""
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=(
-                            f"{file_record.path} declares a command-line interface -- "
-                            f"{len(file_flags):,} option(s): {named}{more}. These are the "
-                            "words a user types; a `fn main` says only that the crate can "
-                            "be started."
-                        ),
-                        category="command_line_interface",
-                        supporting=(
-                            receipt(
-                                file_record.path,
-                                first_flag_line,
-                                "command_line_interface",
-                                module,
-                                flag_excerpt,
-                            ).evidence_id,
-                        ),
-                        path=file_record.path,
-                    )
-                )
-            module_symbol_id = stable_id(
-                "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
-            )
-            symbols.append(
-                SymbolRecord(
-                    symbol_id=module_symbol_id,
-                    snapshot_id=snapshot.snapshot_id,
-                    path=file_record.path,
-                    qualified_name=module,
-                    kind="module",
-                    start_line=1,
-                    end_line=max(1, file_record.line_count),
-                    language="Rust",
-                    analyzer=ANALYZER_VERSION,
-                    metadata={
-                        "analysis_level": "lexical",
-                        **({"name_index": file_names} if file_names else {}),
-                        **({"tunables": file_constants} if file_constants else {}),
-                        **({"model_fields": file_structs} if file_structs else {}),
-                        **({"collection_constants": file_enums} if file_enums else {}),
-                        **({"string_constants": file_strings} if file_strings else {}),
-                    },
-                )
-            )
-
-            # A `pub` item in a test file is public to the suite, not to a
-            # consumer of the crate, and reporting it as the crate's surface
-            # says a caller can depend on something no caller can reach. The
-            # `fn main` claim above already applies this rule; this one did
-            # not, and the engine's own audit flagged the result.
-            if file_public and describes_the_product(file_record.role):
-                names = sorted({name for _, name, _ in file_public})
-                shown = ", ".join(names[:12])
-                remainder = len(names) - min(len(names), 12)
-                surface = (
-                    f"{module} declares {len(names):,} name(s) as its public surface: "
-                    f"{shown}{f', and {remainder:,} more' if remainder else ''}. "
-                    "`pub(crate)` items are excluded: they are visible inside this crate "
-                    "and to nobody depending on it."
-                )
-                first = file_public[0][2]
-                excerpt = lines[first - 1] if 0 < first <= len(lines) else ""
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=surface,
-                        category="public_api",
-                        supporting=(
-                            receipt(
-                                file_record.path, first, "public_surface", module, excerpt
-                            ).evidence_id,
-                        ),
-                        importance="high",
-                        path=file_record.path,
-                    )
-                )
-
-            for setting, when, line in dict.fromkeys(file_environment):
-                excerpt = lines[line - 1] if 0 < line <= len(lines) else ""
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=(
-                            f"{file_record.path} reads environment setting {setting} at {when}."
-                            if when == "run time"
-                            else (
-                                f"{file_record.path} substitutes environment setting "
-                                f"{setting} at {when}, so its value is fixed in the built "
-                                "binary rather than read on the machine that runs it."
-                            )
-                        ),
-                        category="configuration_read",
-                        supporting=(
-                            receipt(
-                                file_record.path, line, "environment_read", module, excerpt
-                            ).evidence_id,
-                        ),
-                        importance="medium",
-                        path=file_record.path,
-                    )
-                )
-
-            index = 0
-            while index < len(tokens):
-                token = tokens[index]
-                if token.kind != "identifier":
-                    index += 1
-                    continue
-                excerpt = lines[token.line - 1] if token.line - 1 < len(lines) else ""
-
-                if token.value == "use":
-                    targets, cursor = _use_targets(tokens, index + 1)
-                    for target in targets:
-                        import_receipt = receipt(
-                            file_record.path, token.line, "import", module, excerpt
-                        )
-                        edges.append(
-                            EdgeRecord(
-                                edge_id=stable_id(
-                                    "edge",
-                                    (
-                                        snapshot.snapshot_id,
-                                        module_symbol_id,
-                                        "imports",
-                                        target,
-                                        token.line,
-                                        ANALYZER_VERSION,
-                                    ),
-                                ),
-                                snapshot_id=snapshot.snapshot_id,
-                                source_symbol_id=module_symbol_id,
-                                source_path=file_record.path,
-                                relationship="imports",
-                                target_ref=target,
-                                target_symbol_id=None,
-                                evidence_id=import_receipt.evidence_id,
-                                analyzer=ANALYZER_VERSION,
-                            )
-                        )
-                    index = cursor
-                    continue
-
-                if token.value == "unsafe":
-                    unsafe_files.add(file_record.path)
-                    unsafe_receipts.append(
-                        receipt(
-                            file_record.path, token.line, "unsafe_surface", module, excerpt
-                        ).evidence_id
-                    )
-                    index += 1
-                    continue
-
-                if token.value in ITEM_KEYWORDS and index + 1 < len(tokens):
-                    name_token = tokens[index + 1]
-                    # `_declared_items` is the single decision about what this
-                    # file declares, so a template inside a macro body is
-                    # excluded here by the same rule rather than a second one
-                    # that can drift away from it.
-                    if (token.line, name_token.value) in declared_here:
-                        qualified = f"{module}::{name_token.value}"
-                        item_receipt = receipt(
-                            file_record.path, token.line, "symbol", qualified, excerpt
-                        )
-                        symbol_id = stable_id(
-                            "symbol",
-                            (
-                                snapshot.snapshot_id,
-                                file_record.path,
-                                qualified,
-                                token.line,
-                                ANALYZER_VERSION,
-                            ),
-                        )
-                        symbols.append(
-                            SymbolRecord(
-                                symbol_id=symbol_id,
-                                snapshot_id=snapshot.snapshot_id,
-                                path=file_record.path,
-                                qualified_name=qualified,
-                                kind=ITEM_KEYWORDS[token.value],
-                                start_line=token.line,
-                                end_line=token.line,
-                                language="Rust",
-                                analyzer=ANALYZER_VERSION,
-                                metadata={},
-                            )
-                        )
-                        edges.append(
-                            EdgeRecord(
-                                edge_id=stable_id(
-                                    "edge",
-                                    (
-                                        snapshot.snapshot_id,
-                                        module_symbol_id,
-                                        "contains",
-                                        qualified,
-                                        ANALYZER_VERSION,
-                                    ),
-                                ),
-                                snapshot_id=snapshot.snapshot_id,
-                                source_symbol_id=module_symbol_id,
-                                source_path=file_record.path,
-                                relationship="contains",
-                                target_ref=qualified,
-                                target_symbol_id=symbol_id,
-                                evidence_id=item_receipt.evidence_id,
-                                analyzer=ANALYZER_VERSION,
-                            )
-                        )
-                        if (
-                            name_token.value == "main"
-                            and token.value == "fn"
-                            and describes_the_product(file_record.role)
-                        ):
-                            claims.append(
-                                self._claim(
-                                    snapshot,
-                                    created_at,
-                                    text=f"{file_record.path} declares a `fn main` entry point.",
-                                    category="application_entry",
-                                    supporting=(item_receipt.evidence_id,),
-                                    path=file_record.path,
-                                )
-                            )
-                    index += 2
-                    continue
-
-                if token.value == "test" and index >= 2:
-                    previous = tokens[index - 1]
-                    if previous.kind == "punctuation" and previous.value == "[":
-                        test_receipts.append(
-                            receipt(
-                                file_record.path, token.line, "test_attribute", module, excerpt
-                            ).evidence_id
-                        )
-                    index += 1
-                    continue
-
-                if token.value in PANIC_METHODS and index >= 1:
-                    previous = tokens[index - 1]
-                    following = tokens[index + 1] if index + 1 < len(tokens) else None
-                    is_call = following is not None and following.value == "("
-                    if previous.kind == "punctuation" and previous.value == "." and is_call:
-                        family = "unchecked" if token.value in UNCHECKED_METHODS else "documented"
-                        panic_receipts[family].append(
-                            receipt(
-                                file_record.path, token.line, "panic_site", module, excerpt
-                            ).evidence_id
-                        )
-                    index += 1
-                    continue
-
-                if token.value in PANIC_MACROS and index + 1 < len(tokens):
-                    following = tokens[index + 1]
-                    if following.kind == "punctuation" and following.value == "!":
-                        family = next(
-                            name
-                            for name, members in PANIC_FAMILIES.items()
-                            if token.value in members
-                        )
-                        panic_receipts[family].append(
-                            receipt(
-                                file_record.path, token.line, "panic_site", module, excerpt
-                            ).evidence_id
-                        )
-                    index += 1
-                    continue
-
-                index += 1
-
-            fallible = file_errors["fallible_functions"]
-            # An integration test under `tests/` declares its own fallible
-            # helpers, and reporting them as the crate's error surface
-            # describes the suite: `crates/warmboot-core/tests/compat.rs` was
-            # once the whole of what warmboot appeared to say about how it
-            # handles failure.
-            #
-            # That was first fixed here by naming one role and dropping the
-            # claim, which was half a rule twice over. Half, because a
-            # benchmark is not a test and a reference implementation's error
-            # surface went on being reported as the crate's -- nine claims of
-            # it, measured by relocating a real crate under `benchmarks/`.
-            # Half again, because dropping the claim loses a true fact: a
-            # suite's own error handling is worth knowing, filed as the
-            # suite's. `analyze_snapshot` re-files by the role of the
-            # evidence, so the claim is made here and named correctly there.
-            if fallible:
-                first_line = fallible[0][1]
-                error_receipt = receipt(
-                    file_record.path, first_line, "error_surface", module, excerpt
-                )
-                named = ", ".join(
-                    f"{name} ({count})"
-                    for name, count in sorted(
-                        file_errors["error_types"].items(), key=lambda pair: (-pair[1], pair[0])
-                    )[:5]
-                )
-                propagated = int(file_errors["propagation_sites"])
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=(
-                            f"{module} declares {len(fallible)} fallible function(s) returning "
-                            f"Result or Option, and propagates with `?` at {propagated} site(s). "
-                            + (
-                                f"Declared error types: {named}."
-                                if named
-                                else "No error type is named in those signatures."
-                            )
-                        ),
-                        category="error_surface",
-                        supporting=(error_receipt.evidence_id,),
-                        importance="medium",
-                        path=file_record.path,
-                    )
-                )
-
-            for method, route_path, route_line in file_routes:
-                # A route declared in a test file describes the fixture, not the
-                # served surface. Filing both under one category is how a suite
-                # of test doubles gets counted as an API.
-                mounted = method == "MOUNT"
-                category = "http_route"
-                if file_record.role == "test":
-                    category = "test_route"
-                elif mounted:
-                    category = "route_mount"
-                route_receipt = receipt(
-                    file_record.path, route_line, category, f"{method} {route_path}", excerpt
-                )
-                text = (
-                    f"{route_path} mounts a sub-router, so every path it contains is served "
-                    f"beneath this prefix."
-                    if mounted
-                    else f"{method} {route_path} is registered as a route in {module}."
-                )
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=text,
-                        category=category,
-                        supporting=(route_receipt.evidence_id,),
-                        importance="high" if category == "http_route" else "medium",
-                        path=file_record.path,
-                    )
-                )
-
-            for callee, call_line in file_call_sites:
-                edges.append(
-                    EdgeRecord(
-                        edge_id=stable_id(
-                            "edge",
-                            (
-                                snapshot.snapshot_id,
-                                module_symbol_id,
-                                "calls",
-                                callee,
-                                call_line,
-                                ANALYZER_VERSION,
-                            ),
-                        ),
-                        snapshot_id=snapshot.snapshot_id,
-                        source_symbol_id=module_symbol_id,
-                        source_path=file_record.path,
-                        relationship="calls",
-                        target_ref=callee,
-                        target_symbol_id=None,
-                        evidence_id=receipt(
-                            file_record.path, call_line, "call_site", callee, excerpt
-                        ).evidence_id,
-                        analyzer=ANALYZER_VERSION,
-                    )
-                )
-
-            for method, target, call_line in file_calls:
-                call_receipt = receipt(
-                    file_record.path, call_line, "external_call", f"{method} {target}", excerpt
-                )
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=(
-                            f"{module} issues a {method} request to {target}; that endpoint is "
-                            "served by something outside this module."
-                        ),
-                        category="external_call",
-                        supporting=(call_receipt.evidence_id,),
-                        importance="high",
-                        path=file_record.path,
-                    )
-                )
-
-            for owner, trait_name, trait_line in file_traits:
-                if not describes_the_product(file_record.role):
-                    continue
-                trait_receipt = receipt(
-                    file_record.path,
-                    trait_line,
-                    "trait_implementation",
-                    f"{module}::{owner}",
-                    excerpt,
-                )
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=(
-                            f"{module}::{owner} implements {trait_name}, so it satisfies that "
-                            "contract wherever the trait is accepted."
-                        ),
-                        category="trait_implementation",
-                        supporting=(trait_receipt.evidence_id,),
-                        importance="medium",
-                        path=file_record.path,
-                    )
-                )
-
-            for static_name, static_line, reason in file_statics:
-                qualified = f"{module}::{static_name}"
-                static_receipt = receipt(
-                    file_record.path, static_line, "process_local_state", qualified, excerpt
-                )
-                claims.append(
-                    self._claim(
-                        snapshot,
-                        created_at,
-                        text=(
-                            f"{qualified} is {reason}; its contents are process-local, so a "
-                            "second instance of this program observes none of them."
-                        ),
-                        category="process_local_state",
-                        supporting=(static_receipt.evidence_id,),
-                        importance="high",
-                        path=file_record.path,
-                    )
-                )
-
-            for owner, method, method_line in file_impls:
-                qualified = f"{module}::{owner}::{method}"
-                method_receipt = receipt(
-                    file_record.path, method_line, "symbol", qualified, excerpt
-                )
-                symbols.append(
-                    SymbolRecord(
-                        symbol_id=stable_id(
-                            "symbol",
-                            (
-                                snapshot.snapshot_id,
-                                file_record.path,
-                                qualified,
-                                method_line,
-                                ANALYZER_VERSION,
-                            ),
-                        ),
-                        snapshot_id=snapshot.snapshot_id,
-                        path=file_record.path,
-                        qualified_name=qualified,
-                        kind="method",
-                        start_line=method_line,
-                        end_line=method_line,
-                        language="Rust",
-                        analyzer=ANALYZER_VERSION,
-                        metadata={"analysis_level": "lexical", "implements_for": owner},
-                    )
-                )
-                edges.append(
-                    EdgeRecord(
-                        edge_id=stable_id(
-                            "edge",
-                            (
-                                snapshot.snapshot_id,
-                                module_symbol_id,
-                                "contains",
-                                qualified,
-                                method_receipt.evidence_id,
-                                ANALYZER_VERSION,
-                            ),
-                        ),
-                        snapshot_id=snapshot.snapshot_id,
-                        source_symbol_id=module_symbol_id,
-                        source_path=file_record.path,
-                        relationship="contains",
-                        target_ref=qualified,
-                        target_symbol_id=None,
-                        evidence_id=method_receipt.evidence_id,
-                        analyzer=ANALYZER_VERSION,
-                    )
-                )
-            analyzed_files += 1
+            futures = submit_chunks(self.executor, _read_rust_files, chunks, context)
+            parts = gather_in_order(snapshot, futures, chunks, _read_rust_files, context)
+        else:
+            parts = _read_rust_files(snapshot, eligible, context)
+        for part in parts:
+            symbols.extend(part[0])
+            edges.extend(part[1])
+            evidence.extend(part[2])
+            claims.extend(part[3])
+            failures.extend(part[4])
+            analyzed_files += part[5]
+            unsafe_receipts.extend(part[6])
+            unsafe_files.update(part[7])
+            for family, found in part[8].items():
+                panic_receipts[family].extend(found)
+            test_receipts.extend(part[9])
 
         if unsafe_receipts:
             claims.append(
-                self._claim(
+                self.build_claim(
                     snapshot,
                     created_at,
                     text=(
@@ -2124,7 +2193,7 @@ class RustLexicalAnalyzer:
             )
         elif eligible:
             claims.append(
-                self._claim(
+                self.build_claim(
                     snapshot,
                     created_at,
                     text=(
@@ -2144,7 +2213,7 @@ class RustLexicalAnalyzer:
             if not found:
                 continue
             claims.append(
-                self._claim(
+                self.build_claim(
                     snapshot,
                     created_at,
                     text=template.format(count=f"{len(found):,}"),
@@ -2156,7 +2225,7 @@ class RustLexicalAnalyzer:
 
         if test_receipts:
             claims.append(
-                self._claim(
+                self.build_claim(
                     snapshot,
                     created_at,
                     text=f"{len(test_receipts)} `#[test]` attributes appear in Rust source.",
@@ -2166,7 +2235,7 @@ class RustLexicalAnalyzer:
             )
         elif eligible:
             claims.append(
-                self._claim(
+                self.build_claim(
                     snapshot,
                     created_at,
                     text=(
@@ -2200,7 +2269,7 @@ class RustLexicalAnalyzer:
             coverage=(coverage,),
         )
 
-    def _claim(
+    def build_claim(
         self,
         snapshot: Snapshot,
         created_at: str,

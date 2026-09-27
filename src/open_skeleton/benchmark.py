@@ -17,6 +17,7 @@ from typing import Any
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.exports import export_analysis_jsonl, export_analysis_markdown
 from open_skeleton.models import AnalysisResult, ClaimRecord, EvidenceRecord, Snapshot, utc_now
+from open_skeleton.parallel import resolve_jobs
 from open_skeleton.scanner import scan_repository
 
 BENCHMARK_SCHEMA = "open-skeleton.benchmark.v1"
@@ -297,6 +298,8 @@ def run_benchmark(
     repository: Path,
     gold_path: Path,
     output_dir: Path,
+    *,
+    jobs: int | None = 1,
 ) -> dict[str, Any]:
     root = repository.expanduser().resolve(strict=True)
     gold_file = gold_path.expanduser().resolve(strict=True)
@@ -327,7 +330,8 @@ def run_benchmark(
         if first_finding_ms is None and claim_count:
             first_finding_ms = round((time.perf_counter() - started) * 1000)
 
-    analysis = analyze_snapshot(snapshot, on_event=progress)
+    workers = resolve_jobs(jobs)
+    analysis = analyze_snapshot(snapshot, on_event=progress, jobs=workers)
     total_ms = round((time.perf_counter() - started) * 1000)
     _, peak_allocated = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -349,6 +353,9 @@ def run_benchmark(
         "output_lines": len(markdown.splitlines()),
         "claim_count": len(analysis.claims),
         "evidence_count": len(analysis.evidence),
+        # Recorded so a time is never compared with one taken at another
+        # worker count as though the engine had changed.
+        "jobs": workers,
     }
     result = {
         "schema_version": BENCHMARK_SCHEMA,

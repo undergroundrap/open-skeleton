@@ -10,8 +10,16 @@ import sys
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Executor,
+    Future,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from open_skeleton.analyzers.base import Analyzer
 from open_skeleton.analyzers.csharp_lexical import CSharpLexicalAnalyzer
@@ -36,6 +44,13 @@ from open_skeleton.models import (
     Snapshot,
     SymbolRecord,
     utc_now,
+)
+from open_skeleton.parallel import (
+    gather_in_order,
+    resolve_jobs,
+    start_pool,
+    submit_chunks,
+    worth_parallelising,
 )
 from open_skeleton.policy import exercises_the_product, scoped_category
 from open_skeleton.resolution import resolve_call_targets, resolve_import_targets
@@ -116,23 +131,35 @@ def _append_orphan_candidates(
         if invalidation.startswith("file:")
     }
 
+    # Every name an import reaches, and every dotted prefix of it: importing
+    # `a.b.c` reaches `a.b` and `a` too. Asking each module whether some import
+    # starts with it compared every module with every import, which on a
+    # repository the size of Django was eighteen seconds of a two-minute run.
+    # A prefix is cut only at a dot, so `a.bc` still does not reach `a.b`.
+    reached: set[str] = set()
+    for edge in imports:
+        target = edge.target_ref.lstrip(".")
+        reached.add(target)
+        reached.update(target[:index] for index, char in enumerate(target) if char == ".")
+
     def module_is_imported(module: str) -> bool:
-        candidates = {module}
+        if module in reached:
+            return True
         parts = module.split(".")
-        if len(parts) > 1:
-            candidates.add(".".join(parts[1:]))
-        return any(
-            target == candidate or target.startswith(f"{candidate}.")
-            for candidate in candidates
-            for edge in imports
-            for target in (edge.target_ref.lstrip("."),)
-        )
+        return len(parts) > 1 and ".".join(parts[1:]) in reached
 
     imported_modules = {
         module.qualified_name
         for module in python_modules
         if module_is_imported(module.qualified_name)
     }
+    # Keyed exactly as the sibling test always compared them: a dotless name
+    # is its own key, which is not the empty parent a dotless module looks for.
+    imported_by_parent: Counter[str] = Counter(
+        sibling.qualified_name.rsplit(".", 1)[0]
+        for sibling in python_modules
+        if sibling.qualified_name in imported_modules
+    )
     census = EvidenceRecord(
         evidence_id=stable_id(
             "evidence",
@@ -159,12 +186,7 @@ def _append_orphan_candidates(
         ):
             continue
         parent = module.qualified_name.rsplit(".", 1)[0] if "." in module.qualified_name else ""
-        imported_siblings = [
-            sibling
-            for sibling in python_modules
-            if sibling.qualified_name.rsplit(".", 1)[0] == parent
-            and sibling.qualified_name in imported_modules
-        ]
+        imported_siblings = imported_by_parent[parent]
         if not imported_siblings:
             continue
         module_evidence = evidence_by_symbol.get(module.qualified_name)
@@ -172,7 +194,7 @@ def _append_orphan_candidates(
             continue
         text = (
             f"{module.path} has no resolved inbound static Python import while "
-            f"{len(imported_siblings)} sibling modules do; treat it as an orphan candidate, "
+            f"{imported_siblings} sibling modules do; treat it as an orphan candidate, "
             "not a deletion instruction."
         )
         claims.append(
@@ -1138,7 +1160,12 @@ def _union(first: tuple[str, ...], second: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*first, *second)))
 
 
-def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Analyzer, ...]:
+def build_analyzers(
+    hum_index: Sequence[Path] | Path | None = None,
+    *,
+    executor: Executor | None = None,
+    workers: int = 1,
+) -> tuple[Analyzer, ...]:
     """The analyzers a run consults, in the order their claims are merged.
 
     Declared at module scope and annotated with the protocol so conformance is
@@ -1149,9 +1176,9 @@ def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Ana
     """
 
     return (
-        PythonAstAnalyzer(),
-        TypeScriptLexicalAnalyzer(),
-        RustLexicalAnalyzer(),
+        PythonAstAnalyzer(executor=executor, workers=workers),
+        TypeScriptLexicalAnalyzer(executor=executor, workers=workers),
+        RustLexicalAnalyzer(executor=executor, workers=workers),
         JavaLexicalAnalyzer(),
         ProjectMetadataAnalyzer(),
         SqlSchemaAnalyzer(),
@@ -1163,26 +1190,109 @@ def build_analyzers(hum_index: Sequence[Path] | Path | None = None) -> tuple[Ana
     )
 
 
+def _run_analyzer_in_worker(
+    snapshot: Snapshot,
+    indexes: list[int],
+    hum_index: Sequence[Path] | Path | None,
+) -> list[AnalysisResult]:
+    analyzers = build_analyzers(hum_index)
+    return [analyzers[index].analyze(snapshot) for index in indexes]
+
+
+def _shares_files(analyzer: Analyzer) -> bool:
+    return getattr(analyzer, "executor", None) is not None
+
+
+def _run_analyzers(
+    snapshot: Snapshot,
+    hum_index: Sequence[Path] | Path | None,
+    workers: int,
+    report: Callable[[AnalysisResult], None],
+) -> list[AnalysisResult]:
+    """Every analyzer's result, in `build_analyzers` order, at any worker count.
+
+    Serial below the size a pool pays for itself. Above it, each reader other
+    that can split its files -- Python, TypeScript and Rust, the three whose cost
+    grows fastest with a repository in the corpora measured -- shares them out across
+    the pool, and every other reader runs whole in a worker. Results are returned in declaration order
+    whatever order they finished in, so every merge below is unchanged;
+    `report` is called as each one finishes, which is what makes time to first
+    finding mean the first finding.
+    """
+
+    executor = None
+    if worth_parallelising(snapshot, workers):
+        try:
+            executor = start_pool(snapshot, workers)
+        except (OSError, RuntimeError, ValueError):
+            executor = None
+    if executor is None:
+        results = []
+        for analyzer in build_analyzers(hum_index):
+            result = analyzer.analyze(snapshot)
+            results.append(result)
+            report(result)
+        return results
+
+    analyzers = build_analyzers(hum_index, executor=executor, workers=workers)
+    # Readers that can share their files out are coordinated from threads
+    # here, which mostly wait on the pool and merge; every other reader runs
+    # whole in a worker. The indivisible ones are queued first so the pool is
+    # not left waiting on one of them after the shared-out files are done.
+    shared = [index for index, analyzer in enumerate(analyzers) if _shares_files(analyzer)]
+    whole = [index for index in range(len(analyzers)) if index not in shared]
+    with executor, ThreadPoolExecutor(max_workers=len(shared) or 1) as coordinator:
+        in_workers: dict[Future[Any], int] = {
+            submit_chunks(executor, _run_analyzer_in_worker, [[index]], hum_index)[0]: index
+            for index in whole
+        }
+        in_threads: dict[Future[Any], int] = {
+            coordinator.submit(analyzers[index].analyze, snapshot): index for index in shared
+        }
+        by_index: dict[int, AnalysisResult] = {}
+        waiting: set[Future[Any]] = {*in_workers, *in_threads}
+        while waiting:
+            done, waiting = wait(waiting, return_when=FIRST_COMPLETED)
+            for future in done:
+                if future in in_threads:
+                    index = in_threads[future]
+                    by_index[index] = future.result()
+                else:
+                    index = in_workers[future]
+                    [by_index[index]] = gather_in_order(
+                        snapshot, [future], [[index]], _run_analyzer_in_worker, hum_index
+                    )
+                report(by_index[index])
+    return [by_index[index] for index in range(len(by_index))]
+
+
 def analyze_snapshot(
     snapshot: Snapshot,
     *,
     hum_index: Sequence[Path] | Path | None = None,
     on_event: AnalysisEventCallback | None = None,
+    jobs: int | None = 1,
 ) -> AnalysisResult:
-    """Run deterministic semantic adapters and merge their immutable outputs."""
+    """Run deterministic semantic adapters and merge their immutable outputs.
+
+    `jobs` is the number of worker processes; `0` or `None` chooses one per
+    core. The default is serial, so a library caller never starts processes
+    it did not ask for -- the command line and the MCP server opt in. The
+    result is identical at every value.
+    """
 
     started = time.perf_counter()
     created_at = utc_now()
-    results = []
-    for analyzer in build_analyzers(hum_index):
-        result = analyzer.analyze(snapshot)
-        results.append(result)
+
+    def report(result: AnalysisResult) -> None:
         if on_event is not None:
             on_event(
                 result.analyzer_version,
                 round((time.perf_counter() - started) * 1000),
                 len(result.claims),
             )
+
+    results = _run_analyzers(snapshot, hum_index, resolve_jobs(jobs), report)
 
     symbols = tuple(item for result in results for item in result.symbols)
     edges = tuple(item for result in results for item in result.edges)

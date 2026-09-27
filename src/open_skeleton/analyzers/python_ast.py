@@ -12,10 +12,15 @@ import time
 import weakref
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
-from dataclasses import replace
+from concurrent.futures import Executor
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
+from open_skeleton.analyzers.ast_visitor import FastNodeVisitor
+from open_skeleton.analyzers.ast_visitor import iter_child_nodes as _fast_children
+from open_skeleton.analyzers.ast_visitor import walk as _fast_walk
 from open_skeleton.ids import stable_id
 from open_skeleton.models import (
     AnalysisResult,
@@ -27,6 +32,12 @@ from open_skeleton.models import (
     Snapshot,
     SymbolRecord,
     utc_now,
+)
+from open_skeleton.parallel import (
+    CHUNKS_PER_WORKER,
+    chunk_by_weight,
+    gather_in_order,
+    submit_chunks,
 )
 from open_skeleton.policy import TEST_SCOPED_CATEGORIES, describes_the_product
 
@@ -217,7 +228,7 @@ def _iterated_collection(node: ast.AST) -> str | None:
     return _expr_name(current)
 
 
-class _LoopWorksetCollector(ast.NodeVisitor):
+class _LoopWorksetCollector(FastNodeVisitor):
     """Resolve one local alias between an imported collection and a loop."""
 
     def __init__(self) -> None:
@@ -424,7 +435,7 @@ _MODULE_DESCENDANTS: weakref.WeakKeyDictionary[ast.Module, tuple[ast.AST, ...]] 
 def _module_nodes(tree: ast.Module) -> Iterator[ast.AST]:
     descendants = _MODULE_DESCENDANTS.get(tree)
     if descendants is None:
-        walk = ast.walk(tree)
+        walk = _fast_walk(tree)
         next(walk)
         descendants = tuple(walk)
         _MODULE_DESCENDANTS[tree] = descendants
@@ -614,7 +625,7 @@ def _route_literals(node: ast.AST) -> tuple[tuple[str, int, int], ...]:
             ),
         )
 
-    class Collector(ast.NodeVisitor):
+    class Collector(FastNodeVisitor):
         def visit_FunctionDef(self, _child: ast.FunctionDef) -> None:
             # Nested callables have their own request contract, if any.
             return
@@ -764,7 +775,7 @@ def _instance_tunables(tree: ast.Module) -> dict[str, dict[str, Any]]:
     for node in _module_nodes(tree):
         if not isinstance(node, ast.ClassDef):
             continue
-        for inner in ast.walk(node):
+        for inner in _fast_walk(node):
             if not isinstance(inner, ast.Assign):
                 continue
             value = _literal_number(inner.value)
@@ -1341,13 +1352,13 @@ def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
         """
 
         collected: list[ast.AST] = []
-        pending: list[ast.AST] = list(ast.iter_child_nodes(node))
+        pending: list[ast.AST] = list(_fast_children(node))
         while pending:
             current = pending.pop()
             if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             collected.append(current)
-            pending.extend(ast.iter_child_nodes(current))
+            pending.extend(_fast_children(current))
         return collected
 
     def render(node: ast.AST) -> str | None:
@@ -1601,7 +1612,7 @@ def _payload_shapes(tree: ast.Module) -> dict[str, dict[str, Any]]:
             continue
         keys: set[str] = set()
         line: int | None = None
-        for statement in ast.walk(node):
+        for statement in _fast_walk(node):
             if not isinstance(statement, ast.Return) or statement.value is None:
                 continue
             candidates = [statement.value]
@@ -1634,7 +1645,7 @@ def _module_mutable_names(tree: ast.Module) -> set[str]:
     return names
 
 
-class _DirectBindingCollector(ast.NodeVisitor):
+class _DirectBindingCollector(FastNodeVisitor):
     """Collect names bound by one function without descending into nested scopes."""
 
     def __init__(self) -> None:
@@ -1691,7 +1702,7 @@ def _function_bindings(
     return collector.bound, collector.global_names
 
 
-class _ModuleMutationCollector(ast.NodeVisitor):
+class _ModuleMutationCollector(FastNodeVisitor):
     """Find concrete mutations of module-owned mutable containers."""
 
     def __init__(self, module_mutables: set[str]) -> None:
@@ -1774,7 +1785,7 @@ class _ModuleMutationCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-class _PythonFileAnalyzer(ast.NodeVisitor):
+class _PythonFileAnalyzer(FastNodeVisitor):
     def __init__(
         self,
         *,
@@ -2139,7 +2150,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 isinstance(candidate, ast.Call)
                 and (_expr_name(candidate.func) or "").split(".")[-1] in {"Depends", "Security"}
                 for signature_node in signature_nodes
-                for candidate in ast.walk(signature_node)
+                for candidate in _fast_walk(signature_node)
             )
             if has_auth_control:
                 self.route_auth_control_evidence.append(route_evidence.evidence_id)
@@ -2454,7 +2465,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 supporting=(evidence.evidence_id,),
             )
         for comparison in (
-            candidate for candidate in ast.walk(node.test) if isinstance(candidate, ast.Compare)
+            candidate for candidate in _fast_walk(node.test) if isinstance(candidate, ast.Compare)
         ):
             if len(comparison.ops) != 1 or not isinstance(comparison.ops[0], ast.NotIn):
                 continue
@@ -2478,7 +2489,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                     )
                 ]
                 for statement in node.body
-                for candidate in ast.walk(statement)
+                for candidate in _fast_walk(statement)
             )
             if clears_field:
                 evidence = self._evidence(
@@ -2578,7 +2589,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         call_names = {
             _expr_name(candidate.func) or ""
             for statement in node.body
-            for candidate in ast.walk(statement)
+            for candidate in _fast_walk(statement)
             if isinstance(candidate, ast.Call)
         }
         # Any call reached through an import, rather than three method names
@@ -2592,7 +2603,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
         fallback_labels: set[str] = set()
         if absorbed:
             for handler in node.handlers:
-                for candidate in ast.walk(handler):
+                for candidate in _fast_walk(handler):
                     if not isinstance(candidate, ast.Return):
                         continue
                     if isinstance(candidate.value, ast.Constant):
@@ -2817,7 +2828,7 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                         isinstance(candidate, ast.Call)
                         and (_expr_name(candidate.func) or "").casefold().endswith("json.dumps")
                         for argument in arguments
-                        for candidate in ast.walk(argument)
+                        for candidate in _fast_walk(argument)
                     )
                     if insert_match and serializes_json:
                         self._claim(
@@ -3067,10 +3078,110 @@ class _PythonFileAnalyzer(ast.NodeVisitor):
                 )
 
 
+@dataclass(frozen=True, slots=True)
+class _FileOutcome:
+    """Everything one file contributed, or why it contributed nothing.
+
+    A plain value so a worker process can hand it back; the merge reads these
+    in file order, so a parallel run and a serial one assemble the same lists.
+    """
+
+    failure: str | None
+    in_test: bool = False
+    symbols: tuple[SymbolRecord, ...] = ()
+    edges: tuple[EdgeRecord, ...] = ()
+    evidence: tuple[EvidenceRecord, ...] = ()
+    claims: tuple[ClaimRecord, ...] = ()
+    route_evidence: tuple[str, ...] = ()
+    endpoint_evidence: tuple[str, ...] = ()
+    endpoint_literals: frozenset[str] = frozenset()
+    caught_family_evidence: dict[str, list[str]] = dataclass_field(default_factory=dict)
+    route_auth_control_evidence: tuple[str, ...] = ()
+    typed_route_evidence: tuple[str, ...] = ()
+
+
+def _read_python_files(
+    snapshot: Snapshot,
+    work: list[tuple[FileRecord, str]],
+    context: tuple[str, frozenset[str]],
+) -> list[_FileOutcome]:
+    """Parse and read each file, in order. Module scope so a worker can run it."""
+
+    created_at, local_modules = context
+    return [
+        _read_python_file(snapshot, file_record, module, created_at, local_modules)
+        for file_record, module in work
+    ]
+
+
+def _read_python_file(
+    snapshot: Snapshot,
+    file_record: FileRecord,
+    module: str,
+    created_at: str,
+    local_modules: frozenset[str],
+) -> _FileOutcome:
+    source_path = snapshot.root / Path(file_record.path)
+    try:
+        payload = source_path.read_bytes()
+        current_hash = hashlib.sha256(payload).hexdigest()
+        if current_hash != file_record.sha256:
+            raise ValueError("content changed after snapshot")
+        source = payload.decode("utf-8", errors="strict")
+        tree = ast.parse(source, filename=file_record.path, type_comments=True)
+        analyzer = _PythonFileAnalyzer(
+            snapshot=snapshot,
+            file_record=file_record,
+            source=source,
+            tree=tree,
+            created_at=created_at,
+            module=module,
+            local_modules=local_modules,
+        )
+        analyzer.visit(tree)
+        analyzer.finalize()
+    # Walking the tree is inside this guard, not only parsing it. One
+    # file in sympy is a single arithmetic expression nested 401 nodes
+    # deep, and `ast.NodeVisitor` recurses per node: it raised
+    # `RecursionError` from the walk, which no handler covered, and a
+    # 2,600-file repository produced nothing at all. A file this
+    # analyzer cannot finish is a file it did not read, which is a
+    # coverage failure it already knows how to report.
+    except (
+        OSError,
+        UnicodeDecodeError,
+        SyntaxError,
+        ValueError,
+        RecursionError,
+    ) as exc:
+        return _FileOutcome(failure=f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+    return _FileOutcome(
+        failure=None,
+        in_test=str(file_record.role) == "test",
+        symbols=tuple(analyzer.symbols),
+        edges=tuple(analyzer.edges),
+        evidence=tuple(analyzer.evidence),
+        claims=tuple(analyzer.claims),
+        route_evidence=tuple(analyzer.route_evidence),
+        endpoint_evidence=tuple(analyzer.endpoint_evidence),
+        endpoint_literals=frozenset(analyzer.endpoint_literals),
+        caught_family_evidence=analyzer.caught_family_evidence,
+        route_auth_control_evidence=tuple(analyzer.route_auth_control_evidence),
+        typed_route_evidence=tuple(analyzer.typed_route_evidence),
+    )
+
+
 class PythonAstAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
     eligibility = "language"
+
+    def __init__(self, executor: Executor | None = None, workers: int = 1) -> None:
+        # Optional worker pool for per-file reading. Only the reading is
+        # shared out; every cross-file claim below is still built here, from
+        # outcomes merged in file order, so the result does not depend on it.
+        self.executor = executor
+        self.workers = max(1, workers)
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
@@ -3094,52 +3205,33 @@ class PythonAstAnalyzer:
         packages = _package_directories(item.path for item in snapshot.files)
         module_names = _module_names((item.path for item in eligible), packages)
 
-        for file_record in eligible:
-            source_path = snapshot.root / Path(file_record.path)
-            try:
-                payload = source_path.read_bytes()
-                current_hash = hashlib.sha256(payload).hexdigest()
-                if current_hash != file_record.sha256:
-                    raise ValueError("content changed after snapshot")
-                source = payload.decode("utf-8", errors="strict")
-                tree = ast.parse(source, filename=file_record.path, type_comments=True)
-                analyzer = _PythonFileAnalyzer(
-                    snapshot=snapshot,
-                    file_record=file_record,
-                    source=source,
-                    tree=tree,
-                    created_at=created_at,
-                    module=module_names[file_record.path],
-                    local_modules=frozenset(module_names.values()),
-                )
-                analyzer.visit(tree)
-                analyzer.finalize()
-            # Walking the tree is inside this guard, not only parsing it. One
-            # file in sympy is a single arithmetic expression nested 401 nodes
-            # deep, and `ast.NodeVisitor` recurses per node: it raised
-            # `RecursionError` from the walk, which no handler covered, and a
-            # 2,600-file repository produced nothing at all. A file this
-            # analyzer cannot finish is a file it did not read, which is a
-            # coverage failure it already knows how to report.
-            except (
-                OSError,
-                UnicodeDecodeError,
-                SyntaxError,
-                ValueError,
-                RecursionError,
-            ) as exc:
-                failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+        work = [(item, module_names[item.path]) for item in eligible]
+        context = (created_at, frozenset(module_names.values()))
+        if self.executor is not None and len(work) > 1:
+            chunks = chunk_by_weight(
+                work,
+                [item.size_bytes for item, _ in work],
+                CHUNKS_PER_WORKER * self.workers,
+            )
+            futures = submit_chunks(self.executor, _read_python_files, chunks, context)
+            outcomes = gather_in_order(snapshot, futures, chunks, _read_python_files, context)
+        else:
+            outcomes = _read_python_files(snapshot, work, context)
+
+        for outcome in outcomes:
+            if outcome.failure is not None:
+                failures.append(outcome.failure)
                 continue
 
             # Nothing partial reaches the result: a file contributes every
             # record it produced or none of them.
-            symbols.extend(analyzer.symbols)
-            edges.extend(analyzer.edges)
-            evidence.extend(analyzer.evidence)
-            claims.extend(analyzer.claims)
-            route_evidence.extend(analyzer.route_evidence)
-            endpoint_evidence.extend(analyzer.endpoint_evidence)
-            endpoint_literals.update(analyzer.endpoint_literals)
+            symbols.extend(outcome.symbols)
+            edges.extend(outcome.edges)
+            evidence.extend(outcome.evidence)
+            claims.extend(outcome.claims)
+            route_evidence.extend(outcome.route_evidence)
+            endpoint_evidence.extend(outcome.endpoint_evidence)
+            endpoint_literals.update(outcome.endpoint_literals)
             # The per-claim choke point re-files a test file's claims by
             # category, and cannot reach this one: the error contract is
             # aggregated across files and emitted once at the end, so a
@@ -3147,11 +3239,11 @@ class PythonAstAnalyzer:
             # passing the check that exists to stop exactly that. Skipping
             # test-role files here is the same rule applied where the claim
             # is actually built.
-            if str(file_record.role) != "test":
-                for family, receipts in analyzer.caught_family_evidence.items():
+            if not outcome.in_test:
+                for family, receipts in outcome.caught_family_evidence.items():
                     caught_families[family].extend(receipts)
-            route_auth_control_evidence.extend(analyzer.route_auth_control_evidence)
-            typed_route_evidence.extend(analyzer.typed_route_evidence)
+            route_auth_control_evidence.extend(outcome.route_auth_control_evidence)
+            typed_route_evidence.extend(outcome.typed_route_evidence)
             analyzed_files += 1
 
         for family, receipts in sorted(caught_families.items()):

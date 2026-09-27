@@ -9,6 +9,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Iterable
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,9 +22,16 @@ from open_skeleton.models import (
     CoverageRecord,
     EdgeRecord,
     EvidenceRecord,
+    FileRecord,
     Snapshot,
     SymbolRecord,
     utc_now,
+)
+from open_skeleton.parallel import (
+    CHUNKS_PER_WORKER,
+    chunk_by_weight,
+    gather_in_order,
+    submit_chunks,
 )
 from open_skeleton.policy import describes_the_product
 
@@ -1885,10 +1893,694 @@ def _state_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _read_typescript_files(
+    snapshot: Snapshot,
+    files: list[FileRecord],
+    context: tuple[str, dict[str, str]],
+) -> list[
+    tuple[
+        list[SymbolRecord],
+        list[EdgeRecord],
+        list[EvidenceRecord],
+        list[ClaimRecord],
+        list[str],
+        int,
+    ]
+]:
+    """Read each file in order and return everything it contributed.
+
+    Every claim this reader makes is about one file, so a run over a list of
+    files is the concatenation of runs over its consecutive parts. That is what
+    lets the files be shared across worker processes without changing a byte
+    of the result. Module names are passed in rather than derived from `files`,
+    because a name depends on every eligible path, not only these.
+    """
+
+    created_at, module_names = context
+    symbols: list[SymbolRecord] = []
+    edges: list[EdgeRecord] = []
+    evidence: list[EvidenceRecord] = []
+    claims: list[ClaimRecord] = []
+    failures: list[str] = []
+    source_lines_by_path: dict[str, list[str]] = {}
+    analyzed_files = 0
+
+    def add_evidence(
+        path: str,
+        start_line: int,
+        end_line: int,
+        symbol: str | None,
+        kind: str,
+        file_sha256: str,
+    ) -> EvidenceRecord:
+        evidence_id = stable_id(
+            "evidence",
+            (
+                snapshot.snapshot_id,
+                path,
+                start_line,
+                end_line,
+                symbol,
+                kind,
+                ANALYZER_VERSION,
+            ),
+        )
+        record = EvidenceRecord(
+            evidence_id=evidence_id,
+            snapshot_id=snapshot.snapshot_id,
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            symbol=symbol,
+            evidence_kind=kind,
+            excerpt_sha256=hashlib.sha256(
+                "".join(source_lines_by_path.get(path, [])[start_line - 1 : end_line]).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            if path in source_lines_by_path
+            else file_sha256,
+            analyzer=ANALYZER_VERSION,
+            created_at=created_at,
+        )
+        evidence.append(record)
+        return record
+
+    def add_claim(
+        text: str,
+        category: str,
+        importance: str,
+        supporting: list[str],
+        path: str,
+        *,
+        status: str = "verified",
+        confidence: float = 1.0,
+        alternatives: tuple[str, ...] = (),
+    ) -> None:
+        claims.append(
+            ClaimRecord(
+                claim_id=stable_id(
+                    "claim", (snapshot.snapshot_id, category, text, ANALYZER_VERSION)
+                ),
+                snapshot_id=snapshot.snapshot_id,
+                claim=text,
+                category=category,
+                status=status,
+                confidence=confidence,
+                importance=importance,
+                produced_by=ANALYZER_VERSION,
+                created_at=created_at,
+                verified_at=created_at if status == "verified" else None,
+                supporting_evidence=tuple(sorted(set(supporting))),
+                invalidation_keys=(f"file:{path}",),
+                alternative_hypotheses=alternatives,
+            )
+        )
+
+    for file_record in files:
+        source_path = snapshot.root / Path(file_record.path)
+        try:
+            payload = source_path.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != file_record.sha256:
+                raise ValueError("content changed after snapshot")
+            source = payload.decode("utf-8", errors="strict")
+            source_lines_by_path[file_record.path] = source.splitlines(keepends=True)
+            file_tokens = _tokens(source)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
+            continue
+
+        file_state_fields = _state_fields(file_tokens)
+        file_declarations = _declarations(file_tokens)
+        file_imports = _imported_names(file_tokens)
+        file_declares_tests = _imports_a_test_framework(file_imports)
+        file_aliases = _import_aliases(file_tokens)
+        file_servers = _server_receivers(file_tokens)
+        file_tunables = _tunables(file_tokens)
+        file_values = _value_constants(file_tokens)
+        file_unions = _literal_unions(file_tokens)
+        file_exports = _exported_names(file_tokens)
+        file_clients = {
+            name
+            for module_name, entry in file_imports.items()
+            if module_name in CLIENT_MODULES
+            for name in entry["names"]
+        }
+        file_served = _served_routes(file_tokens, file_servers)
+        file_origins = _external_origins(file_tokens)
+        file_name_index = _name_index(file_tokens)
+        file_shapes = declared_shapes(file_declarations)
+        file_state = _module_state(file_tokens, file_declarations)
+        file_env = _environment_reads(file_tokens)
+        file_throws = _throw_sites(file_tokens)
+        file_catches = _catch_handlers(file_tokens)
+        file_throw_messages = _throw_messages(file_tokens)
+        file_object_keys = _object_keys(
+            file_tokens,
+            frozenset(item.name.rsplit(".", 1)[-1] for item in file_declarations),
+        )
+        file_references = _references(
+            file_tokens,
+            frozenset(
+                {item.name.rsplit(".", 1)[-1] for item in file_declarations}
+                | _parameter_names(file_tokens)
+            ),
+        )
+        module = module_names[file_record.path]
+        module_id = stable_id(
+            "symbol",
+            (
+                snapshot.snapshot_id,
+                file_record.path,
+                module,
+                "module",
+                ANALYZER_VERSION,
+            ),
+        )
+        symbols.append(
+            SymbolRecord(
+                symbol_id=module_id,
+                snapshot_id=snapshot.snapshot_id,
+                path=file_record.path,
+                qualified_name=module,
+                kind="module",
+                start_line=1,
+                end_line=max(1, file_record.line_count),
+                language=file_record.language,
+                analyzer=ANALYZER_VERSION,
+                metadata={
+                    "analysis_level": "lexical",
+                    **({"state_fields": file_state_fields} if file_state_fields else {}),
+                    **({"external_references": file_references} if file_references else {}),
+                    **({"imported_names": file_imports} if file_imports else {}),
+                    **({"external_origins": file_origins} if file_origins else {}),
+                    **({"object_keys": file_object_keys} if file_object_keys else {}),
+                    **({"tunables": file_tunables} if file_tunables else {}),
+                    **({"string_constants": file_values} if file_values else {}),
+                    **({"collection_constants": file_unions} if file_unions else {}),
+                    **({"name_index": file_name_index} if file_name_index else {}),
+                    **({"model_fields": file_shapes} if file_shapes else {}),
+                },
+            )
+        )
+
+        fetch_evidence: list[str] = []
+        requested: list[tuple[str, bool, int, str]] = []
+        localhost_evidence: list[str] = []
+        hook_evidence: dict[str, list[str]] = {name: [] for name in REACT_HOOKS}
+        store_evidence: dict[str, list[str]] = {name: [] for name in CLIENT_STORES}
+        test_evidence: list[str] = []
+
+        for declaration in file_declarations:
+            qualified = f"{module}.{declaration.name}"
+            receipt = add_evidence(
+                file_record.path,
+                declaration.start_line,
+                declaration.end_line,
+                qualified,
+                "symbol",
+                file_record.sha256,
+            )
+            symbol_id = stable_id(
+                "symbol",
+                (
+                    snapshot.snapshot_id,
+                    file_record.path,
+                    qualified,
+                    declaration.kind,
+                    declaration.start_line,
+                    ANALYZER_VERSION,
+                ),
+            )
+            symbols.append(
+                SymbolRecord(
+                    symbol_id=symbol_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    path=file_record.path,
+                    qualified_name=qualified,
+                    kind=declaration.kind,
+                    start_line=declaration.start_line,
+                    end_line=declaration.end_line,
+                    language=file_record.language,
+                    analyzer=ANALYZER_VERSION,
+                    metadata={
+                        "analysis_level": "lexical",
+                        **({"state_fields": file_state_fields} if file_state_fields else {}),
+                    },
+                )
+            )
+            edges.append(
+                EdgeRecord(
+                    edge_id=stable_id(
+                        "edge",
+                        (
+                            snapshot.snapshot_id,
+                            module_id,
+                            "contains",
+                            qualified,
+                            receipt.evidence_id,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    source_symbol_id=module_id,
+                    source_path=file_record.path,
+                    relationship="contains",
+                    target_ref=qualified,
+                    target_symbol_id=symbol_id,
+                    evidence_id=receipt.evidence_id,
+                    analyzer=ANALYZER_VERSION,
+                )
+            )
+
+        for index, token in enumerate(file_tokens):
+            following = _next_token(file_tokens, index)
+            next_value = file_tokens[following].value if following is not None else None
+
+            if token.value == "import":
+                scan = index + 1
+                target: Token | None = None
+                while scan < len(file_tokens) and file_tokens[scan].line <= token.line + 10:
+                    if file_tokens[scan].kind == "string":
+                        target = file_tokens[scan]
+                        break
+                    if file_tokens[scan].value == ";":
+                        break
+                    scan += 1
+                if target:
+                    receipt = add_evidence(
+                        file_record.path,
+                        token.line,
+                        target.end_line,
+                        module,
+                        "import",
+                        file_record.sha256,
+                    )
+                    edges.append(
+                        EdgeRecord(
+                            edge_id=stable_id(
+                                "edge",
+                                (
+                                    snapshot.snapshot_id,
+                                    module_id,
+                                    "imports",
+                                    target.value,
+                                    receipt.evidence_id,
+                                    ANALYZER_VERSION,
+                                ),
+                            ),
+                            snapshot_id=snapshot.snapshot_id,
+                            source_symbol_id=module_id,
+                            source_path=file_record.path,
+                            relationship="imports",
+                            target_ref=target.value,
+                            target_symbol_id=None,
+                            evidence_id=receipt.evidence_id,
+                            analyzer=ANALYZER_VERSION,
+                        )
+                    )
+
+            if token.value == "fetch" and next_value == "(":
+                receipt = add_evidence(
+                    file_record.path,
+                    token.line,
+                    token.end_line,
+                    module,
+                    "http_client_call",
+                    file_record.sha256,
+                )
+                fetch_evidence.append(receipt.evidence_id)
+                # The call site was already counted. What was missing is
+                # *which* endpoint it calls, which is the half that lets a
+                # caller be joined to the route that serves it.
+                argument = file_tokens[index + 2] if index + 2 < len(file_tokens) else None
+                if argument is not None and argument.kind == "string":
+                    called, exact = _request_path(argument.value)
+                    if called.startswith(("/", "http://", "https://")):
+                        requested.append((called, exact, token.line, receipt.evidence_id))
+
+            # `axios.get("/x")` is the same shape as `app.get("/x")`, so the
+            # receiver decides again: a client module named in an import is
+            # an outbound call, a server factory is a route, and anything
+            # else is left alone.
+            if (
+                token.value in file_clients
+                and index + 4 < len(file_tokens)
+                and file_tokens[index + 1].value == "."
+                and file_tokens[index + 2].value in SERVER_METHOD_NAMES
+                and file_tokens[index + 3].value == "("
+                and file_tokens[index + 4].kind == "string"
+            ):
+                called, exact = _request_path(file_tokens[index + 4].value)
+                if called.startswith(("/", "http://", "https://")):
+                    receipt = add_evidence(
+                        file_record.path,
+                        token.line,
+                        token.end_line,
+                        module,
+                        "http_client_call",
+                        file_record.sha256,
+                    )
+                    requested.append((called, exact, token.line, receipt.evidence_id))
+                edges.append(
+                    EdgeRecord(
+                        edge_id=stable_id(
+                            "edge",
+                            (
+                                snapshot.snapshot_id,
+                                module_id,
+                                "calls",
+                                "fetch",
+                                receipt.evidence_id,
+                                ANALYZER_VERSION,
+                            ),
+                        ),
+                        snapshot_id=snapshot.snapshot_id,
+                        source_symbol_id=module_id,
+                        source_path=file_record.path,
+                        relationship="calls",
+                        target_ref="fetch",
+                        target_symbol_id=None,
+                        evidence_id=receipt.evidence_id,
+                        analyzer=ANALYZER_VERSION,
+                    )
+                )
+
+            if token.kind == "string" and "http://localhost:8000" in token.value:
+                receipt = add_evidence(
+                    file_record.path,
+                    token.line,
+                    token.end_line,
+                    module,
+                    "hardcoded_endpoint",
+                    file_record.sha256,
+                )
+                localhost_evidence.extend(
+                    [receipt.evidence_id] * token.value.count("http://localhost:8000")
+                )
+
+            hook_name = file_aliases.get(token.value, token.value)
+            if hook_name in REACT_HOOKS and _call_open_paren(file_tokens, index) is not None:
+                receipt = add_evidence(
+                    file_record.path,
+                    token.line,
+                    token.end_line,
+                    module,
+                    "react_hook_call",
+                    file_record.sha256,
+                )
+                hook_evidence[hook_name].append(receipt.evidence_id)
+
+            if token.value in CLIENT_STORES and next_value == ".":
+                receipt = add_evidence(
+                    file_record.path,
+                    token.line,
+                    token.end_line,
+                    module,
+                    "browser_storage_access",
+                    file_record.sha256,
+                )
+                store_evidence[token.value].append(receipt.evidence_id)
+
+            if (
+                (file_record.role == "test" or file_declares_tests)
+                and token.value in {"describe", "it", "test"}
+                and next_value == "("
+            ):
+                receipt = add_evidence(
+                    file_record.path,
+                    token.line,
+                    token.end_line,
+                    module,
+                    "test_declaration",
+                    file_record.sha256,
+                )
+                test_evidence.append(receipt.evidence_id)
+
+        # An export in a test or example is public to that harness, not a
+        # contract the analyzed product publishes. Symbols and import
+        # edges remain available for test tracing; only the product-
+        # surface claim is withheld.
+        if file_exports and describes_the_product(file_record.role):
+            surface = add_evidence(file_record.path, 1, 1, module, "public_api", file_record.sha256)
+            shown = ", ".join(sorted(file_exports)[:12])
+            add_claim(
+                f"{module} exports {len(file_exports)} name(s): {shown}"
+                f"{'...' if len(file_exports) > 12 else ''}. Renaming or removing one is a "
+                "breaking change for every importer.",
+                "public_api",
+                "high",
+                [surface.evidence_id],
+                file_record.path,
+            )
+
+        if fetch_evidence:
+            add_claim(
+                f"{file_record.path} contains {len(fetch_evidence)} fetch call sites.",
+                "http_client_inventory",
+                "high",
+                fetch_evidence,
+                file_record.path,
+            )
+
+        for method, served_path, served_line in file_served:
+            mounted = method == "MOUNT"
+            served_receipt = add_evidence(
+                file_record.path,
+                served_line,
+                served_line,
+                module,
+                "route_mount" if mounted else "http_route",
+                file_record.sha256,
+            )
+            add_claim(
+                f"{served_path} mounts a sub-router in {module}, so paths it contains are "
+                "served beneath this prefix."
+                if mounted
+                else f"{method} {served_path} is registered as a route in {module}.",
+                "route_mount" if mounted else "http_route",
+                "medium" if mounted else "high",
+                [served_receipt.evidence_id],
+                file_record.path,
+            )
+
+        next_path = _next_route_path(file_record.path)
+        if next_path:
+            convention_receipt = add_evidence(
+                file_record.path, 1, 1, module, "http_route", file_record.sha256
+            )
+            add_claim(
+                f"{next_path} is served by file convention: this module's location under an "
+                "api directory is what registers it, so no call site declares it.",
+                "http_route",
+                "high",
+                [convention_receipt.evidence_id],
+                file_record.path,
+            )
+
+        # One claim per distinct endpoint, not per call site: the same path
+        # requested from three components is one edge of the system, and
+        # three claims saying so would inflate the count without adding a
+        # fact.
+        by_path: dict[tuple[str, bool], list[str]] = {}
+        for called, exact, _line, evidence_id in requested:
+            by_path.setdefault((called, exact), []).append(evidence_id)
+        for (called, exact), receipts in sorted(by_path.items()):
+            shape = (
+                f"{called} is requested by {module}"
+                if exact
+                else f"{called} begins a request path built by {module}, whose remaining "
+                "segments are interpolated at run time"
+            )
+            add_claim(
+                f"{shape}; the server side of this call is whichever route matches it.",
+                "http_client_route" if exact else "http_client_route_prefix",
+                "high" if exact else "medium",
+                receipts,
+                file_record.path,
+            )
+
+        for state_name, state_line in file_state:
+            state_receipt = add_evidence(
+                file_record.path,
+                state_line,
+                state_line,
+                f"{module}.{state_name}",
+                "process_local_state",
+                file_record.sha256,
+            )
+            add_claim(
+                (
+                    f"{module}.{state_name} is a module-scope container written to while "
+                    "the process runs; its contents are process-local, so a second "
+                    "instance of this program observes none of them."
+                ),
+                "process_local_state",
+                "high",
+                [state_receipt.evidence_id],
+                file_record.path,
+            )
+
+        for setting, setting_line in sorted(file_env.items(), key=lambda pair: pair[1]):
+            env_receipt = add_evidence(
+                file_record.path,
+                setting_line,
+                setting_line,
+                module,
+                "environment_setting",
+                file_record.sha256,
+            )
+            add_claim(
+                f"{module} reads environment setting {setting}.",
+                # `configuration_read` rather than a name only this
+                # analyzer used: the same read in Python and Rust files
+                # under a different category made a Node repository's
+                # configuration invisible to any section probing one name.
+                "configuration_read",
+                "medium",
+                [env_receipt.evidence_id],
+                file_record.path,
+            )
+
+        if file_throws:
+            thrown = ", ".join(
+                (
+                    f"{name} ({_quote_message(file_throw_messages[name])})"
+                    if name in file_throw_messages
+                    else name
+                )
+                for name in sorted(file_throws)
+            )
+            throw_receipt = add_evidence(
+                file_record.path,
+                min(file_throws.values()),
+                min(file_throws.values()),
+                module,
+                "failure_surface",
+                file_record.sha256,
+            )
+            add_claim(
+                (
+                    f"{module} throws {len(file_throws)} distinct type(s): {thrown}. "
+                    "A caller that does not catch them sees them propagate."
+                ),
+                "failure_surface",
+                "medium",
+                [throw_receipt.evidence_id],
+                file_record.path,
+            )
+        if file_catches:
+            rethrowing = [item for item in file_catches if item.rethrows]
+            empty = [item for item in file_catches if item.empty]
+            catch_receipt = add_evidence(
+                file_record.path,
+                file_catches[0].line,
+                file_catches[-1].line,
+                module,
+                "caught_exception",
+                file_record.sha256,
+            )
+            # "Empty body" is checkable and would be wrong: every one of
+            # these in the corpus holds an explanatory comment. What is
+            # true either way is that no statement runs, so the failure is
+            # discarded -- a note about why does not change the behaviour.
+            absorbed = (
+                f" {len(empty):,} of them run no statement at all, discarding the "
+                "failure so execution continues as though the call had succeeded; "
+                "a comment explaining why does not change that."
+                if empty
+                else ""
+            )
+            add_claim(
+                (
+                    f"{module} catches failure in {len(file_catches):,} place(s), "
+                    f"{len(rethrowing):,} of which rethrow. What a program catches "
+                    "is where it decided a fault is survivable."
+                    f"{absorbed}"
+                ),
+                "caught_exception",
+                "high" if empty else "medium",
+                [catch_receipt.evidence_id],
+                file_record.path,
+            )
+        if localhost_evidence:
+            add_claim(
+                (
+                    f"{file_record.path} contains {len(localhost_evidence)} string-literal "
+                    "references to http://localhost:8000."
+                ),
+                "hardcoded_endpoint",
+                "high",
+                localhost_evidence,
+                file_record.path,
+            )
+        for hook, receipts in hook_evidence.items():
+            if receipts:
+                add_claim(
+                    f"{file_record.path} calls React hook {hook} {len(receipts)} times.",
+                    "ui_state",
+                    "medium",
+                    receipts,
+                    file_record.path,
+                )
+        for store, receipts in store_evidence.items():
+            if receipts:
+                add_claim(
+                    f"{file_record.path} accesses {store} at {len(receipts)} call sites.",
+                    "browser_storage",
+                    "medium",
+                    receipts,
+                    file_record.path,
+                )
+        if test_evidence:
+            add_claim(
+                f"{file_record.path} declares {len(test_evidence)} JavaScript test blocks.",
+                "testing",
+                "medium",
+                test_evidence,
+                file_record.path,
+            )
+
+        # Call edges. Without these the graph has nodes and no traversal,
+        # and capability tracing -- which follows calls out of test and
+        # harness files -- returns nothing for every JavaScript and
+        # TypeScript repository regardless of how well tested it is.
+        for callee, line_number in _call_sites(file_tokens):
+            edges.append(
+                EdgeRecord(
+                    edge_id=stable_id(
+                        "edge",
+                        (
+                            snapshot.snapshot_id,
+                            module_id,
+                            "calls",
+                            callee,
+                            line_number,
+                            ANALYZER_VERSION,
+                        ),
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    source_symbol_id=module_id,
+                    source_path=file_record.path,
+                    relationship="calls",
+                    target_ref=callee,
+                    target_symbol_id=None,
+                    evidence_id=None,
+                    analyzer=ANALYZER_VERSION,
+                )
+            )
+        analyzed_files += 1
+    return [(symbols, edges, evidence, claims, failures, analyzed_files)]
+
+
 class TypeScriptLexicalAnalyzer:
     name = ANALYZER_NAME
     version = ANALYZER_VERSION
     eligibility = "language"
+
+    def __init__(self, executor: Executor | None = None, workers: int = 1) -> None:
+        self.executor = executor
+        self.workers = max(1, workers)
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
@@ -1898,658 +2590,35 @@ class TypeScriptLexicalAnalyzer:
         evidence: list[EvidenceRecord] = []
         claims: list[ClaimRecord] = []
         failures: list[str] = []
-        source_lines_by_path: dict[str, list[str]] = {}
         eligible = [item for item in snapshot.files if item.language in ELIGIBLE_LANGUAGES]
         module_names = _module_names(item.path for item in eligible)
         analyzed_files = 0
 
-        def add_evidence(
-            path: str,
-            start_line: int,
-            end_line: int,
-            symbol: str | None,
-            kind: str,
-            file_sha256: str,
-        ) -> EvidenceRecord:
-            evidence_id = stable_id(
-                "evidence",
-                (
-                    snapshot.snapshot_id,
-                    path,
-                    start_line,
-                    end_line,
-                    symbol,
-                    kind,
-                    ANALYZER_VERSION,
-                ),
+        context = (created_at, module_names)
+        if self.executor is not None and len(eligible) > 1:
+            chunks = chunk_by_weight(
+                eligible,
+                [item.size_bytes for item in eligible],
+                CHUNKS_PER_WORKER * self.workers,
             )
-            record = EvidenceRecord(
-                evidence_id=evidence_id,
-                snapshot_id=snapshot.snapshot_id,
-                path=path,
-                start_line=start_line,
-                end_line=end_line,
-                symbol=symbol,
-                evidence_kind=kind,
-                excerpt_sha256=hashlib.sha256(
-                    "".join(source_lines_by_path.get(path, [])[start_line - 1 : end_line]).encode(
-                        "utf-8"
-                    )
-                ).hexdigest()
-                if path in source_lines_by_path
-                else file_sha256,
-                analyzer=ANALYZER_VERSION,
-                created_at=created_at,
-            )
-            evidence.append(record)
-            return record
-
-        def add_claim(
-            text: str,
-            category: str,
-            importance: str,
-            supporting: list[str],
-            path: str,
-            *,
-            status: str = "verified",
-            confidence: float = 1.0,
-            alternatives: tuple[str, ...] = (),
-        ) -> None:
-            claims.append(
-                ClaimRecord(
-                    claim_id=stable_id(
-                        "claim", (snapshot.snapshot_id, category, text, ANALYZER_VERSION)
-                    ),
-                    snapshot_id=snapshot.snapshot_id,
-                    claim=text,
-                    category=category,
-                    status=status,
-                    confidence=confidence,
-                    importance=importance,
-                    produced_by=ANALYZER_VERSION,
-                    created_at=created_at,
-                    verified_at=created_at if status == "verified" else None,
-                    supporting_evidence=tuple(sorted(set(supporting))),
-                    invalidation_keys=(f"file:{path}",),
-                    alternative_hypotheses=alternatives,
-                )
-            )
-
-        for file_record in eligible:
-            source_path = snapshot.root / Path(file_record.path)
-            try:
-                payload = source_path.read_bytes()
-                if hashlib.sha256(payload).hexdigest() != file_record.sha256:
-                    raise ValueError("content changed after snapshot")
-                source = payload.decode("utf-8", errors="strict")
-                source_lines_by_path[file_record.path] = source.splitlines(keepends=True)
-                file_tokens = _tokens(source)
-            except (OSError, UnicodeDecodeError, ValueError) as exc:
-                failures.append(f"{file_record.path}: {exc.__class__.__name__}: {exc}")
-                continue
-
-            file_state_fields = _state_fields(file_tokens)
-            file_declarations = _declarations(file_tokens)
-            file_imports = _imported_names(file_tokens)
-            file_declares_tests = _imports_a_test_framework(file_imports)
-            file_aliases = _import_aliases(file_tokens)
-            file_servers = _server_receivers(file_tokens)
-            file_tunables = _tunables(file_tokens)
-            file_values = _value_constants(file_tokens)
-            file_unions = _literal_unions(file_tokens)
-            file_exports = _exported_names(file_tokens)
-            file_clients = {
-                name
-                for module_name, entry in file_imports.items()
-                if module_name in CLIENT_MODULES
-                for name in entry["names"]
-            }
-            file_served = _served_routes(file_tokens, file_servers)
-            file_origins = _external_origins(file_tokens)
-            file_name_index = _name_index(file_tokens)
-            file_shapes = declared_shapes(file_declarations)
-            file_state = _module_state(file_tokens, file_declarations)
-            file_env = _environment_reads(file_tokens)
-            file_throws = _throw_sites(file_tokens)
-            file_catches = _catch_handlers(file_tokens)
-            file_throw_messages = _throw_messages(file_tokens)
-            file_object_keys = _object_keys(
-                file_tokens,
-                frozenset(item.name.rsplit(".", 1)[-1] for item in file_declarations),
-            )
-            file_references = _references(
-                file_tokens,
-                frozenset(
-                    {item.name.rsplit(".", 1)[-1] for item in file_declarations}
-                    | _parameter_names(file_tokens)
-                ),
-            )
-            module = module_names[file_record.path]
-            module_id = stable_id(
-                "symbol",
-                (
-                    snapshot.snapshot_id,
-                    file_record.path,
-                    module,
-                    "module",
-                    ANALYZER_VERSION,
-                ),
-            )
-            symbols.append(
-                SymbolRecord(
-                    symbol_id=module_id,
-                    snapshot_id=snapshot.snapshot_id,
-                    path=file_record.path,
-                    qualified_name=module,
-                    kind="module",
-                    start_line=1,
-                    end_line=max(1, file_record.line_count),
-                    language=file_record.language,
-                    analyzer=ANALYZER_VERSION,
-                    metadata={
-                        "analysis_level": "lexical",
-                        **({"state_fields": file_state_fields} if file_state_fields else {}),
-                        **({"external_references": file_references} if file_references else {}),
-                        **({"imported_names": file_imports} if file_imports else {}),
-                        **({"external_origins": file_origins} if file_origins else {}),
-                        **({"object_keys": file_object_keys} if file_object_keys else {}),
-                        **({"tunables": file_tunables} if file_tunables else {}),
-                        **({"string_constants": file_values} if file_values else {}),
-                        **({"collection_constants": file_unions} if file_unions else {}),
-                        **({"name_index": file_name_index} if file_name_index else {}),
-                        **({"model_fields": file_shapes} if file_shapes else {}),
-                    },
-                )
-            )
-
-            fetch_evidence: list[str] = []
-            requested: list[tuple[str, bool, int, str]] = []
-            localhost_evidence: list[str] = []
-            hook_evidence: dict[str, list[str]] = {name: [] for name in REACT_HOOKS}
-            store_evidence: dict[str, list[str]] = {name: [] for name in CLIENT_STORES}
-            test_evidence: list[str] = []
-
-            for declaration in file_declarations:
-                qualified = f"{module}.{declaration.name}"
-                receipt = add_evidence(
-                    file_record.path,
-                    declaration.start_line,
-                    declaration.end_line,
-                    qualified,
-                    "symbol",
-                    file_record.sha256,
-                )
-                symbol_id = stable_id(
-                    "symbol",
-                    (
-                        snapshot.snapshot_id,
-                        file_record.path,
-                        qualified,
-                        declaration.kind,
-                        declaration.start_line,
-                        ANALYZER_VERSION,
-                    ),
-                )
-                symbols.append(
-                    SymbolRecord(
-                        symbol_id=symbol_id,
-                        snapshot_id=snapshot.snapshot_id,
-                        path=file_record.path,
-                        qualified_name=qualified,
-                        kind=declaration.kind,
-                        start_line=declaration.start_line,
-                        end_line=declaration.end_line,
-                        language=file_record.language,
-                        analyzer=ANALYZER_VERSION,
-                        metadata={
-                            "analysis_level": "lexical",
-                            **({"state_fields": file_state_fields} if file_state_fields else {}),
-                        },
-                    )
-                )
-                edges.append(
-                    EdgeRecord(
-                        edge_id=stable_id(
-                            "edge",
-                            (
-                                snapshot.snapshot_id,
-                                module_id,
-                                "contains",
-                                qualified,
-                                receipt.evidence_id,
-                                ANALYZER_VERSION,
-                            ),
-                        ),
-                        snapshot_id=snapshot.snapshot_id,
-                        source_symbol_id=module_id,
-                        source_path=file_record.path,
-                        relationship="contains",
-                        target_ref=qualified,
-                        target_symbol_id=symbol_id,
-                        evidence_id=receipt.evidence_id,
-                        analyzer=ANALYZER_VERSION,
-                    )
-                )
-
-            for index, token in enumerate(file_tokens):
-                following = _next_token(file_tokens, index)
-                next_value = file_tokens[following].value if following is not None else None
-
-                if token.value == "import":
-                    scan = index + 1
-                    target: Token | None = None
-                    while scan < len(file_tokens) and file_tokens[scan].line <= token.line + 10:
-                        if file_tokens[scan].kind == "string":
-                            target = file_tokens[scan]
-                            break
-                        if file_tokens[scan].value == ";":
-                            break
-                        scan += 1
-                    if target:
-                        receipt = add_evidence(
-                            file_record.path,
-                            token.line,
-                            target.end_line,
-                            module,
-                            "import",
-                            file_record.sha256,
-                        )
-                        edges.append(
-                            EdgeRecord(
-                                edge_id=stable_id(
-                                    "edge",
-                                    (
-                                        snapshot.snapshot_id,
-                                        module_id,
-                                        "imports",
-                                        target.value,
-                                        receipt.evidence_id,
-                                        ANALYZER_VERSION,
-                                    ),
-                                ),
-                                snapshot_id=snapshot.snapshot_id,
-                                source_symbol_id=module_id,
-                                source_path=file_record.path,
-                                relationship="imports",
-                                target_ref=target.value,
-                                target_symbol_id=None,
-                                evidence_id=receipt.evidence_id,
-                                analyzer=ANALYZER_VERSION,
-                            )
-                        )
-
-                if token.value == "fetch" and next_value == "(":
-                    receipt = add_evidence(
-                        file_record.path,
-                        token.line,
-                        token.end_line,
-                        module,
-                        "http_client_call",
-                        file_record.sha256,
-                    )
-                    fetch_evidence.append(receipt.evidence_id)
-                    # The call site was already counted. What was missing is
-                    # *which* endpoint it calls, which is the half that lets a
-                    # caller be joined to the route that serves it.
-                    argument = file_tokens[index + 2] if index + 2 < len(file_tokens) else None
-                    if argument is not None and argument.kind == "string":
-                        called, exact = _request_path(argument.value)
-                        if called.startswith(("/", "http://", "https://")):
-                            requested.append((called, exact, token.line, receipt.evidence_id))
-
-                # `axios.get("/x")` is the same shape as `app.get("/x")`, so the
-                # receiver decides again: a client module named in an import is
-                # an outbound call, a server factory is a route, and anything
-                # else is left alone.
-                if (
-                    token.value in file_clients
-                    and index + 4 < len(file_tokens)
-                    and file_tokens[index + 1].value == "."
-                    and file_tokens[index + 2].value in SERVER_METHOD_NAMES
-                    and file_tokens[index + 3].value == "("
-                    and file_tokens[index + 4].kind == "string"
-                ):
-                    called, exact = _request_path(file_tokens[index + 4].value)
-                    if called.startswith(("/", "http://", "https://")):
-                        receipt = add_evidence(
-                            file_record.path,
-                            token.line,
-                            token.end_line,
-                            module,
-                            "http_client_call",
-                            file_record.sha256,
-                        )
-                        requested.append((called, exact, token.line, receipt.evidence_id))
-                    edges.append(
-                        EdgeRecord(
-                            edge_id=stable_id(
-                                "edge",
-                                (
-                                    snapshot.snapshot_id,
-                                    module_id,
-                                    "calls",
-                                    "fetch",
-                                    receipt.evidence_id,
-                                    ANALYZER_VERSION,
-                                ),
-                            ),
-                            snapshot_id=snapshot.snapshot_id,
-                            source_symbol_id=module_id,
-                            source_path=file_record.path,
-                            relationship="calls",
-                            target_ref="fetch",
-                            target_symbol_id=None,
-                            evidence_id=receipt.evidence_id,
-                            analyzer=ANALYZER_VERSION,
-                        )
-                    )
-
-                if token.kind == "string" and "http://localhost:8000" in token.value:
-                    receipt = add_evidence(
-                        file_record.path,
-                        token.line,
-                        token.end_line,
-                        module,
-                        "hardcoded_endpoint",
-                        file_record.sha256,
-                    )
-                    localhost_evidence.extend(
-                        [receipt.evidence_id] * token.value.count("http://localhost:8000")
-                    )
-
-                hook_name = file_aliases.get(token.value, token.value)
-                if hook_name in REACT_HOOKS and _call_open_paren(file_tokens, index) is not None:
-                    receipt = add_evidence(
-                        file_record.path,
-                        token.line,
-                        token.end_line,
-                        module,
-                        "react_hook_call",
-                        file_record.sha256,
-                    )
-                    hook_evidence[hook_name].append(receipt.evidence_id)
-
-                if token.value in CLIENT_STORES and next_value == ".":
-                    receipt = add_evidence(
-                        file_record.path,
-                        token.line,
-                        token.end_line,
-                        module,
-                        "browser_storage_access",
-                        file_record.sha256,
-                    )
-                    store_evidence[token.value].append(receipt.evidence_id)
-
-                if (
-                    (file_record.role == "test" or file_declares_tests)
-                    and token.value in {"describe", "it", "test"}
-                    and next_value == "("
-                ):
-                    receipt = add_evidence(
-                        file_record.path,
-                        token.line,
-                        token.end_line,
-                        module,
-                        "test_declaration",
-                        file_record.sha256,
-                    )
-                    test_evidence.append(receipt.evidence_id)
-
-            # An export in a test or example is public to that harness, not a
-            # contract the analyzed product publishes. Symbols and import
-            # edges remain available for test tracing; only the product-
-            # surface claim is withheld.
-            if file_exports and describes_the_product(file_record.role):
-                surface = add_evidence(
-                    file_record.path, 1, 1, module, "public_api", file_record.sha256
-                )
-                shown = ", ".join(sorted(file_exports)[:12])
-                add_claim(
-                    f"{module} exports {len(file_exports)} name(s): {shown}"
-                    f"{'...' if len(file_exports) > 12 else ''}. Renaming or removing one is a "
-                    "breaking change for every importer.",
-                    "public_api",
-                    "high",
-                    [surface.evidence_id],
-                    file_record.path,
-                )
-
-            if fetch_evidence:
-                add_claim(
-                    f"{file_record.path} contains {len(fetch_evidence)} fetch call sites.",
-                    "http_client_inventory",
-                    "high",
-                    fetch_evidence,
-                    file_record.path,
-                )
-
-            for method, served_path, served_line in file_served:
-                mounted = method == "MOUNT"
-                served_receipt = add_evidence(
-                    file_record.path,
-                    served_line,
-                    served_line,
-                    module,
-                    "route_mount" if mounted else "http_route",
-                    file_record.sha256,
-                )
-                add_claim(
-                    f"{served_path} mounts a sub-router in {module}, so paths it contains are "
-                    "served beneath this prefix."
-                    if mounted
-                    else f"{method} {served_path} is registered as a route in {module}.",
-                    "route_mount" if mounted else "http_route",
-                    "medium" if mounted else "high",
-                    [served_receipt.evidence_id],
-                    file_record.path,
-                )
-
-            next_path = _next_route_path(file_record.path)
-            if next_path:
-                convention_receipt = add_evidence(
-                    file_record.path, 1, 1, module, "http_route", file_record.sha256
-                )
-                add_claim(
-                    f"{next_path} is served by file convention: this module's location under an "
-                    "api directory is what registers it, so no call site declares it.",
-                    "http_route",
-                    "high",
-                    [convention_receipt.evidence_id],
-                    file_record.path,
-                )
-
-            # One claim per distinct endpoint, not per call site: the same path
-            # requested from three components is one edge of the system, and
-            # three claims saying so would inflate the count without adding a
-            # fact.
-            by_path: dict[tuple[str, bool], list[str]] = {}
-            for called, exact, _line, evidence_id in requested:
-                by_path.setdefault((called, exact), []).append(evidence_id)
-            for (called, exact), receipts in sorted(by_path.items()):
-                shape = (
-                    f"{called} is requested by {module}"
-                    if exact
-                    else f"{called} begins a request path built by {module}, whose remaining "
-                    "segments are interpolated at run time"
-                )
-                add_claim(
-                    f"{shape}; the server side of this call is whichever route matches it.",
-                    "http_client_route" if exact else "http_client_route_prefix",
-                    "high" if exact else "medium",
-                    receipts,
-                    file_record.path,
-                )
-
-            for state_name, state_line in file_state:
-                state_receipt = add_evidence(
-                    file_record.path,
-                    state_line,
-                    state_line,
-                    f"{module}.{state_name}",
-                    "process_local_state",
-                    file_record.sha256,
-                )
-                add_claim(
-                    (
-                        f"{module}.{state_name} is a module-scope container written to while "
-                        "the process runs; its contents are process-local, so a second "
-                        "instance of this program observes none of them."
-                    ),
-                    "process_local_state",
-                    "high",
-                    [state_receipt.evidence_id],
-                    file_record.path,
-                )
-
-            for setting, setting_line in sorted(file_env.items(), key=lambda pair: pair[1]):
-                env_receipt = add_evidence(
-                    file_record.path,
-                    setting_line,
-                    setting_line,
-                    module,
-                    "environment_setting",
-                    file_record.sha256,
-                )
-                add_claim(
-                    f"{module} reads environment setting {setting}.",
-                    # `configuration_read` rather than a name only this
-                    # analyzer used: the same read in Python and Rust files
-                    # under a different category made a Node repository's
-                    # configuration invisible to any section probing one name.
-                    "configuration_read",
-                    "medium",
-                    [env_receipt.evidence_id],
-                    file_record.path,
-                )
-
-            if file_throws:
-                thrown = ", ".join(
-                    (
-                        f"{name} ({_quote_message(file_throw_messages[name])})"
-                        if name in file_throw_messages
-                        else name
-                    )
-                    for name in sorted(file_throws)
-                )
-                throw_receipt = add_evidence(
-                    file_record.path,
-                    min(file_throws.values()),
-                    min(file_throws.values()),
-                    module,
-                    "failure_surface",
-                    file_record.sha256,
-                )
-                add_claim(
-                    (
-                        f"{module} throws {len(file_throws)} distinct type(s): {thrown}. "
-                        "A caller that does not catch them sees them propagate."
-                    ),
-                    "failure_surface",
-                    "medium",
-                    [throw_receipt.evidence_id],
-                    file_record.path,
-                )
-            if file_catches:
-                rethrowing = [item for item in file_catches if item.rethrows]
-                empty = [item for item in file_catches if item.empty]
-                catch_receipt = add_evidence(
-                    file_record.path,
-                    file_catches[0].line,
-                    file_catches[-1].line,
-                    module,
-                    "caught_exception",
-                    file_record.sha256,
-                )
-                # "Empty body" is checkable and would be wrong: every one of
-                # these in the corpus holds an explanatory comment. What is
-                # true either way is that no statement runs, so the failure is
-                # discarded -- a note about why does not change the behaviour.
-                absorbed = (
-                    f" {len(empty):,} of them run no statement at all, discarding the "
-                    "failure so execution continues as though the call had succeeded; "
-                    "a comment explaining why does not change that."
-                    if empty
-                    else ""
-                )
-                add_claim(
-                    (
-                        f"{module} catches failure in {len(file_catches):,} place(s), "
-                        f"{len(rethrowing):,} of which rethrow. What a program catches "
-                        "is where it decided a fault is survivable."
-                        f"{absorbed}"
-                    ),
-                    "caught_exception",
-                    "high" if empty else "medium",
-                    [catch_receipt.evidence_id],
-                    file_record.path,
-                )
-            if localhost_evidence:
-                add_claim(
-                    (
-                        f"{file_record.path} contains {len(localhost_evidence)} string-literal "
-                        "references to http://localhost:8000."
-                    ),
-                    "hardcoded_endpoint",
-                    "high",
-                    localhost_evidence,
-                    file_record.path,
-                )
-            for hook, receipts in hook_evidence.items():
-                if receipts:
-                    add_claim(
-                        f"{file_record.path} calls React hook {hook} {len(receipts)} times.",
-                        "ui_state",
-                        "medium",
-                        receipts,
-                        file_record.path,
-                    )
-            for store, receipts in store_evidence.items():
-                if receipts:
-                    add_claim(
-                        f"{file_record.path} accesses {store} at {len(receipts)} call sites.",
-                        "browser_storage",
-                        "medium",
-                        receipts,
-                        file_record.path,
-                    )
-            if test_evidence:
-                add_claim(
-                    f"{file_record.path} declares {len(test_evidence)} JavaScript test blocks.",
-                    "testing",
-                    "medium",
-                    test_evidence,
-                    file_record.path,
-                )
-
-            # Call edges. Without these the graph has nodes and no traversal,
-            # and capability tracing -- which follows calls out of test and
-            # harness files -- returns nothing for every JavaScript and
-            # TypeScript repository regardless of how well tested it is.
-            for callee, line_number in _call_sites(file_tokens):
-                edges.append(
-                    EdgeRecord(
-                        edge_id=stable_id(
-                            "edge",
-                            (
-                                snapshot.snapshot_id,
-                                module_id,
-                                "calls",
-                                callee,
-                                line_number,
-                                ANALYZER_VERSION,
-                            ),
-                        ),
-                        snapshot_id=snapshot.snapshot_id,
-                        source_symbol_id=module_id,
-                        source_path=file_record.path,
-                        relationship="calls",
-                        target_ref=callee,
-                        target_symbol_id=None,
-                        evidence_id=None,
-                        analyzer=ANALYZER_VERSION,
-                    )
-                )
-            analyzed_files += 1
+            futures = submit_chunks(self.executor, _read_typescript_files, chunks, context)
+            parts = gather_in_order(snapshot, futures, chunks, _read_typescript_files, context)
+        else:
+            parts = _read_typescript_files(snapshot, eligible, context)
+        for (
+            part_symbols,
+            part_edges,
+            part_evidence,
+            part_claims,
+            part_failures,
+            part_count,
+        ) in parts:
+            symbols.extend(part_symbols)
+            edges.extend(part_edges)
+            evidence.extend(part_evidence)
+            claims.extend(part_claims)
+            failures.extend(part_failures)
+            analyzed_files += part_count
 
         coverage = CoverageRecord(
             analyzer=ANALYZER_VERSION,

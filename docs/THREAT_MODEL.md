@@ -26,6 +26,9 @@
 - exclude VCS internals, dependencies, builds, analyzer state, common credentials, keys, binaries, and oversized files before content ingestion
 - reject non-UTF-8 text and record permission/read failures
 - never execute target files, package managers, compilers, tests, or hooks
+- start analysis workers with `spawn` only, so each runs this engine's own
+  imported code and nothing inherited; a worker reads the same bounded,
+  hash-verified files a serial run reads, and never starts workers of its own
 - never contact the network during deterministic analysis
 - use parameterized SQL, foreign keys, transactions, WAL, immutable receipt hashes, and snapshot IDs
 - verify the current whole-file and excerpt hash before returning source text
@@ -40,7 +43,8 @@
 ## Residual risks
 
 - filename-based secret exclusions are not a complete secret scanner
-- a very large number of individually allowed files can consume time and memory
+- a very large number of individually allowed files can consume time and memory;
+  parallel analysis multiplies peak memory by up to the worker count
 - static analysis can miss reflection, dynamic imports, generated code, proxy controls, and runtime configuration
 - inferred framework behavior can differ by installed version or middleware
 - the explicit local-command provider executes an arbitrary user-selected command

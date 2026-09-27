@@ -35,7 +35,9 @@ class OpenSkeletonService:
         state_dir: Path | None = None,
         *,
         hum_index: Sequence[Path] | Path | None = None,
+        jobs: int | None = 1,
     ) -> None:
+        self.jobs = jobs
         self.root = root.expanduser().resolve(strict=True)
         if not self.root.is_dir():
             raise ValueError(f"Repository root is not a directory: {self.root}")
@@ -211,7 +213,7 @@ class OpenSkeletonService:
         previous_history = self.ledger.snapshots_for_root(self.root, limit=1)
         previous = str(previous_history[0]["snapshot_id"]) if previous_history else None
         snapshot = scan_repository(self.root)
-        result = analyze_snapshot(snapshot, hum_index=self.hum_index)
+        result = analyze_snapshot(snapshot, hum_index=self.hum_index, jobs=self.jobs)
         self.ledger.save_snapshot(snapshot)
         run_id = self.ledger.save_analysis(result)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -288,9 +290,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("root", nargs="?", default=".")
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--hum-index", type=Path)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=0,
+        help="Worker processes for refresh_analysis; 0 (default) uses one per core, 1 is serial.",
+    )
     args = parser.parse_args(argv)
     service = OpenSkeletonService(
-        Path(args.root), state_dir=args.state_dir, hum_index=args.hum_index
+        Path(args.root), state_dir=args.state_dir, hum_index=args.hum_index, jobs=args.jobs
     )
     create_mcp_server(service).run()
 

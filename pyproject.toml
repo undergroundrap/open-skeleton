@@ -103,6 +103,11 @@ ignore = [
   "PERF401",
 ]
 
+[tool.ruff.lint.pep8-naming]
+# `visit_ClassDef` is the name `ast.NodeVisitor` dispatches on. Ruff exempts it
+# only for direct subclasses, and the readers subclass `FastNodeVisitor`.
+extend-ignore-names = ["visit_*"]
+
 [tool.ruff.lint.per-file-ignores]
 "src/open_skeleton/cli.py" = ["T201"]
 # Query builders interpolate clause fragments drawn from a closed set of column
