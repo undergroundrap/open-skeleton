@@ -6,6 +6,18 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Added
 
+- parallel analysis: `--jobs` on `analyze`, `benchmark`, the MCP server and the
+  turn gate, and `OPEN_SKELETON_JOBS`. Python, TypeScript and Rust files are
+  read across worker processes and merged in file order, so the ledger and the
+  exports are byte-identical at every worker count. The command line, MCP server
+  and turn gate default to one worker per core (up to eight) above 1.5 MB of
+  source; the library and the benchmark stay serial unless asked
+- `benchmarks/scaling/run_corpus.py`: per-stage end-to-end timings on real
+  repositories at several worker counts, in fresh processes, failing if any
+  worker count changes a ledger or export fingerprint
+- `docs/LANDSCAPE.md`: where this engine stands against retrieval engines,
+  language-server tools, code graphs, generated documentation and static
+  analysis, including where it is behind
 - Python standard-library HTTP route recovery from literal `do_GET`/`do_POST`
   dispatch, cross-output verdict reconciliation, and text-qualified consequence rules
   that join only the mutating route claims relevant to a trust-boundary finding
@@ -137,6 +149,11 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Changed
 
+- the Python reader walks trees with `FastNodeVisitor` and an order-identical
+  `walk`, held to node-for-node identity with the standard library
+- JSONL analysis export no longer deep-copies every record and reuses one
+  encoder; output bytes are unchanged
+- Django end to end: 101 s before, 65 s serial, 37 s with four workers
 - the Python reader walks each module once and shares the walk across its
   seventeen whole-module extractors, and identifiers are hashed in one call;
   analysis of this repository fell from 6.7s to 4.2s with byte-identical
@@ -160,6 +177,13 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Fixed
 
+- re-saving an analysis whose identifiers already exist -- re-analysing an
+  unchanged repository -- used `INSERT OR REPLACE`, whose deletes fired an
+  unindexed foreign-key cascade per row (404 s on clap against 1.3 s for the
+  first save) and stripped receipts from earlier claims citing the same
+  evidence. Evidence, symbols and edges are now upserted
+- the orphan-module census compared every module with every import edge; it
+  took 18 s of a Django run and now takes under 0.1 s, with identical claims
 - read-only benchmark and comparison Git receipts now trust only the exact selected
   fixture for each command, allowing desktop and sandbox users to verify the same
   checkout without changing global Git configuration

@@ -50,6 +50,7 @@ Open Skeleton stores those answers as queryable data. Concise Markdown, a local 
 - Read/query/analyze MCP service using the official Python SDK as an optional extra
 - Explicit, disableable Codex CLI, Claude Code, and local-command synthesis adapters behind one JSON contract
 - Machine-readable, pinned comparative benchmarks with source-receipt validation
+- Parallel per-file reading across worker processes, byte-identical to a serial run at every worker count, with a serial fallback if workers cannot start
 
 ## Quick start
 
@@ -77,6 +78,13 @@ open-skeleton serve C:\path\to\repository
 ```
 
 The dashboard is available at `http://127.0.0.1:8765` and accepts loopback hosts only.
+
+`analyze` uses one worker process per core, up to eight, once a repository
+holds more than 1.5 MB of source. `--jobs 1` runs serially and `--jobs N` sets
+the count; the result is identical either way. On Django (5,698 files, 1.1
+million lines) a full analysis takes 37 seconds with four workers, against 101
+seconds before parallel reading and the fixes in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 Without installation:
 
@@ -373,6 +381,7 @@ reported as partial coverage rather than treated as complete. If a `.hum` reposi
 python -m compileall -q src tests benchmarks
 python -m unittest discover -s tests -v
 python benchmarks\scaling\run_scaling.py
+python benchmarks\scaling\run_corpus.py --jobs 1 4 -- C:\path\to\repository
 python -m pip wheel . --no-deps --no-build-isolation --no-cache-dir --wheel-dir dist
 ```
 
@@ -393,7 +402,7 @@ record. Everything downstream is a projection of those five types, so nothing
 else needs to know the language exists. The Rust adapter is about 400 lines.
 See [docs/ADDING_AN_ANALYZER.md](docs/ADDING_AN_ANALYZER.md).
 
-Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), and [SECURITY.md](SECURITY.md) before extending trust boundaries.
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), and [SECURITY.md](SECURITY.md) before extending trust boundaries. [docs/LANDSCAPE.md](docs/LANDSCAPE.md) compares this engine with retrieval engines, code graphs and generated documentation, including where it is behind.
 
 ## Independent development
 
