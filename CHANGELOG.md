@@ -137,6 +137,11 @@ All notable changes will be documented here. This project follows Semantic Versi
 
 ### Changed
 
+- the Python reader walks each module once and shares the walk across its
+  seventeen whole-module extractors, and identifiers are hashed in one call;
+  analysis of this repository fell from 6.7s to 4.2s with byte-identical
+  records, and the 300-file performance smoke test from 2.8s to 1.6s at an
+  unchanged 32.8 MiB peak
 - the dashboard is monochrome; status is carried by weight, border and label
   text rather than hue, so a finding reads the same in grayscale
 

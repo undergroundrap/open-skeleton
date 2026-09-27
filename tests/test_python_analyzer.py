@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import ast
+import gc
+import weakref
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -25,6 +27,7 @@ from open_skeleton.analyzers.python_ast import (
     _model_fields,
     _module_name,
     _module_names,
+    _module_nodes,
     _name_index,
     _package_directories,
     _payload_shapes,
@@ -1772,3 +1775,44 @@ class DeclaredVocabularyTests(TestCase):
     def test_the_line_it_was_declared_on_is_recorded(self) -> None:
         found = self._read("\n\nCODES = [1, 2]\n")
         self.assertEqual(found["CODES"]["line"], 3)
+
+
+class SharedModuleWalkTests(TestCase):
+    """Every extractor reads one shared walk, and it has to be ast.walk's."""
+
+    def test_the_shared_walk_is_ast_walk_in_the_same_order(self) -> None:
+        tree = ast.parse("import os\n\ndef f(x):\n    return os.path.join(x, 'y')\n")
+        self.assertEqual(list(_module_nodes(tree)), list(ast.walk(tree)))
+        # Read twice, as every extractor after the first does.
+        self.assertEqual(list(_module_nodes(tree)), list(ast.walk(tree)))
+
+    def test_the_cache_does_not_keep_a_finished_parse_alive(self) -> None:
+        tree = ast.parse("x = 1\n")
+        list(_module_nodes(tree))
+        alive = weakref.ref(tree)
+        del tree
+        gc.collect()
+        self.assertIsNone(alive())
+
+    def test_a_second_parse_of_the_same_text_is_not_served_the_first_walk(self) -> None:
+        # The cache is keyed on the tree object, not on the source. Two parses
+        # are two sets of nodes, and handing one the other's nodes would make
+        # every node-identity lookup (reference literals, for one) miss.
+        source = "URL = 'https://example.test/api'\n"
+        first = ast.parse(source)
+        second = ast.parse(source)
+
+        # `Load` and `Store` are interpreter-wide singletons shared by every
+        # parse, so only nodes that carry a position are compared.
+        def placed(tree: ast.Module) -> set[int]:
+            return {id(node) for node in _module_nodes(tree) if hasattr(node, "lineno")}
+
+        self.assertEqual(list(_module_nodes(second)), list(ast.walk(second)))
+        self.assertTrue(placed(first).isdisjoint(placed(second)))
+
+    def test_extractors_agree_with_a_fresh_walk_after_the_cache_is_warm(self) -> None:
+        source = "import requests\n\nclass Boom(Exception):\n    pass\n\nrequests.get('x')\n"
+        warm = ast.parse(source)
+        _module_nodes(warm)
+        self.assertEqual(_external_calls(warm), _external_calls(ast.parse(source)))
+        self.assertEqual(_defined_exceptions(warm), _defined_exceptions(ast.parse(source)))

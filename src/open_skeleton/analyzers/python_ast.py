@@ -9,8 +9,9 @@ import hashlib
 import re
 import sys
 import time
+import weakref
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -406,6 +407,31 @@ def _raise_summary(node: ast.Raise) -> str | None:
     return name or "raise"
 
 
+# Every per-file extractor below scans the whole module, and each one used to
+# call `ast.walk` itself. Seventeen walks of the same tree were most of the
+# time this reader spent on a file, so the walk is taken once and shared. The
+# order is `ast.walk`'s own, so no extractor sees its nodes differently.
+#
+# Keyed weakly on the tree so the cache lives exactly as long as the parse.
+# The root is left out of the stored value on purpose: `ast.walk` yields the
+# tree first, and a value that refers to its own weak key keeps that key alive
+# forever, which retained every parsed file of a run.
+_MODULE_DESCENDANTS: weakref.WeakKeyDictionary[ast.Module, tuple[ast.AST, ...]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _module_nodes(tree: ast.Module) -> Iterator[ast.AST]:
+    descendants = _MODULE_DESCENDANTS.get(tree)
+    if descendants is None:
+        walk = ast.walk(tree)
+        next(walk)
+        descendants = tuple(walk)
+        _MODULE_DESCENDANTS[tree] = descendants
+    yield tree
+    yield from descendants
+
+
 MAX_RAISED_MESSAGE_CHARS = 60
 
 
@@ -440,7 +466,7 @@ def _raised_types(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.Raise) or node.exc is None:
             continue
         name = (_expr_name(node.exc) or "").split(".")[-1]
@@ -703,7 +729,7 @@ def _state_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
             entry["values"].add(literal)
             entry["entries"].add((literal, condition or "", statement.lineno))
 
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
             body = [item for item in node.body if isinstance(item, ast.stmt)]
             guarded_assignments(body, None)
@@ -735,7 +761,7 @@ def _instance_tunables(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         for inner in ast.walk(node):
@@ -825,7 +851,7 @@ def _name_index(tree: ast.Module) -> dict[str, int]:
         if name and not name.startswith("__"):
             found[name] = min(found.get(name, line), line)
 
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         line = getattr(node, "lineno", 1)
         if isinstance(node, ast.Name):
             record(node.id, line)
@@ -912,7 +938,7 @@ def _external_calls(
     # from a third-party package. This keeps the module without changing what
     # `via` has always meant.
     sources: dict[str, str] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 bound = alias.asname or alias.name
@@ -926,7 +952,7 @@ def _external_calls(
                 sources[bound] = alias.name
 
     # `client = AsyncOpenAI(...)` makes `client` stand for the imported name.
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
             continue
         root = (_expr_name(node.value.func) or "").split(".")[0]
@@ -946,7 +972,7 @@ def _external_calls(
                     sources.setdefault(attribute, sources.get(root, ""))
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         dotted = _expr_name(node.func)
@@ -1006,7 +1032,7 @@ def _signatures(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         arguments = node.args
@@ -1049,7 +1075,7 @@ def _defined_exceptions(tree: ast.Module) -> list[tuple[str, str, int]]:
     """
 
     found: list[tuple[str, str, int]] = []
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         for base in node.bases:
@@ -1068,7 +1094,7 @@ def _caught_families(tree: ast.Module) -> list[tuple[str, int]]:
     """
 
     found: list[tuple[str, int]] = []
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.ExceptHandler):
             continue
         if node.type is None:
@@ -1105,7 +1131,7 @@ def _reference_literals(tree: ast.Module) -> set[int]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             found.add(id(node))
 
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if isinstance(node, ast.Compare):
             mark(node.left)
             for operand in node.comparators:
@@ -1145,7 +1171,7 @@ def _declared_cli_flags(tree: ast.Module) -> tuple[dict[str, int], dict[str, int
 
     options: dict[str, int] = {}
     positionals: dict[str, int] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.Call):
             continue
         function = node.func
@@ -1236,7 +1262,7 @@ def _declared_value_sets(tree: ast.Module) -> list[dict[str, Any]]:
             }
         )
 
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if isinstance(node, ast.ClassDef):
             bases = {
                 base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
@@ -1341,7 +1367,7 @@ def _embedded_literals(tree: ast.Module) -> dict[str, dict[str, Any]]:
         return f"{sign}{value!r}"
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         values: dict[str, int] = {}
@@ -1492,7 +1518,7 @@ def _imported_names(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             # A relative import has no module name at level > 0; the dots are
             # the target, so they are kept rather than dropped.
@@ -1530,7 +1556,7 @@ def _model_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         fields: list[dict[str, Any]] = []
@@ -1570,7 +1596,7 @@ def _payload_shapes(tree: ast.Module) -> dict[str, dict[str, Any]]:
     """
 
     found: dict[str, dict[str, Any]] = {}
-    for node in ast.walk(tree):
+    for node in _module_nodes(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         keys: set[str] = set()

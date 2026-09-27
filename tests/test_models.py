@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from open_skeleton.analysis import analyze_snapshot
+from open_skeleton.ids import stable_id
 from open_skeleton.models import ClaimRecord, SymbolRecord, utc_now, writable_text
 from open_skeleton.scanner import scan_repository
 from open_skeleton.spec import build_spec, load_profile, render_spec_markdown
@@ -35,6 +36,26 @@ def _encodable(value: str) -> bool:
     except UnicodeEncodeError:
         return False
     return True
+
+
+class StableIdTests(TestCase):
+    """Identifiers are persisted in every ledger, so their bytes are a contract."""
+
+    def test_digest_is_pinned(self) -> None:
+        self.assertEqual(
+            stable_id("evidence", ["a", 1, None, "\u00e9", ""]),
+            "6dbefac6473f0be4a5144c66f269a4ffbfcfff34c0277193fa48ec83f3736b20",
+        )
+        self.assertEqual(
+            stable_id("x", []),
+            "14f825b2bbc32dd8d196367fa8776873069c12a8954d8da7513aa7704ddd09eb",
+        )
+
+    def test_field_boundaries_are_not_ambiguous(self) -> None:
+        # "ab" + "c" and "a" + "bc" are the same text; the terminator is what
+        # keeps them two different identities.
+        self.assertNotEqual(stable_id("n", ["ab", "c"]), stable_id("n", ["a", "bc"]))
+        self.assertNotEqual(stable_id("n", ["a"]), stable_id("na", []))
 
 
 class WritableTextTests(TestCase):
