@@ -203,6 +203,49 @@ verdict about them has been reached. Running it over zod, a Java repository and
 a C# repository would close that gap; a reader reported as `none` must not be
 read as a reader reported as local.
 
+### Reusing what a file already said
+
+`analyze_snapshot(snapshot, cache=ReadCache())` reuses the Python reader's
+per-file outcomes instead of reading the files again. September 29, 2026, on
+Windows AMD64, Python 3.12.14, one worker:
+
+| Repository | Files | Cold analysis | Every file reused | One file read, the rest reused |
+|---|---:|---:|---:|---:|
+| open-skeleton | 186 | 2.89 s | 0.93 s | 1.18 s |
+| pygments | 339 | 3.19 s | 0.62 s | 0.70 s |
+| mypy | 949 | 6.75 s | 3.59 s | 4.33 s |
+
+An entry is keyed on every input the reader was given: its version, the file's
+path and content hash, the module name the file was given, and a digest of
+every module name in the snapshot. The last is there because it is an input
+rather than context -- `external_calls` classifies a call by whether what it
+lands in is a module of this repository -- and without it a cache hits after a
+module is removed and serves a classification that is no longer true.
+
+The Python reader is the only one that reuses anything. It is the one with a
+per-file outcome type, introduced for parallel reading and named in
+[LANDSCAPE.md](LANDSCAPE.md) as the unit to cache, and on these repositories it
+is most of the reading. The other ten still run whole; none exceeded 2.1 s on
+the repositories measured.
+
+What is left after reuse is cross-file work, and it does not shrink: import and
+call resolution over 91,598 edges on mypy, the censuses, ownership, and claim
+merging and scoping. That is why mypy halves rather than vanishing while
+pygments, which is entirely Python and has a fifth of the edges, drops
+fivefold.
+
+`benchmarks/scaling/run_corpus.py` fails if any of it answers differently. Three
+runs are compared against the cold one: every file reused, one file read with
+the rest reused, and -- the case that matters -- a run across a snapshot
+boundary, where a reused record has to be renamed for the run reusing it. The
+first two analyze the snapshot the cache was filled from, so renaming is a
+no-op and a mistake in it would pass unnoticed; deleting the claim re-minting
+and re-running proved only the third catches it.
+
+```bash
+python benchmarks/scaling/run_corpus.py --jobs 1 4 -- <repository>
+```
+
 ### Reading is no longer the largest stage
 
 Those rates say a read cache would nearly always hit. They do not say the run

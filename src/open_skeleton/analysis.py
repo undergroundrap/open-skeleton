@@ -54,6 +54,7 @@ from open_skeleton.parallel import (
 )
 from open_skeleton.policy import exercises_the_product, scoped_category
 from open_skeleton.resolution import resolve_call_targets, resolve_import_targets
+from open_skeleton.reuse import ReadCache
 from open_skeleton.topology import MAX_NAMED, describe
 
 PIPELINE_VERSION = "deterministic-pipeline/v1"
@@ -1165,6 +1166,7 @@ def build_analyzers(
     *,
     executor: Executor | None = None,
     workers: int = 1,
+    cache: ReadCache | None = None,
 ) -> tuple[Analyzer, ...]:
     """The analyzers a run consults, in the order their claims are merged.
 
@@ -1176,7 +1178,7 @@ def build_analyzers(
     """
 
     return (
-        PythonAstAnalyzer(executor=executor, workers=workers),
+        PythonAstAnalyzer(executor=executor, workers=workers, cache=cache),
         TypeScriptLexicalAnalyzer(executor=executor, workers=workers),
         RustLexicalAnalyzer(executor=executor, workers=workers),
         JavaLexicalAnalyzer(),
@@ -1208,6 +1210,7 @@ def _run_analyzers(
     hum_index: Sequence[Path] | Path | None,
     workers: int,
     report: Callable[[AnalysisResult], None],
+    cache: ReadCache | None = None,
 ) -> list[AnalysisResult]:
     """Every analyzer's result, in `build_analyzers` order, at any worker count.
 
@@ -1228,13 +1231,13 @@ def _run_analyzers(
             executor = None
     if executor is None:
         results = []
-        for analyzer in build_analyzers(hum_index):
+        for analyzer in build_analyzers(hum_index, cache=cache):
             result = analyzer.analyze(snapshot)
             results.append(result)
             report(result)
         return results
 
-    analyzers = build_analyzers(hum_index, executor=executor, workers=workers)
+    analyzers = build_analyzers(hum_index, executor=executor, workers=workers, cache=cache)
     # Readers that can share their files out are coordinated from threads
     # here, which mostly wait on the pool and merge; every other reader runs
     # whole in a worker. The indivisible ones are queued first so the pool is
@@ -1272,6 +1275,7 @@ def analyze_snapshot(
     hum_index: Sequence[Path] | Path | None = None,
     on_event: AnalysisEventCallback | None = None,
     jobs: int | None = 1,
+    cache: ReadCache | None = None,
 ) -> AnalysisResult:
     """Run deterministic semantic adapters and merge their immutable outputs.
 
@@ -1292,7 +1296,7 @@ def analyze_snapshot(
                 len(result.claims),
             )
 
-    results = _run_analyzers(snapshot, hum_index, resolve_jobs(jobs), report)
+    results = _run_analyzers(snapshot, hum_index, resolve_jobs(jobs), report, cache)
 
     symbols = tuple(item for result in results for item in result.symbols)
     edges = tuple(item for result in results for item in result.edges)

@@ -41,6 +41,7 @@ from open_skeleton.parallel import (
     submit_chunks,
 )
 from open_skeleton.policy import TEST_SCOPED_CATEGORIES, describes_the_product
+from open_skeleton.reuse import ReadCache
 
 ANALYZER_NAME = "python-ast"
 ANALYZER_VERSION = "python-ast/v3"
@@ -3165,6 +3166,78 @@ class _FileOutcome:
     typed_route_evidence: tuple[str, ...] = ()
 
 
+def _module_set_digest(local_modules: frozenset[str]) -> str:
+    """One string standing for every module name the snapshot holds.
+
+    Part of a cached entry's key because it is an input to reading a file, not
+    context around it: `external_calls` classifies a call by whether what it
+    lands in is a module of this repository, and that set is how it decides.
+    Removing a module reclassified a call in an untouched file from `this
+    repository` to `dependency` while the file's bytes stayed the same, which
+    is the one way a cache keyed on bytes alone returns a wrong answer without
+    anything noticing.
+    """
+
+    return hashlib.sha256("\x00".join(sorted(local_modules)).encode("utf-8")).hexdigest()
+
+
+def _cache_key(file_record: FileRecord, module: str, module_set: str) -> tuple[str, ...]:
+    """Everything `_read_python_file` is given, other than when it ran.
+
+    The snapshot is not in the key and does not need to be: the reader reaches
+    it for the file's bytes, which the content hash already names, and for the
+    root to read them from, which cannot change what they say. `created_at` is
+    not in the key either, because a reused outcome is rebound to the run that
+    reuses it.
+    """
+
+    return (ANALYZER_VERSION, file_record.path, file_record.sha256, module, module_set)
+
+
+def _rebind_claim(claim: ClaimRecord, snapshot_id: str, created_at: str) -> ClaimRecord:
+    """A cached claim, renamed for the run reusing it.
+
+    A claim id hashes the snapshot on purpose, so that two files stating the
+    same thing merge into one claim carrying both receipts, and a reused claim
+    has to be minted again rather than rewritten. The recipe is `_claim`'s, and
+    the category is taken from the cached claim because `_claim` re-files a
+    test file's claims before minting, so the cached category is already the
+    final one.
+    """
+
+    return replace(
+        claim,
+        claim_id=stable_id("claim", (snapshot_id, claim.category, claim.claim, ANALYZER_VERSION)),
+        snapshot_id=snapshot_id,
+        created_at=created_at,
+        verified_at=created_at if claim.status == "verified" else None,
+    )
+
+
+def _rebind(outcome: _FileOutcome, snapshot_id: str, created_at: str) -> _FileOutcome:
+    """A cached outcome, as the run reusing it would have produced it.
+
+    Only the fields naming the run are rewritten. Every identifier of a
+    per-file fact is a digest of the file's bytes and survives untouched,
+    which is the whole reason an outcome can be reused at all; a failure is
+    returned as it stands, because a file that could not be read names no
+    snapshot.
+    """
+
+    if outcome.failure is not None:
+        return outcome
+    return replace(
+        outcome,
+        symbols=tuple(replace(item, snapshot_id=snapshot_id) for item in outcome.symbols),
+        edges=tuple(replace(item, snapshot_id=snapshot_id) for item in outcome.edges),
+        evidence=tuple(
+            replace(item, snapshot_id=snapshot_id, created_at=created_at)
+            for item in outcome.evidence
+        ),
+        claims=tuple(_rebind_claim(item, snapshot_id, created_at) for item in outcome.claims),
+    )
+
+
 def _read_python_files(
     snapshot: Snapshot,
     work: list[tuple[FileRecord, str]],
@@ -3241,12 +3314,24 @@ class PythonAstAnalyzer:
     version = ANALYZER_VERSION
     eligibility = "language"
 
-    def __init__(self, executor: Executor | None = None, workers: int = 1) -> None:
+    def __init__(
+        self,
+        executor: Executor | None = None,
+        workers: int = 1,
+        cache: ReadCache | None = None,
+    ) -> None:
         # Optional worker pool for per-file reading. Only the reading is
         # shared out; every cross-file claim below is still built here, from
         # outcomes merged in file order, so the result does not depend on it.
         self.executor = executor
         self.workers = max(1, workers)
+        # Optional store of what earlier runs read. Like the pool, it may
+        # change how long a run takes and never what it produces: a reused
+        # outcome takes the same place in the same order as the read it stood
+        # in for, so every cross-file claim below sees exactly what it would
+        # have seen. The cache stays in this process and is never handed to a
+        # worker, which rebuilds its analyzers without one.
+        self.cache = cache
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
@@ -3271,17 +3356,44 @@ class PythonAstAnalyzer:
         module_names = _module_names((item.path for item in eligible), packages)
 
         work = [(item, module_names[item.path]) for item in eligible]
-        context = (created_at, frozenset(module_names.values()))
-        if self.executor is not None and len(work) > 1:
+        local_modules = frozenset(module_names.values())
+        context = (created_at, local_modules)
+
+        # What an earlier run already read, if a cache was supplied. Held by
+        # position so a reused outcome lands exactly where its read would
+        # have, and the merge below cannot tell the two apart.
+        reused: list[_FileOutcome | None] = [None] * len(work)
+        keys: list[tuple[str, ...]] = []
+        if self.cache is not None:
+            module_set = _module_set_digest(local_modules)
+            keys = [_cache_key(item, module, module_set) for item, module in work]
+            reused = [self.cache.get(key) for key in keys]
+        pending = [index for index, found in enumerate(reused) if found is None]
+        unread = [work[index] for index in pending]
+
+        if self.executor is not None and len(unread) > 1:
             chunks = chunk_by_weight(
-                work,
-                [item.size_bytes for item, _ in work],
+                unread,
+                [item.size_bytes for item, _ in unread],
                 CHUNKS_PER_WORKER * self.workers,
             )
             futures = submit_chunks(self.executor, _read_python_files, chunks, context)
-            outcomes = gather_in_order(snapshot, futures, chunks, _read_python_files, context)
+            fresh = gather_in_order(snapshot, futures, chunks, _read_python_files, context)
         else:
-            outcomes = _read_python_files(snapshot, work, context)
+            fresh = _read_python_files(snapshot, unread, context)
+
+        outcomes: list[_FileOutcome] = []
+        if self.cache is None:
+            outcomes = fresh
+        else:
+            by_index = dict(zip(pending, fresh, strict=True))
+            for index, found in enumerate(reused):
+                if found is None:
+                    outcome = by_index[index]
+                    self.cache.put(keys[index], outcome)
+                    outcomes.append(outcome)
+                else:
+                    outcomes.append(_rebind(found, snapshot.snapshot_id, created_at))
 
         for outcome in outcomes:
             if outcome.failure is not None:

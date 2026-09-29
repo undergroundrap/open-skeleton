@@ -57,7 +57,8 @@ from open_skeleton import models
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.exports import export_analysis_jsonl, export_analysis_markdown
 from open_skeleton.ledger import EvidenceLedger
-from open_skeleton.scanner import scan_repository
+from open_skeleton.reuse import ReadCache
+from open_skeleton.scanner import _snapshot_id, scan_repository
 
 try:
     import resource
@@ -163,6 +164,65 @@ class _FamilySampler:
             self._thread.join()
 
 
+def _fingerprint_of(result: Any, where: Path) -> str:
+    """The exported bytes of one analysis, hashed the same way as the cold run."""
+
+    where.mkdir(parents=True, exist_ok=True)
+    export_analysis_jsonl(result, where / "analysis.jsonl")
+    export_analysis_markdown(result, where / "analysis.md")
+    return hashlib.sha256(
+        (where / "analysis.jsonl").read_bytes() + (where / "analysis.md").read_bytes()
+    ).hexdigest()
+
+
+def _largest_entry(cache: ReadCache) -> tuple[str, ...] | None:
+    """The cached file with the most records, which is the one worth re-reading.
+
+    Dropping an entry stands in for a file whose bytes changed, and the
+    largest is chosen so the measurement is of the worst realistic case rather
+    than of a file nothing reads.
+    """
+
+    def weight(key: tuple[str, ...]) -> int:
+        outcome = cache.entries[key]
+        return sum(
+            len(getattr(outcome, name, ())) for name in ("symbols", "edges", "evidence", "claims")
+        )
+
+    return max(cache.entries, key=weight) if cache.entries else None
+
+
+def _snapshot_without_a_source_file(snapshot: Any) -> Any:
+    """The same snapshot with one file no reader of source reads removed.
+
+    Used to move a run onto a different snapshot id without touching the
+    repository. The file dropped is one no language reader claims, so the set
+    of module names is unchanged and every source file stays reusable; the
+    snapshot id digests the whole inventory, so it changes regardless.
+
+    The id is recomputed with the scanner's own function rather than a copy of
+    the rule. A private copy of a rule goes stale the moment the rule moves,
+    which is how an earlier instrument in this repository ended up reporting a
+    rate that fell as the engine improved.
+    """
+
+    # Anything the Python reader does not read, and not a package marker,
+    # whose presence decides what its siblings are called. A repository that
+    # is nothing but Python has no such file, and this returns nothing rather
+    # than dropping a module and reporting the resulting full re-read as
+    # reuse.
+    droppable = [
+        item
+        for item in snapshot.files
+        if item.language != "Python" and not item.path.endswith("__init__.py")
+    ]
+    if not droppable or len(snapshot.files) < 2:
+        return None
+    dropped = max(droppable, key=lambda item: item.path)
+    kept = [item for item in snapshot.files if item.path != dropped.path]
+    return replace(snapshot, files=tuple(kept), snapshot_id=_snapshot_id(kept))
+
+
 def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
     stages: dict[str, float] = {}
 
@@ -198,6 +258,60 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         # kind an older revision can finish on a large repository -- is
         # compared with exactly what this run wrote the first time.
         fingerprint = _ledger_fingerprint(workspace / "evidence.sqlite3")
+        # Reuse, held to the same bar as workers: it may change how long a run
+        # takes and nothing else.
+        #
+        # Two runs, because they answer different questions. The first warms a
+        # cache and analyzes again with every file reusable, which is the
+        # ceiling and proves the merge is unchanged when no read happened at
+        # all. The second drops the largest file's entry and analyzes again, so
+        # exactly one file is read and the rest reused -- the shape of a
+        # one-line edit, without writing to the repository being measured. If
+        # either answers differently from the cold run above, this fails.
+        cache = ReadCache()
+        analyze_snapshot(snapshot, cache=cache, **options)
+        started = time.perf_counter()
+        warm = replace(analyze_snapshot(snapshot, cache=cache, **options), duration_ms=0)
+        timed("reuse_all_s", started)
+        stages["reuse_hits"] = float(cache.hits)
+
+        evicted = _largest_entry(cache)
+        if evicted is not None:
+            cache.entries.pop(evicted)
+        cache.hits = cache.misses = 0
+        started = time.perf_counter()
+        partial = replace(analyze_snapshot(snapshot, cache=cache, **options), duration_ms=0)
+        timed("reuse_one_read_s", started)
+        stages["reuse_one_read_misses"] = float(cache.misses)
+
+        reuse_exports = _fingerprint_of(warm, workspace / "reuse")
+        partial_exports = _fingerprint_of(partial, workspace / "partial")
+
+        # Both runs above analyzed the snapshot the cache was filled from, so
+        # every identifier and timestamp a reused record carries was already
+        # the right one and rebinding them was a no-op. That is not the case a
+        # cache exists for, so it is not the case to prove: this crosses a
+        # snapshot boundary, where a reused record has to be renamed for the
+        # run reusing it, and a mistake there would have shown up in neither
+        # measurement above.
+        #
+        # A file no reader of source reads is what moves: the snapshot id
+        # digests the whole inventory and changes, while the set of module
+        # names the Python reader classifies calls against does not, so every
+        # Python file is still reusable and the rebinding is what is under
+        # test. Nothing is written to the repository being measured.
+        across = _snapshot_without_a_source_file(snapshot)
+        across_exports: str | None = None
+        if across is not None:
+            cache.hits = cache.misses = 0
+            moved = replace(analyze_snapshot(across, cache=cache, **options), duration_ms=0)
+            stages["reuse_across_snapshots_hits"] = float(cache.hits)
+            across_exports = _fingerprint_of(moved, workspace / "across")
+            cold_across = replace(analyze_snapshot(across, **options), duration_ms=0)
+            stages["reuse_across_snapshots_cold_matches"] = float(
+                across_exports == _fingerprint_of(cold_across, workspace / "across-cold")
+            )
+
         resaved: str | None = None
         if resave:
             started = time.perf_counter()
@@ -217,6 +331,9 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         "peak_rss_mib": _peak_mib(),
         "peak_total_rss_mib": round(sampler.peak_kib / 1024, 1) if sampler.available else None,
         "exports_sha256": exported,
+        "reuse_all_exports_sha256": reuse_exports,
+        "reuse_one_read_exports_sha256": partial_exports,
+        "reuse_across_snapshots_exports_sha256": across_exports,
         "ledger_sha256": fingerprint,
         "ledger_after_resave_sha256": resaved,
     }
@@ -259,6 +376,25 @@ def main() -> int:
         ]
         rows.extend(measured)
         reference = measured[0]
+        for row in measured:
+            # Reuse is held to the cold run of the same worker count: a run
+            # that reused every file, and a run that read one file and reused
+            # the rest, must both export exactly what reading everything did.
+            for key in ("reuse_all_exports_sha256", "reuse_one_read_exports_sha256"):
+                if row[key] != row["exports_sha256"]:
+                    mismatches.append(
+                        f"{root.name}: {key} differs from a cold run at jobs={row['jobs']}"
+                    )
+            if row.get("reuse_across_snapshots_cold_matches") == 0.0:
+                mismatches.append(
+                    f"{root.name}: reusing across a snapshot boundary answered "
+                    f"differently from a cold run at jobs={row['jobs']}"
+                )
+            if row.get("reuse_one_read_misses") not in (None, 1.0):
+                mismatches.append(
+                    f"{root.name}: dropping one cached file read "
+                    f"{row['reuse_one_read_misses']:.0f} files at jobs={row['jobs']}"
+                )
         for row in measured[1:]:
             for key in ("exports_sha256", "ledger_sha256", "ledger_after_resave_sha256"):
                 if row[key] != reference[key]:
