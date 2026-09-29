@@ -34,7 +34,7 @@ from open_skeleton.analyzers.sql_schema import SqlSchemaAnalyzer
 from open_skeleton.analyzers.typescript_lexical import TypeScriptLexicalAnalyzer
 from open_skeleton.analyzers.workflow_triggers import WorkflowTriggerAnalyzer
 from open_skeleton.http_targets import local_request_path
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -287,7 +287,7 @@ def _append_mathematical_conflicts(
                     evidence_id=stable_id(
                         "evidence",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, path),
                             path,
                             line_number,
                             "exponential_comment",
@@ -1369,7 +1369,12 @@ def analyze_snapshot(
         )
         evidence_id = stable_id(
             "inventory-evidence",
-            (snapshot.snapshot_id, file_record.path, file_record.sha256, "file_concentration"),
+            (
+                content_key(snapshot, file_record.path),
+                file_record.path,
+                file_record.sha256,
+                "file_concentration",
+            ),
         )
         inventory_evidence = EvidenceRecord(
             evidence_id=evidence_id,

@@ -17,7 +17,38 @@ from typing import Any
 from open_skeleton.ids import stable_id
 from open_skeleton.models import AnalysisResult, Snapshot, utc_now
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
+
+# Tables whose rows are named after the bytes they were read from, and the
+# column naming the file each row came from.
+CONTENT_BOUND_TABLES = {"evidence": "path", "symbols": "path", "edges": "source_path"}
+
+
+def in_snapshot(table: str, alias: str = "") -> str:
+    """SQL for "this fact belongs to that snapshot". Takes the snapshot id twice.
+
+    A fact read from a file belongs to every snapshot holding those exact
+    bytes, which is a join rather than a column: one receipt answers for all
+    of them, and saving a later snapshot cannot take it from an earlier one.
+    Binding each fact to a snapshot by its own row would say the same thing
+    and cost more than the write it replaces -- 11.77 s against 8.82 s on
+    mypy, measured in `docs/PERFORMANCE.md`.
+
+    The second half is the fallback, and it carries two kinds of row. A census
+    has `.` for a path and the file inventory for a subject, so it is bound to
+    the one snapshot it counts. And a row written before this column existed
+    has no content to be bound by, so it keeps answering exactly as it did.
+    """
+
+    path_column = CONTENT_BOUND_TABLES[table]
+    prefix = f"{alias}." if alias else ""
+    return (
+        "(EXISTS (SELECT 1 FROM files bound WHERE bound.snapshot_id = ? "
+        f"AND bound.path = {prefix}{path_column} "
+        f"AND bound.sha256 = {prefix}file_sha256) "
+        f"OR ({prefix}file_sha256 IS NULL AND {prefix}snapshot_id = ?))"
+    )
+
 
 # Metadata keys holding a name a caller might search for, mapped to a value
 # they might search for it by. Deliberately a list rather than "everything in
@@ -220,6 +251,15 @@ class EvidenceLedger:
         # written before this column existed recorded one row per excluded
         # entry, and zero is what that row already meant.
         ("exclusions", "contained_files", "INTEGER NOT NULL DEFAULT 0"),
+        # What file's bytes a fact was read from, which is what decides the
+        # snapshots it belongs to. Nullable, and a null means exactly what it
+        # says: this row predates content binding, or it is a census, whose
+        # subject is the inventory rather than a file. Both fall back to the
+        # `snapshot_id` column, so a ledger written by an earlier version
+        # answers every query as it did before.
+        ("evidence", "file_sha256", "TEXT"),
+        ("symbols", "file_sha256", "TEXT"),
+        ("edges", "file_sha256", "TEXT"),
     )
 
     def _apply_additive_migrations(self, connection: sqlite3.Connection) -> None:
@@ -300,11 +340,14 @@ class EvidenceLedger:
                     evidence_kind TEXT NOT NULL,
                     excerpt_sha256 TEXT,
                     analyzer TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    file_sha256 TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS evidence_snapshot_path_idx
                     ON evidence(snapshot_id, path, start_line);
+                CREATE INDEX IF NOT EXISTS evidence_content_idx
+                    ON evidence(path, file_sha256);
 
                 CREATE TABLE IF NOT EXISTS symbols (
                     symbol_id TEXT PRIMARY KEY,
@@ -316,9 +359,12 @@ class EvidenceLedger:
                     end_line INTEGER NOT NULL,
                     language TEXT NOT NULL,
                     analyzer TEXT NOT NULL,
-                    metadata_json TEXT NOT NULL
+                    metadata_json TEXT NOT NULL,
+                    file_sha256 TEXT
                 );
 
+                CREATE INDEX IF NOT EXISTS symbols_content_idx
+                    ON symbols(path, file_sha256);
                 CREATE INDEX IF NOT EXISTS symbols_snapshot_name_idx
                     ON symbols(snapshot_id, qualified_name);
                 CREATE INDEX IF NOT EXISTS symbols_snapshot_path_idx
@@ -333,9 +379,12 @@ class EvidenceLedger:
                     target_ref TEXT NOT NULL,
                     target_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
                     evidence_id TEXT REFERENCES evidence(evidence_id) ON DELETE SET NULL,
-                    analyzer TEXT NOT NULL
+                    analyzer TEXT NOT NULL,
+                    file_sha256 TEXT
                 );
 
+                CREATE INDEX IF NOT EXISTS edges_content_idx
+                    ON edges(source_path, file_sha256);
                 CREATE INDEX IF NOT EXISTS edges_snapshot_relationship_idx
                     ON edges(snapshot_id, relationship);
                 CREATE INDEX IF NOT EXISTS edges_target_ref_idx
@@ -932,6 +981,21 @@ class EvidenceLedger:
             # Nothing is persisted and durability is unchanged.
             connection.execute("PRAGMA cache_size = -65536")
 
+            # What each path held in this snapshot. A fact read from a file is
+            # bound to the snapshots that hold those exact bytes, not to the
+            # snapshot that happened to read it first, so this is the binding
+            # and `snapshot_id` below is only provenance. A path the snapshot
+            # does not hold -- a census, whose subject is `.`, or the Hum
+            # adapter's index file from outside the root -- gets a null and
+            # stays bound by `snapshot_id`, which is what it is a fact about.
+            content = {
+                str(row["path"]): str(row["sha256"])
+                for row in connection.execute(
+                    "SELECT path, sha256 FROM files WHERE snapshot_id = ?",
+                    (result.snapshot_id,),
+                )
+            }
+
             # Upserts, not `INSERT OR REPLACE`, for every table other rows
             # point into. REPLACE deletes the existing row before inserting
             # its successor, and each delete fires the `ON DELETE` actions of
@@ -949,10 +1013,11 @@ class EvidenceLedger:
                 """
                 INSERT INTO evidence(
                     evidence_id, snapshot_id, path, start_line, end_line, symbol,
-                    evidence_kind, excerpt_sha256, analyzer, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_kind, excerpt_sha256, analyzer, created_at, file_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(evidence_id) DO UPDATE SET
                     snapshot_id = excluded.snapshot_id,
+                    file_sha256 = excluded.file_sha256,
                     path = excluded.path,
                     start_line = excluded.start_line,
                     end_line = excluded.end_line,
@@ -974,6 +1039,7 @@ class EvidenceLedger:
                         item.excerpt_sha256,
                         item.analyzer,
                         item.created_at,
+                        content.get(item.path),
                     )
                     for item in result.evidence
                 ),
@@ -982,10 +1048,11 @@ class EvidenceLedger:
                 """
                 INSERT INTO symbols(
                     symbol_id, snapshot_id, path, qualified_name, kind, start_line,
-                    end_line, language, analyzer, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    end_line, language, analyzer, metadata_json, file_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol_id) DO UPDATE SET
                     snapshot_id = excluded.snapshot_id,
+                    file_sha256 = excluded.file_sha256,
                     path = excluded.path,
                     qualified_name = excluded.qualified_name,
                     kind = excluded.kind,
@@ -1007,6 +1074,7 @@ class EvidenceLedger:
                         item.language,
                         item.analyzer,
                         json.dumps(item.metadata, sort_keys=True, separators=(",", ":")),
+                        content.get(item.path),
                     )
                     for item in result.symbols
                 ),
@@ -1015,10 +1083,11 @@ class EvidenceLedger:
                 """
                 INSERT INTO edges(
                     edge_id, snapshot_id, source_symbol_id, source_path, relationship,
-                    target_ref, target_symbol_id, evidence_id, analyzer
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    target_ref, target_symbol_id, evidence_id, analyzer, file_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(edge_id) DO UPDATE SET
                     snapshot_id = excluded.snapshot_id,
+                    file_sha256 = excluded.file_sha256,
                     source_symbol_id = excluded.source_symbol_id,
                     source_path = excluded.source_path,
                     relationship = excluded.relationship,
@@ -1038,6 +1107,7 @@ class EvidenceLedger:
                         item.target_symbol_id,
                         item.evidence_id,
                         item.analyzer,
+                        content.get(item.source_path),
                     )
                     for item in result.edges
                 ),
@@ -1380,10 +1450,12 @@ class EvidenceLedger:
 
         if table not in {"claims", "symbols", "evidence", "edges", "files"}:
             raise ValueError(f"Unsupported table for counting: {table}")
+        where = in_snapshot(table) if table in CONTENT_BOUND_TABLES else "snapshot_id = ?"
+        parameters = (snapshot_id, snapshot_id) if table in CONTENT_BOUND_TABLES else (snapshot_id,)
         with self._session() as connection:
             row = connection.execute(
-                f"SELECT COUNT(*) AS total FROM {table} WHERE snapshot_id = ?",
-                (snapshot_id,),
+                f"SELECT COUNT(*) AS total FROM {table} WHERE {where}",
+                parameters,
             ).fetchone()
         return int(row["total"]) if row else 0
 
@@ -1412,8 +1484,8 @@ class EvidenceLedger:
             raise ValueError("Edge limit must be between 1 and 200000")
         if offset < 0:
             raise ValueError("Edge offset must not be negative")
-        clauses = ["snapshot_id = ?"]
-        parameters: list[object] = [snapshot_id]
+        clauses = [in_snapshot("edges")]
+        parameters: list[object] = [snapshot_id, snapshot_id]
         if relationships:
             placeholders = ", ".join("?" for _ in relationships)
             clauses.append(f"relationship IN ({placeholders})")
@@ -1445,11 +1517,13 @@ class EvidenceLedger:
                        e.created_at, f.sha256 AS file_sha256
                 FROM evidence e
                 LEFT JOIN files f
-                    ON f.snapshot_id = e.snapshot_id AND f.path = e.path
-                WHERE e.snapshot_id = ?
+                    ON f.snapshot_id = ? AND f.path = e.path
+                WHERE """
+                + in_snapshot("evidence", "e")
+                + """
                 ORDER BY e.path, e.start_line, e.evidence_id
                 """,
-                (snapshot_id,),
+                (snapshot_id, snapshot_id, snapshot_id),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1534,8 +1608,8 @@ class EvidenceLedger:
             raise ValueError("Symbol limit must be between 1 and 5000")
         if offset < 0:
             raise ValueError("Symbol offset must not be negative")
-        clauses = ["snapshot_id = ?"]
-        parameters: list[object] = [snapshot_id]
+        clauses = [in_snapshot("symbols")]
+        parameters: list[object] = [snapshot_id, snapshot_id]
         if query:
             clauses.append("qualified_name LIKE ?")
             parameters.append(f"%{query}%")

@@ -34,7 +34,7 @@ import re
 import time
 from pathlib import Path
 
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -179,7 +179,7 @@ class WorkflowTriggerAnalyzer:
             record = EvidenceRecord(
                 evidence_id=stable_id(
                     "evidence",
-                    (snapshot.snapshot_id, path, 1, "workflow_trigger", ANALYZER_VERSION),
+                    (content_key(snapshot, path), path, 1, "workflow_trigger", ANALYZER_VERSION),
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=path,

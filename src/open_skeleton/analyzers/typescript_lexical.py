@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from open_skeleton.analyzers.base import render_declared_type
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -1936,7 +1936,7 @@ def _read_typescript_files(
         evidence_id = stable_id(
             "evidence",
             (
-                snapshot.snapshot_id,
+                content_key(snapshot, path),
                 path,
                 start_line,
                 end_line,
@@ -2050,7 +2050,7 @@ def _read_typescript_files(
         module_id = stable_id(
             "symbol",
             (
-                snapshot.snapshot_id,
+                content_key(snapshot, file_record.path),
                 file_record.path,
                 module,
                 "module",
@@ -2104,7 +2104,7 @@ def _read_typescript_files(
             symbol_id = stable_id(
                 "symbol",
                 (
-                    snapshot.snapshot_id,
+                    content_key(snapshot, file_record.path),
                     file_record.path,
                     qualified,
                     declaration.kind,
@@ -2134,7 +2134,7 @@ def _read_typescript_files(
                     edge_id=stable_id(
                         "edge",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             module_id,
                             "contains",
                             qualified,
@@ -2181,7 +2181,7 @@ def _read_typescript_files(
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, file_record.path),
                                     module_id,
                                     "imports",
                                     target.value,
@@ -2247,7 +2247,7 @@ def _read_typescript_files(
                         edge_id=stable_id(
                             "edge",
                             (
-                                snapshot.snapshot_id,
+                                content_key(snapshot, file_record.path),
                                 module_id,
                                 "calls",
                                 "fetch",
@@ -2551,7 +2551,7 @@ def _read_typescript_files(
                     edge_id=stable_id(
                         "edge",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             module_id,
                             "calls",
                             callee,

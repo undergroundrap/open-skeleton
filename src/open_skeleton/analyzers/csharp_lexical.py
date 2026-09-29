@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from open_skeleton.analyzers.base import declares_a_number, render_declared_type
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -631,7 +631,7 @@ class CSharpLexicalAnalyzer:
         def receipt(path: str, line: int, kind: str, excerpt: str) -> EvidenceRecord:
             record = EvidenceRecord(
                 evidence_id=stable_id(
-                    "evidence", (snapshot.snapshot_id, path, line, kind, ANALYZER_VERSION)
+                    "evidence", (content_key(snapshot, path), path, line, kind, ANALYZER_VERSION)
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=path,
@@ -711,7 +711,13 @@ class CSharpLexicalAnalyzer:
             }
             file_enums = declared_enums(clean)
             module_symbol = stable_id(
-                "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
+                "symbol",
+                (
+                    content_key(snapshot, file_record.path),
+                    file_record.path,
+                    "module",
+                    ANALYZER_VERSION,
+                ),
             )
             symbols.append(
                 SymbolRecord(
@@ -739,7 +745,12 @@ class CSharpLexicalAnalyzer:
                     SymbolRecord(
                         symbol_id=stable_id(
                             "symbol",
-                            (snapshot.snapshot_id, file_record.path, name, ANALYZER_VERSION),
+                            (
+                                content_key(snapshot, file_record.path),
+                                file_record.path,
+                                name,
+                                ANALYZER_VERSION,
+                            ),
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         path=file_record.path,
@@ -758,7 +769,7 @@ class CSharpLexicalAnalyzer:
                         edge_id=stable_id(
                             "edge",
                             (
-                                snapshot.snapshot_id,
+                                content_key(snapshot, file_record.path),
                                 module_symbol,
                                 "imports",
                                 target,

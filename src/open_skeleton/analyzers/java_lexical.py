@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from open_skeleton.analyzers.base import declares_a_number, render_declared_type
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -1297,7 +1297,8 @@ class JavaLexicalAnalyzer:
         def receipt(path: str, line: int, kind: str, symbol: str | None, excerpt: str) -> str:
             record = EvidenceRecord(
                 evidence_id=stable_id(
-                    "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
+                    "evidence",
+                    (content_key(snapshot, path), path, line, kind, symbol, ANALYZER_VERSION),
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=path,
@@ -1372,7 +1373,7 @@ class JavaLexicalAnalyzer:
                 symbols.append(
                     SymbolRecord(
                         symbol_id=stable_id(
-                            "symbol", (snapshot.snapshot_id, path, "compilation-unit")
+                            "symbol", (content_key(snapshot, path), path, "compilation-unit")
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         path=path,
@@ -1405,7 +1406,13 @@ class JavaLexicalAnalyzer:
                             # row and lost twenty-four symbols across
                             # `java.base` without reporting anything.
                             "symbol",
-                            (snapshot.snapshot_id, path, qualified, item.line, ANALYZER_VERSION),
+                            (
+                                content_key(snapshot, path),
+                                path,
+                                qualified,
+                                item.line,
+                                ANALYZER_VERSION,
+                            ),
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         path=path,
@@ -1431,7 +1438,13 @@ class JavaLexicalAnalyzer:
                         EdgeRecord(
                             edge_id=stable_id(
                                 "edge",
-                                (snapshot.snapshot_id, path, qualified, "implements", supertype),
+                                (
+                                    content_key(snapshot, path),
+                                    path,
+                                    qualified,
+                                    "implements",
+                                    supertype,
+                                ),
                             ),
                             snapshot_id=snapshot.snapshot_id,
                             source_symbol_id=None,
@@ -1651,7 +1664,7 @@ class JavaLexicalAnalyzer:
                 edges.append(
                     EdgeRecord(
                         edge_id=stable_id(
-                            "edge", (snapshot.snapshot_id, path, "imports", target, line)
+                            "edge", (content_key(snapshot, path), path, "imports", target, line)
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         source_symbol_id=None,

@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -806,8 +806,17 @@ class ProjectMetadataAnalyzer:
             kind: str,
             symbol: str | None = None,
         ) -> EvidenceRecord:
+            # This helper mints both kinds of receipt, so it decides both the
+            # excerpt hash and the name in one place. A census reads the file
+            # inventory rather than a file, and is named after it; everything
+            # else is named after the bytes of the file it was read from.
+            # Splitting the two decisions is how a census receipt once kept
+            # its name across a change to the inventory it counts: the naming
+            # branch was taken for a path the snapshot holds no entry for, and
+            # quietly named every census after the empty string.
             if path == ".":
                 excerpt_hash = snapshot.snapshot_id
+                naming = snapshot.snapshot_id
             else:
                 source = file_sources[path]
                 lines = source.splitlines(keepends=True)
@@ -816,11 +825,12 @@ class ProjectMetadataAnalyzer:
                 excerpt_hash = hashlib.sha256(
                     "".join(lines[start - 1 : end]).encode("utf-8")
                 ).hexdigest()
+                naming = content_key(snapshot, path)
             record = EvidenceRecord(
                 evidence_id=stable_id(
                     "evidence",
                     (
-                        snapshot.snapshot_id,
+                        naming,
                         path,
                         start_line,
                         end_line,
@@ -973,7 +983,7 @@ class ProjectMetadataAnalyzer:
                 symbol_id = stable_id(
                     "symbol",
                     (
-                        snapshot.snapshot_id,
+                        content_key(snapshot, file_record.path),
                         file_record.path,
                         "requirements_manifest",
                         ANALYZER_VERSION,
@@ -1017,7 +1027,7 @@ class ProjectMetadataAnalyzer:
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, file_record.path),
                                     symbol_id,
                                     "declares_dependency",
                                     dependency,
@@ -1057,7 +1067,7 @@ class ProjectMetadataAnalyzer:
                 symbol_id = stable_id(
                     "symbol",
                     (
-                        snapshot.snapshot_id,
+                        content_key(snapshot, file_record.path),
                         file_record.path,
                         "project_manifest",
                         ANALYZER_VERSION,
@@ -1094,7 +1104,7 @@ class ProjectMetadataAnalyzer:
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, file_record.path),
                                     symbol_id,
                                     "declares_dependency",
                                     dependency,
@@ -1205,7 +1215,7 @@ class ProjectMetadataAnalyzer:
                 symbol_id = stable_id(
                     "symbol",
                     (
-                        snapshot.snapshot_id,
+                        content_key(snapshot, file_record.path),
                         file_record.path,
                         "project_manifest",
                         ANALYZER_VERSION,
@@ -1237,7 +1247,7 @@ class ProjectMetadataAnalyzer:
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, file_record.path),
                                     symbol_id,
                                     "declares_dependency",
                                     dependency,
@@ -1342,7 +1352,12 @@ class ProjectMetadataAnalyzer:
                 )
             symbol_id = stable_id(
                 "symbol",
-                (snapshot.snapshot_id, file_record.path, "package_manifest", ANALYZER_VERSION),
+                (
+                    content_key(snapshot, file_record.path),
+                    file_record.path,
+                    "package_manifest",
+                    ANALYZER_VERSION,
+                ),
             )
             symbols.append(
                 SymbolRecord(
@@ -1368,7 +1383,7 @@ class ProjectMetadataAnalyzer:
                         edge_id=stable_id(
                             "edge",
                             (
-                                snapshot.snapshot_id,
+                                content_key(snapshot, file_record.path),
                                 symbol_id,
                                 "declares_dependency",
                                 dependency,
@@ -1864,7 +1879,12 @@ class ProjectMetadataAnalyzer:
                     )
                     document_symbol = stable_id(
                         "symbol",
-                        (snapshot.snapshot_id, file_record.path, "document", ANALYZER_VERSION),
+                        (
+                            content_key(snapshot, file_record.path),
+                            file_record.path,
+                            "document",
+                            ANALYZER_VERSION,
+                        ),
                     )
                     symbols.append(
                         SymbolRecord(
@@ -1886,7 +1906,7 @@ class ProjectMetadataAnalyzer:
                                 edge_id=stable_id(
                                     "edge",
                                     (
-                                        snapshot.snapshot_id,
+                                        content_key(snapshot, file_record.path),
                                         document_symbol,
                                         "loads",
                                         reference,
@@ -1953,7 +1973,12 @@ class ProjectMetadataAnalyzer:
                 SymbolRecord(
                     symbol_id=stable_id(
                         "symbol",
-                        (snapshot.snapshot_id, file_record.path, "text_names", ANALYZER_VERSION),
+                        (
+                            content_key(snapshot, file_record.path),
+                            file_record.path,
+                            "text_names",
+                            ANALYZER_VERSION,
+                        ),
                     ),
                     snapshot_id=snapshot.snapshot_id,
                     path=file_record.path,
@@ -1989,7 +2014,7 @@ class ProjectMetadataAnalyzer:
                     symbol_id=stable_id(
                         "symbol",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             file_record.path,
                             "documentation",
                             ANALYZER_VERSION,
@@ -2032,7 +2057,7 @@ class ProjectMetadataAnalyzer:
                     symbol_id=stable_id(
                         "symbol",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             file_record.path,
                             "compiler_configuration",
                             ANALYZER_VERSION,

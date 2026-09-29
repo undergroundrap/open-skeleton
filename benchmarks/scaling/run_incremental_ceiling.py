@@ -31,25 +31,27 @@ is not in the output to be replaced -- substitution normalised the one field
 spelling it out, left every hash that had consumed it, and reported that
 nothing at all was reusable. That is a measurement of the instrument.
 
-So the change itself is applied instead: `stable_id` is wrapped for the
-duration of the run to drop any field equal to the current snapshot id before
-hashing, which is precisely the proposal in `docs/LANDSCAPE.md`. Identifiers
-then follow content, and the comparison is between whole records, identifiers
-included.
+A second version wrapped `stable_id` to drop the snapshot id before hashing,
+simulating the change so the ceiling could be measured before the work. That
+wrapper is gone: the readers now key per-file facts by `content_key`, so what
+this reports is the reuse actually available rather than the reuse that would
+be. Leaving the wrapper in would have been worse than useless, because it was
+never selective -- it would have gone on content-keying the claims and census
+receipts that are still named after their snapshot on purpose, and reported
+them reusable when nothing reuses them.
 
-That also keeps the instrument honest as the engine changes. Today the wrapper
-changes what is measured, so the number is a ceiling: the reuse that would be
-available if facts were keyed by content. Once facts are keyed by content the
-wrapper finds no snapshot id among the fields, drops nothing, and the same
-number becomes the reuse actually achieved. The instrument is never told which
-world it is in, and so cannot be left measuring the old one.
+Claims are expected near zero here, and that is the design rather than a gap.
+A claim id hashes the snapshot, the category and the text but not the path, so
+that two files stating the same thing merge into one claim carrying both
+receipts. Roughly a thousand claims per repository are rewritten each run
+against a few hundred thousand receipts that are not.
 
     python benchmarks/scaling/run_incremental_ceiling.py -- <repository> [...]
     python benchmarks/scaling/run_incremental_ceiling.py --edit src/thing.py -- <repository>
 
 The repository is copied to a temporary directory before being edited; the
-path given is never written to. Exit status is zero: this measures a ceiling,
-it is not a gate.
+path given is never written to. Exit status is zero: this measures what is
+reusable, it is not a gate.
 """
 
 from __future__ import annotations
@@ -62,7 +64,6 @@ import shutil
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Callable, Iterable
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any
@@ -70,16 +71,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import open_skeleton
-from open_skeleton import ids as ids_module
 from open_skeleton import models
 
 PINNED_CLOCK = "2026-01-01T00:00:00.000+00:00"
-
-_REAL_STABLE_ID: Callable[[str, Iterable[object]], str] = ids_module.stable_id
-# The snapshot being analyzed, so the wrapper below knows what to drop. Set
-# once per analysis, because the two runs have different snapshot ids and each
-# has to be measured against its own.
-_ANALYZING: dict[str, str] = {"snapshot_id": ""}
 
 # Appended rather than inserted, so no earlier line moves and the measurement
 # is not dominated by every receipt in one file shifting by a line. The point
@@ -89,47 +83,29 @@ ADDED_LINE = "\n# open-skeleton incremental-ceiling measurement\n"
 RECORD_CLASSES = ("evidence", "symbols", "edges", "claims")
 
 
-def _snapshot_free_stable_id(namespace: str, values: Any) -> str:
-    """`stable_id`, with the snapshot id dropped from the fields it hashes.
+def _pin_clock() -> None:
+    """Every module's `utc_now`, pinned, so two runs differ only where the code does.
 
-    Dropping by value rather than by position, because the snapshot id is not
-    always the first field and a positional rule would silently stop matching
-    the day one call site reordered its arguments.
-    """
+    Rebound module by module rather than once at the source, because every
+    module here imports the name directly and rebinding `models.utc_now` alone
+    would not reach those second references.
 
-    current = _ANALYZING["snapshot_id"]
-    if current:
-        values = [value for value in values if value != current]
-    return _REAL_STABLE_ID(namespace, values)
-
-
-def _patch_modules() -> None:
-    """Pin the clock, and make identity follow content, everywhere both are used.
-
-    Both are rebound module by module rather than once at the source, because
-    every module here imports the names directly -- `from .ids import
-    stable_id` binds a second reference that rebinding `ids.stable_id` alone
-    would not reach.
-
-    Pinning matters as much as the identity change: `created_at` alone makes
-    every evidence and claim record differ between two runs, and the measured
-    reuse is then zero for a reason that has nothing to do with the question.
+    Without this, `created_at` alone makes every evidence and claim record
+    differ between two runs, and the measured reuse is zero for a reason that
+    has nothing to do with the question being asked.
     """
 
     def pinned() -> str:
         return PINNED_CLOCK
 
     models.utc_now = pinned
-    ids_module.stable_id = _snapshot_free_stable_id
     for info in pkgutil.walk_packages(open_skeleton.__path__, "open_skeleton."):
         module = importlib.import_module(info.name)
         if hasattr(module, "utc_now"):
             module.utc_now = pinned  # type: ignore[attr-defined]
-        if hasattr(module, "stable_id"):
-            module.stable_id = _snapshot_free_stable_id  # type: ignore[attr-defined]
 
 
-_patch_modules()
+_pin_clock()
 
 from open_skeleton.analysis import analyze_snapshot  # noqa: E402
 from open_skeleton.scanner import scan_repository  # noqa: E402
@@ -166,18 +142,29 @@ def canonical(record: Any) -> str:
     )
 
 
-def _paths_of(record: Any) -> set[str]:
-    """Every file this record's identity could depend on, as the record states it.
+def _paths_of(record: Any, symbol_paths: dict[str, str]) -> set[str]:
+    """Every file this record depends on, as the record states it.
 
     `path` for evidence and symbols, `source_path` for an edge, and the file
     named by any `file:` invalidation key for a claim. Read from the record
     rather than from a table of record types, so a new record class is handled
     by whichever of these it happens to carry.
+
+    An edge depends on a second file, and missing it is the mistake an
+    incremental implementation is most likely to make. A resolved edge carries
+    the identifier of the symbol it lands on, that identifier follows the
+    target file's bytes, and so editing a file renames every edge pointing
+    into it from anywhere else in the repository. Editing this repository's
+    Python reader moved 76 edges that no other rule here explains, every one of
+    them declared in another file and resolving into the edited one. Keying an
+    edge on its source file alone would have kept all 76 and served a
+    resolution to a symbol that no longer exists under that name.
     """
 
     found = {
         str(getattr(record, "path", "") or ""),
         str(getattr(record, "source_path", "") or ""),
+        symbol_paths.get(str(getattr(record, "target_symbol_id", "") or ""), ""),
     }
     for key in getattr(record, "invalidation_keys", ()) or ():
         if str(key).startswith("file:"):
@@ -201,7 +188,6 @@ def examine(root: Path, edit: str | None) -> dict[str, Any]:
         before_snapshot = scan_repository(work)
         if not before_snapshot.files:
             return {}
-        _ANALYZING["snapshot_id"] = before_snapshot.snapshot_id
         before = analyze_snapshot(before_snapshot)
 
         target = _choose_edit(work, before_snapshot, edit)
@@ -212,11 +198,14 @@ def examine(root: Path, edit: str | None) -> dict[str, Any]:
         )
 
         after_snapshot = scan_repository(work)
-        _ANALYZING["snapshot_id"] = after_snapshot.snapshot_id
         after = analyze_snapshot(after_snapshot)
 
         was = {item.path: item.sha256 for item in before_snapshot.files}
         changed = {item.path for item in after_snapshot.files if was.get(item.path) != item.sha256}
+
+        # Where each symbol lives, so an edge's dependency on the file it
+        # resolves into can be read from the edge.
+        symbol_paths = {item.symbol_id: item.path for item in after.symbols}
 
         measured: dict[str, Any] = {
             "repository": root.name,
@@ -236,7 +225,7 @@ def examine(root: Path, edit: str | None) -> dict[str, Any]:
                 if previous.get(key, 0) > 0:
                     previous[key] -= 1
                     reusable += 1
-                elif _paths_of(record) & changed:
+                elif _paths_of(record, symbol_paths) & changed:
                     touched += 1
                 else:
                     unexplained += 1

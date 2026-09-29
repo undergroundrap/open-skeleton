@@ -41,7 +41,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -622,7 +622,7 @@ class SqlSchemaAnalyzer:
             record = EvidenceRecord(
                 evidence_id=stable_id(
                     "evidence",
-                    (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION),
+                    (content_key(snapshot, path), path, line, kind, symbol, ANALYZER_VERSION),
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=path,
@@ -661,7 +661,8 @@ class SqlSchemaAnalyzer:
 
             for table in tables:
                 table_symbol = stable_id(
-                    "symbol", (snapshot.snapshot_id, path, "table", table.name, ANALYZER_VERSION)
+                    "symbol",
+                    (content_key(snapshot, path), path, "table", table.name, ANALYZER_VERSION),
                 )
                 symbols.append(
                     SymbolRecord(
@@ -760,7 +761,7 @@ class SqlSchemaAnalyzer:
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, path),
                                     table_symbol,
                                     "references_table",
                                     target,
@@ -780,7 +781,8 @@ class SqlSchemaAnalyzer:
 
             for index in indexes:
                 index_symbol = stable_id(
-                    "symbol", (snapshot.snapshot_id, path, "index", index.name, ANALYZER_VERSION)
+                    "symbol",
+                    (content_key(snapshot, path), path, "index", index.name, ANALYZER_VERSION),
                 )
                 symbols.append(
                     SymbolRecord(
@@ -822,7 +824,7 @@ class SqlSchemaAnalyzer:
                         edge_id=stable_id(
                             "edge",
                             (
-                                snapshot.snapshot_id,
+                                content_key(snapshot, path),
                                 index_symbol,
                                 "indexes_table",
                                 index.table,

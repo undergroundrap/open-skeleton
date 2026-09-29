@@ -22,7 +22,7 @@ from typing import Any
 from open_skeleton.analyzers.ast_visitor import FastNodeVisitor
 from open_skeleton.analyzers.ast_visitor import iter_child_nodes as _fast_children
 from open_skeleton.analyzers.ast_visitor import walk as _fast_walk
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -1961,7 +1961,7 @@ class _PythonFileAnalyzer(FastNodeVisitor):
         symbol_id = stable_id(
             "symbol",
             (
-                self.snapshot.snapshot_id,
+                content_key(self.snapshot, self.path),
                 self.path,
                 qualified_name,
                 kind,
@@ -2002,7 +2002,7 @@ class _PythonFileAnalyzer(FastNodeVisitor):
         evidence_id = stable_id(
             "evidence",
             (
-                self.snapshot.snapshot_id,
+                content_key(self.snapshot, self.path),
                 self.path,
                 start_line,
                 end_line,
@@ -2084,7 +2084,7 @@ class _PythonFileAnalyzer(FastNodeVisitor):
         edge_id = stable_id(
             "edge",
             (
-                self.snapshot.snapshot_id,
+                content_key(self.snapshot, self.path),
                 source_id,
                 relationship,
                 target_ref,

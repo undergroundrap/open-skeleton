@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -103,7 +103,7 @@ def _graph_facts(
         line = min(max(1, line), max(1, len(text)))
         excerpt = text[line - 1] if text else ""
         identifier = stable_id(
-            "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
+            "evidence", (content_key(snapshot, path), path, line, kind, symbol, ANALYZER_VERSION)
         )
         if identifier not in seen:
             seen.add(identifier)
@@ -344,7 +344,13 @@ class HumSemanticIndexAnalyzer:
             index_receipt = EvidenceRecord(
                 evidence_id=stable_id(
                     "evidence",
-                    (snapshot.snapshot_id, str(index_path), digest, ANALYZER_VERSION),
+                    # `digest` is this index's content hash, so it is already
+                    # the key a per-file fact is named by. `content_key` is
+                    # not used here because the index is read from outside the
+                    # approved root and the snapshot holds no entry for it --
+                    # it would return the empty string for every index, and a
+                    # constant is not an identity.
+                    (str(index_path), digest, ANALYZER_VERSION),
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=f"@hum-index:{index_path}",
@@ -398,7 +404,7 @@ class HumSemanticIndexAnalyzer:
             module = graph_file.get("module") or Path(path).stem
             module_id = stable_id(
                 "symbol",
-                (snapshot.snapshot_id, path, module, "module", ANALYZER_VERSION),
+                (content_key(snapshot, path), path, module, "module", ANALYZER_VERSION),
             )
             symbols.append(
                 SymbolRecord(
@@ -424,7 +430,7 @@ class HumSemanticIndexAnalyzer:
                 source_hash = hashlib.sha256(source_lines[line - 1].encode("utf-8")).hexdigest()
                 receipt_id = stable_id(
                     "evidence",
-                    (snapshot.snapshot_id, path, line, qualified, ANALYZER_VERSION),
+                    (content_key(snapshot, path), path, line, qualified, ANALYZER_VERSION),
                 )
                 evidence.append(
                     EvidenceRecord(
@@ -442,7 +448,7 @@ class HumSemanticIndexAnalyzer:
                 )
                 symbol_id = stable_id(
                     "symbol",
-                    (snapshot.snapshot_id, path, qualified, kind, line, ANALYZER_VERSION),
+                    (content_key(snapshot, path), path, qualified, kind, line, ANALYZER_VERSION),
                 )
                 symbols.append(
                     SymbolRecord(
@@ -467,7 +473,7 @@ class HumSemanticIndexAnalyzer:
                         edge_id=stable_id(
                             "edge",
                             (
-                                snapshot.snapshot_id,
+                                content_key(snapshot, path),
                                 module_id,
                                 "contains",
                                 qualified,

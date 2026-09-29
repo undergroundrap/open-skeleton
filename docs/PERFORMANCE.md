@@ -109,27 +109,51 @@ the upsert fix and would dominate any run over a large repository.
 
 `benchmarks/scaling/run_incremental_ceiling.py` analyzes a repository, adds one
 line to its largest source file, analyzes it again, and compares every record
-from the second run with every record from the first. It wraps `stable_id` for
-the duration so identifiers follow content rather than the snapshot, which is
-the change [LANDSCAPE.md](LANDSCAPE.md) puts first. The number it reports is
-therefore a ceiling today and the reuse actually achieved once that change
-lands; the instrument is never told which of the two it is measuring.
+from the second run with every record from the first. Since per-file facts are
+named by `content_key`, what it reports is the reuse available rather than a
+projection of it.
 
 September 29, 2026, on Windows AMD64, Python 3.12.14:
 
 | Repository | Files | Evidence | Symbols | Edges | Claims | Whole-repository |
 |---|---:|---:|---:|---:|---:|---:|
-| open-skeleton | 182 | 99.97% | 99.98% | 99.48% | 99.71% | 5 |
-| pygments | 339 | 98.55% | 99.99% | 99.86% | 99.69% | 4 |
-| mypy | 949 | 99.99% | 100.00% | 99.63% | 99.90% | 4 |
+| open-skeleton | 183 | 95.1% | 95.9% | 94.8% | 0% | 5 |
+| pygments | 339 | 98.6% | 97.5% | 98.6% | 0% | 4 |
+| mypy | 949 | 96.0% | 99.1% | 96.1% | 0% | 4 |
 
-Every record that is not reusable is traceable to the edited file, with one
+Every record that is not reusable is traceable to a file that changed, with one
 exception -- the last column. Four or five evidence records per repository have
 `.` for a path and the snapshot id for an `excerpt_sha256`: `snapshot_census`,
 `static_import_census`, `unsafe_census`, `rust_test_census`. Their excerpt is
 the file inventory itself, so they change whenever any file does. They are the
 whole class of reader output an incremental run cannot reuse, and they are
 cheap to recompute.
+
+Claims at zero is the design rather than a gap. A claim id hashes the snapshot,
+the category and the text but not the path, so that two files stating the same
+thing merge into one claim carrying both receipts; keying a claim by content
+would produce two claims nothing can fold. About a thousand claims per
+repository are rewritten each run against a few hundred thousand receipts that
+are not.
+
+Two things are worth recording about how these numbers were arrived at, because
+both were wrong first.
+
+An earlier version of this table read 99.5% to 100% everywhere. It was measured
+by simulation, with `stable_id` wrapped to drop the snapshot id, and the
+simulation keyed a receipt by its position in a file rather than by the file's
+bytes. Appending a line moved nothing, so the edited file's own 1,287 receipts
+counted as reusable. Under content keying they are correctly renamed, and the
+honest rate is four points lower. The reuse worth having is the one that cannot
+serve a receipt for bytes that changed.
+
+And an edge depends on two files, not one. A resolved edge carries the
+identifier of the symbol it lands on, that identifier follows the target file's
+bytes, so editing a file renames every edge pointing into it from anywhere
+else. Editing this repository's Python reader moved 76 edges declared in other
+files, every one resolving into the edited one. An incremental implementation
+keying an edge on its source file alone would keep all 76 and serve a
+resolution to a symbol that no longer exists under that name.
 
 ```bash
 python benchmarks/scaling/run_incremental_ceiling.py -- <repository>

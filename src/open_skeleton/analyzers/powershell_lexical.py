@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from open_skeleton.analyzers.base import declares_a_number
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -607,7 +607,7 @@ class PowerShellLexicalAnalyzer:
         def receipt(path: str, start: int, end: int, kind: str, excerpt: str) -> EvidenceRecord:
             record = EvidenceRecord(
                 evidence_id=stable_id(
-                    "evidence", (snapshot.snapshot_id, path, start, kind, ANALYZER_VERSION)
+                    "evidence", (content_key(snapshot, path), path, start, kind, ANALYZER_VERSION)
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=path,
@@ -681,7 +681,12 @@ class PowerShellLexicalAnalyzer:
                 SymbolRecord(
                     symbol_id=stable_id(
                         "symbol",
-                        (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION),
+                        (
+                            content_key(snapshot, file_record.path),
+                            file_record.path,
+                            "module",
+                            ANALYZER_VERSION,
+                        ),
                     ),
                     snapshot_id=snapshot.snapshot_id,
                     path=file_record.path,
@@ -706,7 +711,12 @@ class PowerShellLexicalAnalyzer:
                     SymbolRecord(
                         symbol_id=stable_id(
                             "symbol",
-                            (snapshot.snapshot_id, file_record.path, name, ANALYZER_VERSION),
+                            (
+                                content_key(snapshot, file_record.path),
+                                file_record.path,
+                                name,
+                                ANALYZER_VERSION,
+                            ),
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         path=file_record.path,
@@ -725,7 +735,13 @@ class PowerShellLexicalAnalyzer:
                     EdgeRecord(
                         edge_id=stable_id(
                             "edge",
-                            (snapshot.snapshot_id, file_record.path, "imports", target, line),
+                            (
+                                content_key(snapshot, file_record.path),
+                                file_record.path,
+                                "imports",
+                                target,
+                                line,
+                            ),
                         ),
                         snapshot_id=snapshot.snapshot_id,
                         source_symbol_id=None,

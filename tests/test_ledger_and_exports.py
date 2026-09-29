@@ -58,7 +58,7 @@ class LedgerAndExportTests(TestCase):
                 schema_version = connection.execute(
                     "SELECT value FROM metadata WHERE key = 'schema_version'"
                 ).fetchone()
-            self.assertEqual(schema_version, ("4",))
+            self.assertEqual(schema_version, ("5",))
 
     def test_repeated_save_is_idempotent(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -214,7 +214,7 @@ class AdditiveMigrationTests(TestCase):
             self.assertIn("claimed_files", columns)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["analyzed_files"], 4)
-            self.assertEqual(version["value"], "4")
+            self.assertEqual(version["value"], "5")
 
     def test_a_migrated_row_reports_unknown_yield_rather_than_zero(self) -> None:
         with TemporaryDirectory() as temporary:

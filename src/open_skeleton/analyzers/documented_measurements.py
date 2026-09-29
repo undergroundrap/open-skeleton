@@ -37,7 +37,7 @@ import re
 import time
 from pathlib import Path
 
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -278,7 +278,8 @@ class DocumentedMeasurementAnalyzer:
         for number, _, text in lines[:MAX_LINES_PER_FILE]:
             record = EvidenceRecord(
                 evidence_id=stable_id(
-                    "evidence", (snapshot.snapshot_id, path, number, category, ANALYZER_VERSION)
+                    "evidence",
+                    (content_key(snapshot, path), path, number, category, ANALYZER_VERSION),
                 ),
                 snapshot_id=snapshot.snapshot_id,
                 path=path,

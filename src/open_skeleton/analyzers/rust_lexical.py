@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from open_skeleton.analyzers.base import declares_a_number, render_declared_type
-from open_skeleton.ids import stable_id
+from open_skeleton.ids import content_key, stable_id
 from open_skeleton.models import (
     AnalysisResult,
     ClaimRecord,
@@ -1523,7 +1523,8 @@ def _read_rust_files(
     ) -> EvidenceRecord:
         record = EvidenceRecord(
             evidence_id=stable_id(
-                "evidence", (snapshot.snapshot_id, path, line, kind, symbol, ANALYZER_VERSION)
+                "evidence",
+                (content_key(snapshot, path), path, line, kind, symbol, ANALYZER_VERSION),
             ),
             snapshot_id=snapshot.snapshot_id,
             path=path,
@@ -1617,7 +1618,8 @@ def _read_rust_files(
                 )
             )
         module_symbol_id = stable_id(
-            "symbol", (snapshot.snapshot_id, file_record.path, "module", ANALYZER_VERSION)
+            "symbol",
+            (content_key(snapshot, file_record.path), file_record.path, "module", ANALYZER_VERSION),
         )
         symbols.append(
             SymbolRecord(
@@ -1719,7 +1721,7 @@ def _read_rust_files(
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, file_record.path),
                                     module_symbol_id,
                                     "imports",
                                     target,
@@ -1764,7 +1766,7 @@ def _read_rust_files(
                     symbol_id = stable_id(
                         "symbol",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             file_record.path,
                             qualified,
                             token.line,
@@ -1790,7 +1792,7 @@ def _read_rust_files(
                             edge_id=stable_id(
                                 "edge",
                                 (
-                                    snapshot.snapshot_id,
+                                    content_key(snapshot, file_record.path),
                                     module_symbol_id,
                                     "contains",
                                     qualified,
@@ -1949,7 +1951,7 @@ def _read_rust_files(
                     edge_id=stable_id(
                         "edge",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             module_symbol_id,
                             "calls",
                             callee,
@@ -2042,7 +2044,7 @@ def _read_rust_files(
                     symbol_id=stable_id(
                         "symbol",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             file_record.path,
                             qualified,
                             method_line,
@@ -2065,7 +2067,7 @@ def _read_rust_files(
                     edge_id=stable_id(
                         "edge",
                         (
-                            snapshot.snapshot_id,
+                            content_key(snapshot, file_record.path),
                             module_symbol_id,
                             "contains",
                             qualified,
