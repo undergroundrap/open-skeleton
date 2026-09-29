@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import closing
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -337,3 +338,47 @@ class LedgerBindingTests(TestCase):
                 expected,
                 "counting disagreed with listing on a migrated ledger",
             )
+
+
+class DistinctIdentityTests(TestCase):
+    """One identifier names one fact.
+
+    An identifier is a digest of what a fact says, so two facts that say
+    different things must not share one. When they do, the ledger's primary
+    key silently keeps whichever was written last and the other is gone: the
+    receipt still verifies, the claim still cites it, and the fact it used to
+    name is not there.
+
+    This is checked over this repository rather than a fixture because the
+    defect it first caught needed real source to appear: `sql-schema` minted a
+    symbol for a table without recording where the statement was, so two
+    `CREATE TABLE` statements naming different tables in one file collided.
+    A fixture written to test the reader would not have had two.
+    """
+
+    def test_no_two_records_share_an_identifier_and_disagree(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        result = analyze_snapshot(scan_repository(root))
+
+        clashes: list[str] = []
+        for name, column in (
+            ("evidence", "evidence_id"),
+            ("symbols", "symbol_id"),
+            ("edges", "edge_id"),
+        ):
+            seen: dict[str, str] = {}
+            for record in getattr(result, name):
+                identifier = str(getattr(record, column))
+                spelled = "|".join(
+                    f"{field.name}={getattr(record, field.name)!s}"
+                    for field in dataclass_fields(record)
+                    if field.name != column
+                )
+                if seen.setdefault(identifier, spelled) != spelled:
+                    clashes.append(
+                        f"{name} {identifier[:12]} "
+                        f"({getattr(record, 'analyzer', '?')}) names two different facts"
+                    )
+            self.assertTrue(seen, f"the repository produced no {name} to check")
+
+        self.assertEqual(sorted(set(clashes))[:6], [], "an identifier names more than one fact")

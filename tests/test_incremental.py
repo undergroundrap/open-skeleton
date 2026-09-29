@@ -32,6 +32,7 @@ from unittest import TestCase
 from open_skeleton import reuse
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.analyzers import python_ast
+from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import AnalysisResult
 from open_skeleton.reuse import ReadCache
 from open_skeleton.scanner import scan_repository
@@ -479,4 +480,152 @@ class StoredCacheTests(TestCase):
             "service/batch.py",
             {key[1] for key in remaining.entries},
             "a file the snapshot no longer holds kept its entry",
+        )
+
+
+class LedgerWriteTests(TestCase):
+    """Writing only what the ledger does not already hold.
+
+    Re-analysing a repository mints the same identifier for every fact read
+    from a file nobody touched, so writing those rows again says nothing new.
+    On mypy that is 206,757 of 213,778 rows in what is now the largest stage
+    of a run.
+
+    Skipping by identifier alone would be wrong, and the first test here is
+    why. Two fields move while an identifier stays put: a symbol's `metadata`,
+    which records where each call lands, and an edge's `target_symbol_id`,
+    which is resolved against every other file. A row digest covers both.
+    """
+
+    def _saved(self, root: Path, database: Path) -> EvidenceLedger:
+        ledger = EvidenceLedger(database)
+        snapshot = scan_repository(root)
+        ledger.save_snapshot(snapshot)
+        ledger.save_analysis(analyze_snapshot(snapshot))
+        return ledger
+
+    def _stored_metadata(self, database: Path, path: str) -> list[str]:
+        with closing(sqlite3.connect(database)) as connection:
+            return [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT metadata_json FROM symbols WHERE path = ? AND kind = 'module'",
+                    (path,),
+                )
+            ]
+
+    def test_a_row_whose_meaning_changed_is_written_although_its_name_did_not(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            database = Path(temporary) / "evidence.sqlite3"
+            ledger = self._saved(root, database)
+            before = self._stored_metadata(database, "service/batch.py")
+
+            # `batch.py` calls a method on a class from `service/store.py`.
+            # Its own bytes do not change, so its symbol keeps its identifier,
+            # and what that symbol says about the call does change.
+            (root / "service" / "store.py").unlink()
+            snapshot = scan_repository(root)
+            ledger.save_snapshot(snapshot)
+            ledger.save_analysis(analyze_snapshot(snapshot))
+            after = self._stored_metadata(database, "service/batch.py")
+
+        self.assertTrue(before and after, "the fixture stored no module symbol to speak for")
+        self.assertIn("this repository", before[0])
+        self.assertNotIn(
+            "this repository",
+            after[0],
+            "a symbol kept a classification the snapshot no longer supports; "
+            "the write was skipped on an identifier that had not changed",
+        )
+
+    def test_an_incremental_ledger_says_what_a_cold_one_says(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+
+            incremental = Path(temporary) / "incremental.sqlite3"
+            ledger = self._saved(root, incremental)
+
+            edited = root / "service" / "loader.py"
+            edited.write_text(SERVICE.replace("RETRY_LIMIT = 3", "RETRY_LIMIT = 9"), "utf-8")
+
+            snapshot = scan_repository(root)
+            result = analyze_snapshot(snapshot)
+            ledger.save_snapshot(snapshot)
+            ledger.save_analysis(result)
+
+            cold = Path(temporary) / "cold.sqlite3"
+            fresh = EvidenceLedger(cold)
+            fresh.save_snapshot(snapshot)
+            fresh.save_analysis(result)
+
+            rows = {}
+            for name, database in (("incremental", incremental), ("cold", cold)):
+                with closing(sqlite3.connect(database)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    rows[name] = {
+                        str(row["evidence_id"]): dict(row)
+                        for row in connection.execute("SELECT * FROM evidence")
+                    }
+
+        shared = set(rows["incremental"]) & set(rows["cold"])
+        self.assertTrue(shared, "the two ledgers share no receipts to compare")
+        self.assertEqual(set(rows["cold"]) - shared, set(), "the cold ledger holds more")
+        # `snapshot_id` and `created_at` are left as the run that first saw a
+        # fact recorded them, which is the whole reason a row can be skipped.
+        # Everything a receipt says has to match.
+        differing = [
+            key
+            for key in sorted(shared)
+            if {
+                k: v
+                for k, v in rows["incremental"][key].items()
+                if k not in {"snapshot_id", "created_at"}
+            }
+            != {
+                k: v for k, v in rows["cold"][key].items() if k not in {"snapshot_id", "created_at"}
+            }
+        ]
+        self.assertEqual(
+            differing[:5], [], "an incremental ledger says something a cold one does not"
+        )
+
+    def test_a_second_save_of_the_same_analysis_writes_nothing(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            database = Path(temporary) / "evidence.sqlite3"
+            ledger = self._saved(root, database)
+            first = ledger.rows_written
+            self.assertTrue(first, "the first save wrote nothing at all")
+
+            snapshot = scan_repository(root)
+            ledger.save_analysis(analyze_snapshot(snapshot))
+
+        self.assertEqual(ledger.rows_written, 0, "rows the ledger already held were written again")
+
+    def test_only_the_edited_file_s_facts_are_written_again(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            database = Path(temporary) / "evidence.sqlite3"
+            ledger = self._saved(root, database)
+            everything = ledger.rows_written
+
+            edited = root / "service" / "loader.py"
+            edited.write_text(SERVICE.replace("RETRY_LIMIT = 3", "RETRY_LIMIT = 9"), "utf-8")
+            snapshot = scan_repository(root)
+            ledger.save_snapshot(snapshot)
+            ledger.save_analysis(analyze_snapshot(snapshot))
+
+        self.assertLess(
+            ledger.rows_written,
+            everything // 2,
+            "a one-line edit rewrote most of the ledger",
         )

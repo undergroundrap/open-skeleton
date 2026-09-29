@@ -660,9 +660,23 @@ class SqlSchemaAnalyzer:
             fixture = role == "test"
 
             for table in tables:
+                # The line is part of the identity because a name can
+                # legitimately repeat in one file: a migration re-declares a
+                # table, and a test fixture declares several under one name to
+                # exercise the reader. Without it both statements minted the
+                # same identifier, the ledger's primary key kept whichever was
+                # written second, and the first table's columns were simply
+                # gone -- with its receipt still verifying.
                 table_symbol = stable_id(
                     "symbol",
-                    (content_key(snapshot, path), path, "table", table.name, ANALYZER_VERSION),
+                    (
+                        content_key(snapshot, path),
+                        path,
+                        "table",
+                        table.name,
+                        table.line,
+                        ANALYZER_VERSION,
+                    ),
                 )
                 symbols.append(
                     SymbolRecord(
@@ -782,7 +796,14 @@ class SqlSchemaAnalyzer:
             for index in indexes:
                 index_symbol = stable_id(
                     "symbol",
-                    (content_key(snapshot, path), path, "index", index.name, ANALYZER_VERSION),
+                    (
+                        content_key(snapshot, path),
+                        path,
+                        "index",
+                        index.name,
+                        index.line,
+                        ANALYZER_VERSION,
+                    ),
                 )
                 symbols.append(
                     SymbolRecord(

@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,11 +17,51 @@ from typing import Any
 from open_skeleton.ids import stable_id
 from open_skeleton.models import AnalysisResult, Snapshot, utc_now
 
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 # Tables whose rows are named after the bytes they were read from, and the
 # column naming the file each row came from.
 CONTENT_BOUND_TABLES = {"evidence": "path", "symbols": "path", "edges": "source_path"}
+
+
+def _unstored(
+    stored: set[tuple[str, str]],
+    rows: Iterable[tuple[Any, ...]],
+    *,
+    preserved: tuple[int, ...],
+) -> list[tuple[Any, ...]]:
+    """Each row the ledger does not already hold, with its digest appended.
+
+    Re-analysing a repository mints the same identifier for every fact read
+    from a file nobody touched, because an identifier is a digest of the bytes
+    it was read from. Writing those rows again changes nothing, and on mypy it
+    is 206,757 of 213,778 rows in the largest stage of a run.
+
+    Skipping by identifier alone would be wrong, which is why the digest
+    exists. Two fields can move while an identifier stays put: a symbol's
+    `metadata`, which records where each call lands and reclassifies one into
+    a module the snapshot no longer holds, and an edge's `target_symbol_id`,
+    which is resolved against every other file. Both are covered because the
+    digest is taken over the row being written rather than over a list of
+    fields kept here, so a column added later is included instead of quietly
+    left out.
+
+    `preserved` names the columns deliberately left out: the identifier, which
+    the digest is paired with, and the fields that record when a fact was
+    first seen rather than what it says. Those keep their original values, so
+    a row that is skipped and a row that is written are the same row.
+    """
+
+    unstored = []
+    for row in rows:
+        digest = stable_id(
+            "row",
+            [value for index, value in enumerate(row) if index and index not in preserved],
+        )
+        if (str(row[0]), digest) in stored:
+            continue
+        unstored.append((*row, digest))
+    return unstored
 
 
 def in_snapshot(table: str, alias: str = "") -> str:
@@ -219,6 +259,9 @@ class EvidenceLedger:
 
     def __init__(self, path: Path) -> None:
         self.path = path.expanduser().resolve()
+        # Fact rows the last `save_analysis` had to write, as opposed to ones
+        # it found already stored. Zero until a save has happened.
+        self.rows_written = 0
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10.0)
@@ -260,6 +303,16 @@ class EvidenceLedger:
         ("evidence", "file_sha256", "TEXT"),
         ("symbols", "file_sha256", "TEXT"),
         ("edges", "file_sha256", "TEXT"),
+        # Everything about a row that its identifier does not already
+        # imply. Re-analysing a repository produces the same identifier
+        # for every fact read from a file nobody touched, and writing
+        # those rows again changes nothing: on mypy that is 206,757 of
+        # 213,778 rows, and the write is the largest stage of a run. A
+        # null means the row predates this column and is written once
+        # more to acquire one.
+        ("evidence", "row_sha256", "TEXT"),
+        ("symbols", "row_sha256", "TEXT"),
+        ("edges", "row_sha256", "TEXT"),
     )
 
     def _apply_additive_migrations(self, connection: sqlite3.Connection) -> None:
@@ -341,7 +394,8 @@ class EvidenceLedger:
                     excerpt_sha256 TEXT,
                     analyzer TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    file_sha256 TEXT
+                    file_sha256 TEXT,
+                    row_sha256 TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS evidence_snapshot_path_idx
@@ -360,7 +414,8 @@ class EvidenceLedger:
                     language TEXT NOT NULL,
                     analyzer TEXT NOT NULL,
                     metadata_json TEXT NOT NULL,
-                    file_sha256 TEXT
+                    file_sha256 TEXT,
+                    row_sha256 TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS symbols_content_idx
@@ -380,7 +435,8 @@ class EvidenceLedger:
                     target_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
                     evidence_id TEXT REFERENCES evidence(evidence_id) ON DELETE SET NULL,
                     analyzer TEXT NOT NULL,
-                    file_sha256 TEXT
+                    file_sha256 TEXT,
+                    row_sha256 TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS edges_content_idx
@@ -996,6 +1052,27 @@ class EvidenceLedger:
                 )
             }
 
+            # What this ledger already holds, as identifier and row digest.
+            # Reading 213,778 of these pairs on mypy takes a quarter of a
+            # second against the eleven the writes take, so asking is cheap
+            # beside writing rows that say what is already written.
+            #
+            # A row written before `row_sha256` existed has none and matches
+            # nothing, so a migrated ledger writes every row once more and
+            # acquires one. That is a slow run, not a wrong one.
+            stored: set[tuple[str, str]] = set()
+            for table, column in (
+                ("evidence", "evidence_id"),
+                ("symbols", "symbol_id"),
+                ("edges", "edge_id"),
+            ):
+                stored |= {
+                    (str(row[0]), str(row[1]))
+                    for row in connection.execute(
+                        f"SELECT {column}, row_sha256 FROM {table} WHERE row_sha256 IS NOT NULL"
+                    )
+                }
+
             # Upserts, not `INSERT OR REPLACE`, for every table other rows
             # point into. REPLACE deletes the existing row before inserting
             # its successor, and each delete fires the `ON DELETE` actions of
@@ -1013,10 +1090,10 @@ class EvidenceLedger:
                 """
                 INSERT INTO evidence(
                     evidence_id, snapshot_id, path, start_line, end_line, symbol,
-                    evidence_kind, excerpt_sha256, analyzer, created_at, file_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_kind, excerpt_sha256, analyzer, created_at, file_sha256,
+                    row_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(evidence_id) DO UPDATE SET
-                    snapshot_id = excluded.snapshot_id,
                     file_sha256 = excluded.file_sha256,
                     path = excluded.path,
                     start_line = excluded.start_line,
@@ -1025,33 +1102,36 @@ class EvidenceLedger:
                     evidence_kind = excluded.evidence_kind,
                     excerpt_sha256 = excluded.excerpt_sha256,
                     analyzer = excluded.analyzer,
-                    created_at = excluded.created_at
+                    row_sha256 = excluded.row_sha256
                 """,
-                (
+                rows_evidence := _unstored(
+                    stored,
                     (
-                        item.evidence_id,
-                        item.snapshot_id,
-                        item.path,
-                        item.start_line,
-                        item.end_line,
-                        item.symbol,
-                        item.evidence_kind,
-                        item.excerpt_sha256,
-                        item.analyzer,
-                        item.created_at,
-                        content.get(item.path),
-                    )
-                    for item in result.evidence
+                        (
+                            item.evidence_id,
+                            item.snapshot_id,
+                            item.path,
+                            item.start_line,
+                            item.end_line,
+                            item.symbol,
+                            item.evidence_kind,
+                            item.excerpt_sha256,
+                            item.analyzer,
+                            item.created_at,
+                            content.get(item.path),
+                        )
+                        for item in result.evidence
+                    ),
+                    preserved=(1, 9),
                 ),
             )
             connection.executemany(
                 """
                 INSERT INTO symbols(
                     symbol_id, snapshot_id, path, qualified_name, kind, start_line,
-                    end_line, language, analyzer, metadata_json, file_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    end_line, language, analyzer, metadata_json, file_sha256, row_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol_id) DO UPDATE SET
-                    snapshot_id = excluded.snapshot_id,
                     file_sha256 = excluded.file_sha256,
                     path = excluded.path,
                     qualified_name = excluded.qualified_name,
@@ -1060,33 +1140,38 @@ class EvidenceLedger:
                     end_line = excluded.end_line,
                     language = excluded.language,
                     analyzer = excluded.analyzer,
-                    metadata_json = excluded.metadata_json
+                    metadata_json = excluded.metadata_json,
+                    row_sha256 = excluded.row_sha256
                 """,
-                (
+                rows_symbols := _unstored(
+                    stored,
                     (
-                        item.symbol_id,
-                        item.snapshot_id,
-                        item.path,
-                        item.qualified_name,
-                        item.kind,
-                        item.start_line,
-                        item.end_line,
-                        item.language,
-                        item.analyzer,
-                        json.dumps(item.metadata, sort_keys=True, separators=(",", ":")),
-                        content.get(item.path),
-                    )
-                    for item in result.symbols
+                        (
+                            item.symbol_id,
+                            item.snapshot_id,
+                            item.path,
+                            item.qualified_name,
+                            item.kind,
+                            item.start_line,
+                            item.end_line,
+                            item.language,
+                            item.analyzer,
+                            json.dumps(item.metadata, sort_keys=True, separators=(",", ":")),
+                            content.get(item.path),
+                        )
+                        for item in result.symbols
+                    ),
+                    preserved=(1,),
                 ),
             )
             connection.executemany(
                 """
                 INSERT INTO edges(
                     edge_id, snapshot_id, source_symbol_id, source_path, relationship,
-                    target_ref, target_symbol_id, evidence_id, analyzer, file_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    target_ref, target_symbol_id, evidence_id, analyzer, file_sha256,
+                    row_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(edge_id) DO UPDATE SET
-                    snapshot_id = excluded.snapshot_id,
                     file_sha256 = excluded.file_sha256,
                     source_symbol_id = excluded.source_symbol_id,
                     source_path = excluded.source_path,
@@ -1094,22 +1179,27 @@ class EvidenceLedger:
                     target_ref = excluded.target_ref,
                     target_symbol_id = excluded.target_symbol_id,
                     evidence_id = excluded.evidence_id,
-                    analyzer = excluded.analyzer
+                    analyzer = excluded.analyzer,
+                    row_sha256 = excluded.row_sha256
                 """,
-                (
+                rows_edges := _unstored(
+                    stored,
                     (
-                        item.edge_id,
-                        item.snapshot_id,
-                        item.source_symbol_id,
-                        item.source_path,
-                        item.relationship,
-                        item.target_ref,
-                        item.target_symbol_id,
-                        item.evidence_id,
-                        item.analyzer,
-                        content.get(item.source_path),
-                    )
-                    for item in result.edges
+                        (
+                            item.edge_id,
+                            item.snapshot_id,
+                            item.source_symbol_id,
+                            item.source_path,
+                            item.relationship,
+                            item.target_ref,
+                            item.target_symbol_id,
+                            item.evidence_id,
+                            item.analyzer,
+                            content.get(item.source_path),
+                        )
+                        for item in result.edges
+                    ),
+                    preserved=(1,),
                 ),
             )
             connection.executemany(
@@ -1135,6 +1225,12 @@ class EvidenceLedger:
                     for item in result.claims
                 ),
             )
+
+            # How much of this analysis the ledger did not already hold. Kept
+            # because a write that quietly stops skipping looks exactly like a
+            # write that is skipping: `benchmarks/scaling/run_corpus.py`
+            # reports it and `tests/test_incremental.py` asserts on it.
+            self.rows_written = len(rows_evidence) + len(rows_symbols) + len(rows_edges)
 
             for claim in result.claims:
                 connection.execute(

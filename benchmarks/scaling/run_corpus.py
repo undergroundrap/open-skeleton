@@ -260,6 +260,7 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         ledger.save_snapshot(snapshot)
         ledger.save_analysis(result)
         timed("ledger_s", started)
+        stages["ledger_rows_written"] = float(ledger.rows_written)
         started = time.perf_counter()
         export_analysis_jsonl(result, workspace / "analysis.jsonl")
         export_analysis_markdown(result, workspace / "analysis.md")
@@ -334,6 +335,7 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
             started = time.perf_counter()
             ledger.save_analysis(replace(result, created_at="2026-01-02T00:00:00.000+00:00"))
             timed("resave_s", started)
+            stages["resave_rows_written"] = float(ledger.rows_written)
             resaved = _ledger_fingerprint(workspace / "evidence.sqlite3")
     return {
         "repository": root.name,
@@ -407,6 +409,11 @@ def main() -> int:
                 mismatches.append(
                     f"{root.name}: reusing across a snapshot boundary answered "
                     f"differently from a cold run at jobs={row['jobs']}"
+                )
+            if row.get("resave_rows_written") not in (None, 0.0):
+                mismatches.append(
+                    f"{root.name}: saving the same analysis twice wrote "
+                    f"{row['resave_rows_written']:.0f} rows at jobs={row['jobs']}"
                 )
             if row.get("reuse_one_read_misses") not in (None, 1.0):
                 mismatches.append(

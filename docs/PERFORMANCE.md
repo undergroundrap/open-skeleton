@@ -251,6 +251,53 @@ produced a mismatch from the third alone.
 python benchmarks/scaling/run_corpus.py --jobs 1 4 -- <repository>
 ```
 
+### Writing only what the ledger does not already hold
+
+Re-analysing a repository mints the same identifier for every fact read from a
+file nobody touched, because an identifier is a digest of the bytes it was read
+from. Writing those rows again says nothing, and the write is the largest stage
+of a run. `save_analysis` now asks first.
+
+On mypy, one worker:
+
+| Save | Before | Now | Rows written |
+|---|---:|---:|---:|
+| First | 13.72 s | 6.97 s | 219,332 |
+| The same analysis again | 11.19 s | 1.63 s | 0 |
+| After a one-line edit | 11.19 s | 1.79 s | 7,366 |
+
+Asking is cheap beside writing: reading 213,778 stored identifiers takes 0.17 s,
+and 0.25 s with the digest beside them, against the eleven seconds the writes
+took.
+
+Skipping by identifier alone would be wrong, and the digest is why it is not.
+Two fields move while an identifier stays put: a symbol's `metadata`, which
+records where each call lands and reclassifies a call into a module the snapshot
+no longer holds, and an edge's `target_symbol_id`, which is resolved against
+every other file. The digest is taken over the row being written rather than
+over a list of fields kept somewhere, so a column added later is covered rather
+than quietly left out. Weakening it to the identifier alone makes
+`tests/test_incremental.py` fail on a symbol that kept a classification the
+snapshot no longer supports.
+
+`snapshot_id` and `created_at` are left as the run that first recorded a fact
+wrote them. That is what makes a skipped row and a written row the same row, and
+it is also the more truthful reading: a content-addressed fact was first seen
+when it was first seen, and re-observing identical bytes does not make it new.
+
+#### One identifier, two facts
+
+The digest found a defect while proving itself. Saving the same analysis twice
+wrote 27 rows, which it should never do, and the reason was that five
+identifiers each named two different facts: `sql-schema` minted a symbol for a
+table without recording where the statement was, so two `CREATE TABLE`
+statements in one file -- a migration re-declaring a table, a fixture declaring
+several to exercise the reader -- collided. The ledger's primary key kept
+whichever was written second and the first table's columns were gone, with its
+receipt still verifying. The statement's line is now part of the identity, and
+`tests/test_fact_identity.py` checks over this repository's own sources that no
+identifier names more than one fact.
+
 ### The store, and what it is worth on the command line
 
 `analyze` and `scripts/turn_gate.py` keep the cache in
@@ -342,8 +389,10 @@ binding and a per-fact one is redundant as well as slower.
 
 ## Where the remaining time is
 
-- **Ledger write (14 s on Django).** Close to the cost of inserting that many
-  rows into this schema: 64-character text primary keys, each table stored as a
+- **Ledger write, on a first save (14 s on Django).** A re-analysis now writes
+  only what the ledger does not already hold, so this is the cost of filling an
+  empty ledger rather than of every run. What remains is close to the cost of
+  inserting that many rows into this schema: 64-character text primary keys, each table stored as a
   rowid table plus a separate primary-key index, plus secondary indexes and
   foreign-key checks. Integer surrogate keys or `WITHOUT ROWID` tables would
   cut it, and need a backward-compatible migration, which is why this change
