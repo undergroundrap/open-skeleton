@@ -251,6 +251,35 @@ produced a mismatch from the third alone.
 python benchmarks/scaling/run_corpus.py --jobs 1 4 -- <repository>
 ```
 
+### What a one-line edit costs now, end to end
+
+mypy, 949 files, one worker, one line added to `checker.py`. Medians of three
+rounds; each round measures a cold run and a warm one in the same process, so
+neither gets a quieter machine than the other.
+
+| Stage | Cold | Reusing |
+|---|---:|---:|
+| Scan | 4.80 s | 0.27 s |
+| Analysis | 14.56 s | 3.65 s |
+| Ledger write | 10.00 s | 2.23 s |
+| Export | 3.47 s | 1.47 s |
+| **Total** | **32.83 s** | **7.62 s** |
+
+The scan row is not this engine getting faster. A cold round copies the
+repository and reads files the operating system has not cached; by the warm run
+it has. Of the three stages this work does change, 28.03 s becomes 7.35 s.
+
+The ledger wrote 7,366 rows in each warm round, of 213,778 the analysis holds.
+
+Where the warm analysis goes: the Python reader, which reads one file and
+reuses 941, still costs about 1.5 s of it, and 0.83 s of that is rebinding --
+220,159 reused records copied to carry the snapshot id and clock of the run
+reusing them. Those two fields are per-run constants held per record, so a
+reused record cannot be handed over as it stands. Taking them off the records
+would remove the copy; it would also reach the exports, the ledger and every
+test that reads them, so it is a change to make deliberately rather than in
+passing.
+
 ### Writing only what the ledger does not already hold
 
 Re-analysing a repository mints the same identifier for every fact read from a
