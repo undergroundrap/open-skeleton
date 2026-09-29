@@ -105,6 +105,65 @@ the upsert fix and would dominate any run over a large repository.
 5. **Exports** encode each record's fields directly rather than through
    `asdict`, which deep-copied every nested structure, and reuse one encoder.
 
+## What a one-line edit costs, and what it could cost
+
+`benchmarks/scaling/run_incremental_ceiling.py` analyzes a repository, adds one
+line to its largest source file, analyzes it again, and compares every record
+from the second run with every record from the first. It wraps `stable_id` for
+the duration so identifiers follow content rather than the snapshot, which is
+the change [LANDSCAPE.md](LANDSCAPE.md) puts first. The number it reports is
+therefore a ceiling today and the reuse actually achieved once that change
+lands; the instrument is never told which of the two it is measuring.
+
+September 29, 2026, on Windows AMD64, Python 3.12.14:
+
+| Repository | Files | Evidence | Symbols | Edges | Claims | Whole-repository |
+|---|---:|---:|---:|---:|---:|---:|
+| open-skeleton | 182 | 99.97% | 99.98% | 99.48% | 99.71% | 5 |
+| pygments | 339 | 98.55% | 99.99% | 99.86% | 99.69% | 4 |
+| mypy | 949 | 99.99% | 100.00% | 99.63% | 99.90% | 4 |
+
+Every record that is not reusable is traceable to the edited file, with one
+exception -- the last column. Four or five evidence records per repository have
+`.` for a path and the snapshot id for an `excerpt_sha256`: `snapshot_census`,
+`static_import_census`, `unsafe_census`, `rust_test_census`. Their excerpt is
+the file inventory itself, so they change whenever any file does. They are the
+whole class of reader output an incremental run cannot reuse, and they are
+cheap to recompute.
+
+```bash
+python benchmarks/scaling/run_incremental_ceiling.py -- <repository>
+```
+
+### Reading is no longer the largest stage
+
+Those rates say a read cache would nearly always hit. They do not say the run
+would get much faster, and the stage table is why. On mypy, on the same
+machine and day:
+
+| Stage | Serial | 4 workers |
+|---|---:|---:|
+| Scan | 7.45 s | 0.18 s |
+| Readers and cross-reader passes | 10.30 s | 6.46 s |
+| Ledger write | 7.29 s | 8.82 s |
+| JSONL and Markdown export | 1.52 s | 1.88 s |
+| **Total** | **26.55 s** | **17.34 s** |
+
+With four workers the ledger write is already larger than everything the cache
+would skip. A read cache that hit perfectly would take this run from 17.3 s to
+about 11 s, not to nothing. That is worth having and it is not the headline the
+word "incremental" usually implies, so it is recorded here before the work
+rather than after it.
+
+It also rules out one way of building it. If each fact were bound to a snapshot
+by its own row, an incremental run would still write one row per fact. Inserting
+mypy's 219,332 evidence, symbol and edge bindings into a two-column table with a
+composite primary key takes 11.77 s -- more than the 8.82 s full write it was
+meant to replace. Binding at file level instead, one row per file, takes 0.006 s
+for the same snapshot. A fact belongs to a snapshot exactly when the file it was
+read from is in that snapshot with those bytes, so the file list is a complete
+binding and a per-fact one is redundant as well as slower.
+
 ## Where the remaining time is
 
 - **Ledger write (14 s on Django).** Close to the cost of inserting that many
@@ -116,9 +175,11 @@ the upsert fix and would dominate any run over a large repository.
 - **Re-reading unchanged files.** Every evidence and symbol identifier embeds
   the snapshot id, so a one-line edit produces a new identifier for every fact
   in the repository and nothing can be reused. Keying per-file facts by file
-  content hash, and binding them to snapshots separately, would make
-  incremental analysis correct by construction; the per-file outcome records
-  the parallel readers return are the natural unit to cache.
+  content hash, and binding them to snapshots by file rather than by fact,
+  would make incremental analysis correct by construction; the per-file outcome
+  records the parallel readers return are the natural unit to cache. How much
+  that would save, and why it does not save as much as it sounds, is measured
+  above.
 - **Readers not yet split.** Java, C#, PowerShell, SQL and the project-metadata
   reader run whole in one worker each. None exceeded 2.1 s on the repositories
   above.
