@@ -231,8 +231,16 @@ files be split across worker processes -- and a list of one file is the
 smallest such part. A check over a fixture holds per-file calls and
 whole-corpus calls to byte-identical output before anything relies on it.
 
-The remaining eight readers still run whole. None exceeded 2.1 s on the
-repositories measured.
+The remaining eight readers still run whole, and should: they are cheap, and
+the two that are not free are the two that cannot be split. Of all eight, only
+`project-metadata` (0.13 s here, 0.12 s on mypy) and `sql-schema` (0.23 s and
+0.49 s) exceed 0.03 s, and both state things about a file list rather than a
+file -- the table lifecycle joins statements across files, and the Tailwind and
+CI censuses count the inventory. `run_reader_locality.py` reports exactly that:
+give either a subset of the files and claims appear that were not there.
+Reading them one file at a time would not reproduce what reading them together
+produces, which is the property the other three were checked against before
+anything relied on it.
 
 What TypeScript reuse is worth here can only be said synthetically: no
 TypeScript or Rust repository is available on this machine to measure. On 600
