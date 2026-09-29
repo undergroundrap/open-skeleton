@@ -12,8 +12,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from open_skeleton import __version__
+from open_skeleton import __version__, reuse
 from open_skeleton.analysis import analyze_snapshot
+from open_skeleton.analyzers import python_ast
 from open_skeleton.audit import audit_claims
 from open_skeleton.benchmark import run_benchmark
 from open_skeleton.dashboard import serve_dashboard
@@ -111,6 +112,15 @@ def _parser() -> argparse.ArgumentParser:
             "Worker processes for analysis; 0 (the default) uses one per core, up to "
             "eight, and 1 runs serially. Output is identical at every value. "
             "OPEN_SKELETON_JOBS sets the default."
+        ),
+    )
+    analyze.add_argument(
+        "--no-reuse",
+        action="store_true",
+        help=(
+            "Read every file again instead of reusing what an unchanged one said "
+            "last time. The result is identical either way; this exists so the two "
+            "can be compared, and as a way past a store that has gone wrong."
         ),
     )
     analyze.add_argument("--quiet", action="store_true", help="Suppress progress events.")
@@ -485,7 +495,18 @@ def _analyze(args: argparse.Namespace) -> int:
     )
     if not args.quiet:
         print("[analyzing] Running deterministic semantic adapters", file=sys.stderr)
-    result = analyze_snapshot(snapshot, hum_index=args.hum_index, jobs=args.jobs)
+    # What an earlier run already read. Every invocation is its own process,
+    # so without a store on disk a command line reuses nothing and the case
+    # this matters most for -- a gate between an agent's turns -- is the one
+    # case that never benefits.
+    cache_path = state_dir / "read-cache.sqlite3"
+    cache = (
+        reuse.ReadCache() if args.no_reuse else reuse.load(cache_path, python_ast.outcome_from_json)
+    )
+    result = analyze_snapshot(snapshot, hum_index=args.hum_index, jobs=args.jobs, cache=cache)
+    if not args.no_reuse:
+        reuse.save(cache_path, cache, python_ast.outcome_to_json)
+        reuse.forget_absent(cache_path, {item.path for item in snapshot.files})
     ledger_path = state_dir / "evidence.sqlite3"
     ledger = EvidenceLedger(ledger_path)
     previous_snapshots = ledger.snapshots_for_root(root, limit=1)

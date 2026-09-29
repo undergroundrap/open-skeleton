@@ -41,7 +41,7 @@ from open_skeleton.parallel import (
     submit_chunks,
 )
 from open_skeleton.policy import TEST_SCOPED_CATEGORIES, describes_the_product
-from open_skeleton.reuse import ReadCache
+from open_skeleton.reuse import ReadCache, record_from_json, record_to_json
 
 ANALYZER_NAME = "python-ast"
 ANALYZER_VERSION = "python-ast/v3"
@@ -3171,6 +3171,68 @@ class _FileOutcome:
     caught_family_evidence: dict[str, list[str]] = dataclass_field(default_factory=dict)
     route_auth_control_evidence: tuple[str, ...] = ()
     typed_route_evidence: tuple[str, ...] = ()
+
+
+_OUTCOME_RECORDS: dict[str, type[Any]] = {
+    "symbols": SymbolRecord,
+    "edges": EdgeRecord,
+    "evidence": EvidenceRecord,
+    "claims": ClaimRecord,
+}
+
+
+def outcome_to_json(outcome: _FileOutcome) -> dict[str, Any]:
+    """One file's outcome as JSON types, for a store that outlives this process.
+
+    Order is preserved everywhere it is read as order. The caller concatenates
+    `route_evidence` and the rest in file order and extends the lists under
+    `caught_family_evidence`, so a set written out has to come back the same
+    way round: `endpoint_literals` is sorted because it is a `frozenset` and
+    has no order to lose, and nothing else is.
+    """
+
+    written: dict[str, Any] = {
+        "failure": outcome.failure,
+        "in_test": outcome.in_test,
+        "route_evidence": list(outcome.route_evidence),
+        "endpoint_evidence": list(outcome.endpoint_evidence),
+        "endpoint_literals": sorted(outcome.endpoint_literals),
+        "caught_family_evidence": {
+            family: list(items) for family, items in outcome.caught_family_evidence.items()
+        },
+        "route_auth_control_evidence": list(outcome.route_auth_control_evidence),
+        "typed_route_evidence": list(outcome.typed_route_evidence),
+    }
+    for name in _OUTCOME_RECORDS:
+        written[name] = [record_to_json(item) for item in getattr(outcome, name)]
+    return written
+
+
+def outcome_from_json(data: dict[str, Any]) -> _FileOutcome:
+    """The outcome a store wrote, rebuilt so it equals the one that was read.
+
+    Equality is the whole requirement: a rebuilt outcome that merely resembles
+    the original produces a run that merely resembles a cold one, and
+    `benchmarks/scaling/run_corpus.py` is there to refuse that.
+    """
+
+    rebuilt = {
+        name: tuple(record_from_json(cls, row) for row in data[name])
+        for name, cls in _OUTCOME_RECORDS.items()
+    }
+    return _FileOutcome(
+        failure=data["failure"],
+        in_test=bool(data["in_test"]),
+        route_evidence=tuple(data["route_evidence"]),
+        endpoint_evidence=tuple(data["endpoint_evidence"]),
+        endpoint_literals=frozenset(data["endpoint_literals"]),
+        caught_family_evidence={
+            family: list(items) for family, items in data["caught_family_evidence"].items()
+        },
+        route_auth_control_evidence=tuple(data["route_auth_control_evidence"]),
+        typed_route_evidence=tuple(data["typed_route_evidence"]),
+        **rebuilt,
+    )
 
 
 def _module_set_digest(local_modules: frozenset[str]) -> str:

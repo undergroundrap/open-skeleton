@@ -251,6 +251,31 @@ produced a mismatch from the third alone.
 python benchmarks/scaling/run_corpus.py --jobs 1 4 -- <repository>
 ```
 
+### The store, and what it is worth on the command line
+
+`analyze` and `scripts/turn_gate.py` keep the cache in
+`read-cache.sqlite3` beside the ledger, one row per file, each row deflated.
+`--no-reuse` reads everything again, which is how the two are compared.
+
+On mypy, one worker, alternating the two so neither gets a quieter machine:
+
+| | Median of four |
+|---|---:|
+| Reusing | 8.54 s |
+| `--no-reuse` | 12.21 s |
+
+Measured separately rather than interleaved, the same pair read 29.7 s and
+23.5 s, in that order -- reuse apparently slower than no reuse. Both figures
+were load, not reuse: everything on that machine was about twice its usual
+speed for the minutes those runs took. A ratio between two numbers measured at
+different times is not a ratio, and on a machine doing anything else the only
+honest way to compare two configurations is to alternate them.
+
+The store holds mypy at 23.1 MB. It was 106.7 MB before each row was deflated,
+which for a tool that keeps a copy per analysed repository is the difference
+between a cache and a liability; `zlib` at level 1 costs a fraction of the
+write and returns four fifths of the disk.
+
 ### What a cache that outlived its process would cost
 
 The cache lives as long as the caller holds it, so a library caller or the MCP

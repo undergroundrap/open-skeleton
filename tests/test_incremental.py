@@ -21,12 +21,17 @@ this holds the door on.
 
 from __future__ import annotations
 
+import sqlite3
+import zlib
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest import TestCase
 
+from open_skeleton import reuse
 from open_skeleton.analysis import analyze_snapshot
+from open_skeleton.analyzers import python_ast
 from open_skeleton.models import AnalysisResult
 from open_skeleton.reuse import ReadCache
 from open_skeleton.scanner import scan_repository
@@ -343,3 +348,135 @@ class RecordFidelityTests(TestCase):
             for where in _tuple_paths(item.metadata or {})
         )
         self.assertEqual(offenders[:5], [], "a record holds a tuple a store cannot return")
+
+
+class StoredCacheTests(TestCase):
+    """A cache that outlives its process, held to the same bar as one that does not.
+
+    Every invocation of the command line is its own process, so without a
+    store on disk the case this engine argues matters most -- a gate between
+    an agent's turns -- is the one case that reuses nothing. What is stored
+    has to come back equal, not merely similar: a rebuilt outcome that
+    resembles the original produces a run that resembles a cold one.
+    """
+
+    def _store(self, root: Path, where: Path) -> ReadCache:
+        cache = ReadCache()
+        analyze_snapshot(scan_repository(root), cache=cache)
+        reuse.save(where, cache, python_ast.outcome_to_json)
+        return cache
+
+    def test_a_stored_cache_produces_the_run_a_cold_read_would(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+            self._store(root, store)
+
+            loaded = reuse.load(store, python_ast.outcome_from_json)
+            self.assertTrue(loaded.entries, "nothing was read back from the store")
+
+            snapshot = scan_repository(root)
+            cold = analyze_snapshot(snapshot)
+            warm = analyze_snapshot(snapshot, cache=loaded)
+
+        self.assertEqual(_comparable(warm), _comparable(cold))
+        self.assertTrue(loaded.hits, "the stored entries were never used")
+
+    def test_a_store_written_by_another_version_is_not_read(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+            self._store(root, store)
+
+            with closing(sqlite3.connect(store)) as connection:
+                connection.execute(
+                    "UPDATE metadata SET value = 'something-else' WHERE key = 'store_version'"
+                )
+                connection.commit()
+
+            loaded = reuse.load(store, python_ast.outcome_from_json)
+
+        self.assertEqual(loaded.entries, {}, "a store from another version was read anyway")
+
+    def test_an_unreadable_store_is_a_slow_run_and_not_a_failed_one(self) -> None:
+        with TemporaryDirectory() as temporary:
+            store = Path(temporary) / "read-cache.sqlite3"
+            store.write_bytes(b"this is not a database")
+            loaded = reuse.load(store, python_ast.outcome_from_json)
+            self.assertEqual(loaded.entries, {})
+
+            missing = Path(temporary) / "absent.sqlite3"
+            self.assertEqual(reuse.load(missing, python_ast.outcome_from_json).entries, {})
+
+    def test_an_entry_that_will_not_decode_is_dropped_rather_than_guessed_at(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+            self._store(root, store)
+
+            with closing(sqlite3.connect(store)) as connection:
+                total = connection.execute("SELECT COUNT(*) FROM read_cache").fetchone()[0]
+                keys = [
+                    str(row[0])
+                    for row in connection.execute("SELECT key_sha256 FROM read_cache LIMIT 2")
+                ]
+                # Two ways an entry can be unusable, and both have to be
+                # dropped rather than half-read: bytes that are not an
+                # outcome, and bytes that are not even compressed.
+                connection.execute(
+                    "UPDATE read_cache SET outcome_deflated = ? WHERE key_sha256 = ?",
+                    (zlib.compress(b'{"failure": null}', 1), keys[0]),
+                )
+                connection.execute(
+                    "UPDATE read_cache SET outcome_deflated = ? WHERE key_sha256 = ?",
+                    (b"not compressed at all", keys[1]),
+                )
+                connection.commit()
+
+            loaded = reuse.load(store, python_ast.outcome_from_json)
+
+        self.assertEqual(
+            len(loaded.entries),
+            total - 2,
+            "a half-written entry was rebuilt from what happened to be there",
+        )
+
+    def test_only_what_is_missing_is_written(self) -> None:
+        # Rewriting every entry costs about as much as encoding the repository
+        # again, and almost all of it would be identical.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+            cache = self._store(root, store)
+            again = reuse.save(store, cache, python_ast.outcome_to_json)
+
+        self.assertEqual(again, 0, "entries the store already held were written again")
+
+    def test_a_file_the_snapshot_no_longer_holds_is_forgotten(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _repository(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+            self._store(root, store)
+
+            kept = {item.path for item in scan_repository(root).files}
+            self.assertEqual(reuse.forget_absent(store, kept), 0)
+
+            without = kept - {"service/batch.py"}
+            self.assertEqual(reuse.forget_absent(store, without), 1)
+            remaining = reuse.load(store, python_ast.outcome_from_json)
+
+        self.assertNotIn(
+            "service/batch.py",
+            {key[1] for key in remaining.entries},
+            "a file the snapshot no longer holds kept its entry",
+        )
