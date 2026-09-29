@@ -234,13 +234,18 @@ merging and scoping. That is why mypy halves rather than vanishing while
 pygments, which is entirely Python and has a fifth of the edges, drops
 fivefold.
 
-`benchmarks/scaling/run_corpus.py` fails if any of it answers differently. Three
-runs are compared against the cold one: every file reused, one file read with
-the rest reused, and -- the case that matters -- a run across a snapshot
-boundary, where a reused record has to be renamed for the run reusing it. The
-first two analyze the snapshot the cache was filled from, so renaming is a
-no-op and a mistake in it would pass unnoticed; deleting the claim re-minting
-and re-running proved only the third catches it.
+`benchmarks/scaling/run_corpus.py` fails if any of it answers differently. Each
+reused run is fingerprinted as both the ledger rows it writes and the bytes it
+exports, and compared with a cold run of the same snapshot. The exports alone
+would be the weaker check: an export is a projection, and a field it does not
+carry could differ while the two files stayed identical.
+
+Three runs are compared: every file reused, one file read with the rest reused,
+and -- the case that matters -- a run across a snapshot boundary, where a
+reused record has to be renamed for the run reusing it. The first two analyze
+the snapshot the cache was filled from, so renaming is a no-op there and a
+mistake in it would pass unnoticed. Deleting the claim re-minting and re-running
+produced a mismatch from the third alone.
 
 ```bash
 python benchmarks/scaling/run_corpus.py --jobs 1 4 -- <repository>

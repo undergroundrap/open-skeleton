@@ -164,14 +164,28 @@ class _FamilySampler:
             self._thread.join()
 
 
-def _fingerprint_of(result: Any, where: Path) -> str:
-    """The exported bytes of one analysis, hashed the same way as the cold run."""
+def _fingerprint_of(result: Any, where: Path, snapshot: Any = None) -> str:
+    """One analysis, hashed as both the ledger it writes and the bytes it exports.
+
+    Both, because they answer different questions and the exports alone are
+    the weaker one: an export is a projection, and a field it does not carry
+    could differ while the two files stay identical. The ledger is the thing
+    this engine claims to produce, so it is what a reused run has to match.
+    """
 
     where.mkdir(parents=True, exist_ok=True)
     export_analysis_jsonl(result, where / "analysis.jsonl")
     export_analysis_markdown(result, where / "analysis.md")
-    return hashlib.sha256(
+    exported = hashlib.sha256(
         (where / "analysis.jsonl").read_bytes() + (where / "analysis.md").read_bytes()
+    ).hexdigest()
+    if snapshot is None:
+        return exported
+    ledger = EvidenceLedger(where / "evidence.sqlite3")
+    ledger.save_snapshot(snapshot)
+    ledger.save_analysis(result)
+    return hashlib.sha256(
+        (exported + _ledger_fingerprint(where / "evidence.sqlite3")).encode("ascii")
     ).hexdigest()
 
 
@@ -258,6 +272,9 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         # kind an older revision can finish on a large repository -- is
         # compared with exactly what this run wrote the first time.
         fingerprint = _ledger_fingerprint(workspace / "evidence.sqlite3")
+        # The same pair a reused run is fingerprinted by, so the two are
+        # compared like with like: the exported bytes and the ledger rows.
+        cold_pair = hashlib.sha256((exported + fingerprint).encode("ascii")).hexdigest()
         # Reuse, held to the same bar as workers: it may change how long a run
         # takes and nothing else.
         #
@@ -284,8 +301,8 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         timed("reuse_one_read_s", started)
         stages["reuse_one_read_misses"] = float(cache.misses)
 
-        reuse_exports = _fingerprint_of(warm, workspace / "reuse")
-        partial_exports = _fingerprint_of(partial, workspace / "partial")
+        reuse_pair = _fingerprint_of(warm, workspace / "reuse", snapshot)
+        partial_pair = _fingerprint_of(partial, workspace / "partial", snapshot)
 
         # Both runs above analyzed the snapshot the cache was filled from, so
         # every identifier and timestamp a reused record carries was already
@@ -306,10 +323,10 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
             cache.hits = cache.misses = 0
             moved = replace(analyze_snapshot(across, cache=cache, **options), duration_ms=0)
             stages["reuse_across_snapshots_hits"] = float(cache.hits)
-            across_exports = _fingerprint_of(moved, workspace / "across")
+            across_exports = _fingerprint_of(moved, workspace / "across", across)
             cold_across = replace(analyze_snapshot(across, **options), duration_ms=0)
             stages["reuse_across_snapshots_cold_matches"] = float(
-                across_exports == _fingerprint_of(cold_across, workspace / "across-cold")
+                across_exports == _fingerprint_of(cold_across, workspace / "across-cold", across)
             )
 
         resaved: str | None = None
@@ -331,9 +348,10 @@ def measure(root: Path, jobs: int, *, resave: bool = True) -> dict[str, Any]:
         "peak_rss_mib": _peak_mib(),
         "peak_total_rss_mib": round(sampler.peak_kib / 1024, 1) if sampler.available else None,
         "exports_sha256": exported,
-        "reuse_all_exports_sha256": reuse_exports,
-        "reuse_one_read_exports_sha256": partial_exports,
-        "reuse_across_snapshots_exports_sha256": across_exports,
+        "cold_pair_sha256": cold_pair,
+        "reuse_all_sha256": reuse_pair,
+        "reuse_one_read_sha256": partial_pair,
+        "reuse_across_snapshots_sha256": across_exports,
         "ledger_sha256": fingerprint,
         "ledger_after_resave_sha256": resaved,
     }
@@ -380,8 +398,8 @@ def main() -> int:
             # Reuse is held to the cold run of the same worker count: a run
             # that reused every file, and a run that read one file and reused
             # the rest, must both export exactly what reading everything did.
-            for key in ("reuse_all_exports_sha256", "reuse_one_read_exports_sha256"):
-                if row[key] != row["exports_sha256"]:
+            for key in ("reuse_all_sha256", "reuse_one_read_sha256"):
+                if row[key] != row["cold_pair_sha256"]:
                     mismatches.append(
                         f"{root.name}: {key} differs from a cold run at jobs={row['jobs']}"
                     )
