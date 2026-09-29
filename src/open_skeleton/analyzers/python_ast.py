@@ -11,7 +11,7 @@ import sys
 import time
 import weakref
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Executor
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
@@ -41,7 +41,7 @@ from open_skeleton.parallel import (
     submit_chunks,
 )
 from open_skeleton.policy import TEST_SCOPED_CATEGORIES, describes_the_product
-from open_skeleton.reuse import ReadCache, record_from_json, record_to_json
+from open_skeleton.reuse import ReadCache, rebound, record_from_json, record_to_json
 
 ANALYZER_NAME = "python-ast"
 ANALYZER_VERSION = "python-ast/v3"
@@ -3263,24 +3263,18 @@ def _cache_key(file_record: FileRecord, module: str, module_set: str) -> tuple[s
     return (ANALYZER_VERSION, file_record.path, file_record.sha256, module, module_set)
 
 
-def _rebind_claim(claim: ClaimRecord, snapshot_id: str, created_at: str) -> ClaimRecord:
-    """A cached claim, renamed for the run reusing it.
+def mint_claim_id(snapshot_id: str) -> Callable[[ClaimRecord], str]:
+    """This reader's recipe for naming a claim, for a run reusing one.
 
-    A claim id hashes the snapshot on purpose, so that two files stating the
-    same thing merge into one claim carrying both receipts, and a reused claim
-    has to be minted again rather than rewritten. The recipe is `_claim`'s, and
-    the category is taken from the cached claim because `_claim` re-files a
-    test file's claims before minting, so the cached category is already the
-    final one.
+    The category is taken from the cached claim rather than derived again,
+    because `_claim` re-files a test file's claims before minting and the
+    cached category is therefore already the final one.
     """
 
-    return replace(
-        claim,
-        claim_id=stable_id("claim", (snapshot_id, claim.category, claim.claim, ANALYZER_VERSION)),
-        snapshot_id=snapshot_id,
-        created_at=created_at,
-        verified_at=created_at if claim.status == "verified" else None,
-    )
+    def mint(claim: ClaimRecord) -> str:
+        return stable_id("claim", (snapshot_id, claim.category, claim.claim, ANALYZER_VERSION))
+
+    return mint
 
 
 def _rebind(outcome: _FileOutcome, snapshot_id: str, created_at: str) -> _FileOutcome:
@@ -3295,15 +3289,20 @@ def _rebind(outcome: _FileOutcome, snapshot_id: str, created_at: str) -> _FileOu
 
     if outcome.failure is not None:
         return outcome
+    mint = mint_claim_id(snapshot_id)
+
+    def again(records: tuple[Any, ...]) -> tuple[Any, ...]:
+        return tuple(
+            rebound(item, snapshot_id=snapshot_id, created_at=created_at, mint_claim=mint)
+            for item in records
+        )
+
     return replace(
         outcome,
-        symbols=tuple(replace(item, snapshot_id=snapshot_id) for item in outcome.symbols),
-        edges=tuple(replace(item, snapshot_id=snapshot_id) for item in outcome.edges),
-        evidence=tuple(
-            replace(item, snapshot_id=snapshot_id, created_at=created_at)
-            for item in outcome.evidence
-        ),
-        claims=tuple(_rebind_claim(item, snapshot_id, created_at) for item in outcome.claims),
+        symbols=again(outcome.symbols),
+        edges=again(outcome.edges),
+        evidence=again(outcome.evidence),
+        claims=again(outcome.claims),
     )
 
 

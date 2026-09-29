@@ -222,11 +222,24 @@ rather than context -- `external_calls` classifies a call by whether what it
 lands in is a module of this repository -- and without it a cache hits after a
 module is removed and serves a classification that is no longer true.
 
-The Python reader is the only one that reuses anything. It is the one with a
-per-file outcome type, introduced for parallel reading and named in
-[LANDSCAPE.md](LANDSCAPE.md) as the unit to cache, and on these repositories it
-is most of the reading. The other ten still run whole; none exceeded 2.1 s on
-the repositories measured.
+Three readers reuse: Python, TypeScript and Rust. Only Python has a per-file
+outcome type, the one introduced for parallel reading and named in
+[LANDSCAPE.md](LANDSCAPE.md) as the unit to cache. The other two needed no
+restructuring, because each already states that a run over a list of files is
+the concatenation of runs over its consecutive parts -- that is what lets their
+files be split across worker processes -- and a list of one file is the
+smallest such part. A check over a fixture holds per-file calls and
+whole-corpus calls to byte-identical output before anything relies on it.
+
+The remaining eight readers still run whole. None exceeded 2.1 s on the
+repositories measured.
+
+What TypeScript reuse is worth here can only be said synthetically: no
+TypeScript or Rust repository is available on this machine to measure. On 600
+generated TypeScript modules, analysis falls from about 1.01 s to 0.48 s,
+medians of three. Those files are eighteen lines each and a real repository's
+are not, so read that as evidence the mechanism works rather than as a figure
+for zod.
 
 What is left after reuse is cross-file work, and it does not shrink: import and
 call resolution over 91,598 edges on mypy, the censuses, ownership, and claim

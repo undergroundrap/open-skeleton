@@ -30,8 +30,7 @@ from typing import Any
 from unittest import TestCase
 
 from open_skeleton import reuse
-from open_skeleton.analysis import analyze_snapshot
-from open_skeleton.analyzers import python_ast
+from open_skeleton.analysis import analyze_snapshot, decode_outcome, encode_outcome
 from open_skeleton.ledger import EvidenceLedger
 from open_skeleton.models import AnalysisResult
 from open_skeleton.reuse import ReadCache
@@ -364,7 +363,7 @@ class StoredCacheTests(TestCase):
     def _store(self, root: Path, where: Path) -> ReadCache:
         cache = ReadCache()
         analyze_snapshot(scan_repository(root), cache=cache)
-        reuse.save(where, cache, python_ast.outcome_to_json)
+        reuse.save(where, cache, encode_outcome)
         return cache
 
     def test_a_stored_cache_produces_the_run_a_cold_read_would(self) -> None:
@@ -375,7 +374,7 @@ class StoredCacheTests(TestCase):
             store = Path(temporary) / "read-cache.sqlite3"
             self._store(root, store)
 
-            loaded = reuse.load(store, python_ast.outcome_from_json)
+            loaded = reuse.load(store, decode_outcome)
             self.assertTrue(loaded.entries, "nothing was read back from the store")
 
             snapshot = scan_repository(root)
@@ -399,7 +398,7 @@ class StoredCacheTests(TestCase):
                 )
                 connection.commit()
 
-            loaded = reuse.load(store, python_ast.outcome_from_json)
+            loaded = reuse.load(store, decode_outcome)
 
         self.assertEqual(loaded.entries, {}, "a store from another version was read anyway")
 
@@ -407,11 +406,11 @@ class StoredCacheTests(TestCase):
         with TemporaryDirectory() as temporary:
             store = Path(temporary) / "read-cache.sqlite3"
             store.write_bytes(b"this is not a database")
-            loaded = reuse.load(store, python_ast.outcome_from_json)
+            loaded = reuse.load(store, decode_outcome)
             self.assertEqual(loaded.entries, {})
 
             missing = Path(temporary) / "absent.sqlite3"
-            self.assertEqual(reuse.load(missing, python_ast.outcome_from_json).entries, {})
+            self.assertEqual(reuse.load(missing, decode_outcome).entries, {})
 
     def test_an_entry_that_will_not_decode_is_dropped_rather_than_guessed_at(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -440,7 +439,7 @@ class StoredCacheTests(TestCase):
                 )
                 connection.commit()
 
-            loaded = reuse.load(store, python_ast.outcome_from_json)
+            loaded = reuse.load(store, decode_outcome)
 
         self.assertEqual(
             len(loaded.entries),
@@ -457,7 +456,7 @@ class StoredCacheTests(TestCase):
             _repository(root)
             store = Path(temporary) / "read-cache.sqlite3"
             cache = self._store(root, store)
-            again = reuse.save(store, cache, python_ast.outcome_to_json)
+            again = reuse.save(store, cache, encode_outcome)
 
         self.assertEqual(again, 0, "entries the store already held were written again")
 
@@ -474,7 +473,7 @@ class StoredCacheTests(TestCase):
 
             without = kept - {"service/batch.py"}
             self.assertEqual(reuse.forget_absent(store, without), 1)
-            remaining = reuse.load(store, python_ast.outcome_from_json)
+            remaining = reuse.load(store, decode_outcome)
 
         self.assertNotIn(
             "service/batch.py",
@@ -628,4 +627,174 @@ class LedgerWriteTests(TestCase):
             ledger.rows_written,
             everything // 2,
             "a one-line edit rewrote most of the ledger",
+        )
+
+
+TS_MODULE = """\
+import { useState } from "react";
+import { helper } from "./shared";
+
+export const LIMIT = 5;
+
+export function Panel() {
+  const [value, setValue] = useState("idle");
+  if (value === "idle") { setValue("running"); }
+  fetch("/api/panel").then(() => setValue("done"));
+  return helper(value, LIMIT);
+}
+"""
+
+TS_SHARED = """\
+export function helper(value: string, limit: number): string {
+  return value.slice(0, limit);
+}
+"""
+
+RUST_MODULE = """\
+use crate::shared::helper;
+
+pub const RETRIES: u32 = 4;
+
+pub struct Config { pub name: String }
+
+impl Config {
+    pub fn load(&self) -> Result<u32, String> {
+        let v: u32 = self.name.parse().map_err(|_| "bad".to_string())?;
+        if v == 0 { panic!("zero"); }
+        unsafe { let p = &v as *const u32; let _ = *p; }
+        Ok(helper(v))
+    }
+}
+
+#[test]
+fn loads() { assert_eq!(1, 1); }
+"""
+
+RUST_SHARED = """\
+pub fn helper(v: u32) -> u32 { v + 1 }
+"""
+
+
+def _polyglot(root: Path) -> None:
+    (root / "web").mkdir()
+    (root / "crates").mkdir()
+    (root / "web" / "panel.ts").write_text(TS_MODULE, encoding="utf-8")
+    (root / "web" / "shared.ts").write_text(TS_SHARED, encoding="utf-8")
+    (root / "crates" / "config.rs").write_text(RUST_MODULE, encoding="utf-8")
+    (root / "crates" / "shared.rs").write_text(RUST_SHARED, encoding="utf-8")
+    (root / "package.json").write_text('{"name":"fixture"}\n', encoding="utf-8")
+
+
+class OtherReaderReuseTests(TestCase):
+    """The readers that share the Python reader's arrangement, held to the same bar.
+
+    TypeScript and Rust have no per-file outcome type of their own. They do
+    state that a run over a list of files is the concatenation of runs over
+    its consecutive parts, which is what lets their files be split across
+    worker processes, and a list of one file is the smallest such part. So
+    reuse reads one file at a time rather than restructuring either reader,
+    and these hold the result to what reading everything produces.
+    """
+
+    def test_a_reused_run_is_the_run_that_would_have_happened(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _polyglot(root)
+
+            cache = ReadCache()
+            analyze_snapshot(scan_repository(root), cache=cache)
+
+            edited = root / "web" / "panel.ts"
+            edited.write_text(TS_MODULE.replace("LIMIT = 5", "LIMIT = 9"), encoding="utf-8")
+
+            snapshot = scan_repository(root)
+            cold = analyze_snapshot(snapshot)
+            warm = analyze_snapshot(snapshot, cache=cache)
+
+        self.assertEqual(_comparable(warm), _comparable(cold))
+
+    def test_every_reader_with_a_cache_files_its_own_entries(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _polyglot(root)
+            cache = ReadCache()
+            analyze_snapshot(scan_repository(root), cache=cache)
+            readers = {key[0].split("/")[0] for key in cache.entries}
+
+        self.assertEqual(
+            sorted(readers),
+            ["rust-lexical", "typescript-lexical"],
+            "a reader that should be storing per-file entries stored none",
+        )
+
+    def test_editing_one_file_leaves_the_others_read(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _polyglot(root)
+            cache = ReadCache()
+            analyze_snapshot(scan_repository(root), cache=cache)
+            stored = len(cache.entries)
+            self.assertEqual(stored, 4, "the fixture did not store one entry per source file")
+
+            edited = root / "crates" / "config.rs"
+            edited.write_text(RUST_MODULE.replace("RETRIES: u32 = 4", "RETRIES: u32 = 7"), "utf-8")
+            cache.hits = cache.misses = 0
+            analyze_snapshot(scan_repository(root), cache=cache)
+
+        self.assertEqual((cache.hits, cache.misses), (stored - 1, 1))
+
+    def test_a_stored_cache_of_every_reader_produces_the_run_a_cold_read_would(self) -> None:
+        # Three readers now write entries, each with its own shape, and one
+        # store holds all of them. A codec that claimed an entry it did not
+        # own would fail here rather than in somebody's analysis.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _polyglot(root)
+            _repository(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+
+            cache = ReadCache()
+            analyze_snapshot(scan_repository(root), cache=cache)
+            written = reuse.save(store, cache, encode_outcome)
+            self.assertEqual(written, len(cache.entries), "the store did not take every entry")
+
+            loaded = reuse.load(store, decode_outcome)
+            self.assertEqual(
+                sorted({key[0].split("/")[0] for key in loaded.entries}),
+                ["python-ast", "rust-lexical", "typescript-lexical"],
+                "a reader's entries did not survive the store",
+            )
+
+            snapshot = scan_repository(root)
+            cold = analyze_snapshot(snapshot)
+            warm = analyze_snapshot(snapshot, cache=loaded)
+
+        self.assertEqual(_comparable(warm), _comparable(cold))
+
+    def test_an_entry_no_reader_claims_is_dropped(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repository"
+            root.mkdir()
+            _polyglot(root)
+            store = Path(temporary) / "read-cache.sqlite3"
+            cache = ReadCache()
+            analyze_snapshot(scan_repository(root), cache=cache)
+            reuse.save(store, cache, encode_outcome)
+
+            with closing(sqlite3.connect(store)) as connection:
+                total = connection.execute("SELECT COUNT(*) FROM read_cache").fetchone()[0]
+                connection.execute(
+                    "UPDATE read_cache SET key_json = ? WHERE key_sha256 = "
+                    "(SELECT key_sha256 FROM read_cache LIMIT 1)",
+                    ('["reader-that-left/v1", "a.py", "x", "a", "y"]',),
+                )
+                connection.commit()
+
+            loaded = reuse.load(store, decode_outcome)
+
+        self.assertEqual(
+            len(loaded.entries),
+            total - 1,
+            "an entry written by a reader this engine no longer has was read anyway",
         )

@@ -53,6 +53,7 @@ from open_skeleton.parallel import (
     submit_chunks,
 )
 from open_skeleton.policy import describes_the_product
+from open_skeleton.reuse import ReadCache, rebound, record_from_json, record_to_json
 
 ANALYZER_NAME = "rust-lexical"
 ANALYZER_VERSION = "rust-lexical/v1"
@@ -1492,6 +1493,39 @@ def _group(tokens: list[Token], start: int, prefix: str, found: list[str], depth
     return cursor
 
 
+def _module_set_digest(module_names: dict[str, str]) -> str:
+    """One string standing for every module name the snapshot holds."""
+
+    return hashlib.sha256("\0".join(sorted(module_names.values())).encode("utf-8")).hexdigest()
+
+
+def _cache_key(file_record: FileRecord, module: str, module_set: str) -> tuple[str, ...]:
+    """Everything `_read_rust_files` is given for one file, bar the clock."""
+
+    return (ANALYZER_VERSION, file_record.path, file_record.sha256, module, module_set)
+
+
+def _rebind(part: tuple[Any, ...], snapshot_id: str, created_at: str) -> tuple[Any, ...]:
+    """One file's cached records, as the run reusing them would have produced them.
+
+    The census parts this reader returns beside its records -- the `unsafe`,
+    panic and test receipts -- are evidence identifiers and paths. An
+    identifier is a digest of the bytes it was read from, so those are
+    already right and are passed through.
+    """
+
+    def mint(claim: ClaimRecord) -> str:
+        return stable_id("claim", (snapshot_id, claim.category, claim.claim, ANALYZER_VERSION))
+
+    def again(records: list[Any]) -> list[Any]:
+        return [
+            rebound(item, snapshot_id=snapshot_id, created_at=created_at, mint_claim=mint)
+            for item in records
+        ]
+
+    return (again(part[0]), again(part[1]), again(part[2]), again(part[3]), *part[4:])
+
+
 def _read_rust_files(
     snapshot: Snapshot,
     files: list[FileRecord],
@@ -2107,7 +2141,13 @@ class RustLexicalAnalyzer:
     version = ANALYZER_VERSION
     eligibility = "language"
 
-    def __init__(self, executor: Executor | None = None, workers: int = 1) -> None:
+    def __init__(
+        self,
+        executor: Executor | None = None,
+        workers: int = 1,
+        cache: ReadCache | None = None,
+    ) -> None:
+        self.cache = cache
         self.executor = executor
         self.workers = max(1, workers)
 
@@ -2154,16 +2194,52 @@ class RustLexicalAnalyzer:
             return record
 
         context = (created_at, module_names)
-        if self.executor is not None and len(eligible) > 1:
+
+        # What an earlier run already read, held by position so a reused file
+        # lands where its read would have and the merge below cannot tell the
+        # two apart.
+        reused: list[Any] = [None] * len(eligible)
+        keys: list[tuple[str, ...]] = []
+        if self.cache is not None:
+            module_set = _module_set_digest(module_names)
+            keys = [
+                _cache_key(item, module_names.get(item.path, ""), module_set) for item in eligible
+            ]
+            reused = [self.cache.get(key) for key in keys]
+        pending = [index for index, found in enumerate(reused) if found is None]
+        unread = [eligible[index] for index in pending]
+
+        if self.executor is not None and len(unread) > 1:
             chunks = chunk_by_weight(
-                eligible,
-                [item.size_bytes for item in eligible],
+                unread,
+                [item.size_bytes for item in unread],
                 CHUNKS_PER_WORKER * self.workers,
             )
             futures = submit_chunks(self.executor, _read_rust_files, chunks, context)
-            parts = gather_in_order(snapshot, futures, chunks, _read_rust_files, context)
+            fresh = gather_in_order(snapshot, futures, chunks, _read_rust_files, context)
+        elif self.cache is None:
+            fresh = _read_rust_files(snapshot, unread, context)
         else:
-            parts = _read_rust_files(snapshot, eligible, context)
+            # One call per file, so each file's records can be stored under
+            # its own key. This reader's census parts are counted per file and
+            # summed by the caller, which is what lets its files be split
+            # across workers; a list of one file is the smallest such part.
+            fresh = [
+                part for item in unread for part in _read_rust_files(snapshot, [item], context)
+            ]
+
+        if self.cache is None:
+            parts = fresh
+        else:
+            parts = []
+            by_index = dict(zip(pending, fresh, strict=True))
+            for index, found in enumerate(reused):
+                if found is None:
+                    part = by_index[index]
+                    self.cache.put(keys[index], part)
+                    parts.append(part)
+                else:
+                    parts.append(_rebind(found, snapshot.snapshot_id, created_at))
         for part in parts:
             symbols.extend(part[0])
             edges.extend(part[1])
@@ -2303,3 +2379,41 @@ class RustLexicalAnalyzer:
                 ),
             ),
         )
+
+
+def outcome_to_json(part: tuple[Any, ...]) -> dict[str, Any]:
+    """One file's records and census parts as JSON types.
+
+    `unsafe_files` is a set and is written sorted, because a set has no order
+    to lose; everything else is read as order by the caller and keeps it.
+    """
+
+    return {
+        "symbols": [record_to_json(item) for item in part[0]],
+        "edges": [record_to_json(item) for item in part[1]],
+        "evidence": [record_to_json(item) for item in part[2]],
+        "claims": [record_to_json(item) for item in part[3]],
+        "failures": list(part[4]),
+        "analyzed_files": int(part[5]),
+        "unsafe_receipts": list(part[6]),
+        "unsafe_files": sorted(part[7]),
+        "panic_receipts": {family: list(found) for family, found in part[8].items()},
+        "test_receipts": list(part[9]),
+    }
+
+
+def outcome_from_json(data: dict[str, Any]) -> tuple[Any, ...]:
+    """The records a store wrote, rebuilt so they equal the ones that were read."""
+
+    return (
+        [record_from_json(SymbolRecord, row) for row in data["symbols"]],
+        [record_from_json(EdgeRecord, row) for row in data["edges"]],
+        [record_from_json(EvidenceRecord, row) for row in data["evidence"]],
+        [record_from_json(ClaimRecord, row) for row in data["claims"]],
+        list(data["failures"]),
+        int(data["analyzed_files"]),
+        list(data["unsafe_receipts"]),
+        set(data["unsafe_files"]),
+        {family: list(found) for family, found in data["panic_receipts"].items()},
+        list(data["test_receipts"]),
+    )

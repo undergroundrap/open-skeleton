@@ -21,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from open_skeleton.analyzers import python_ast, rust_lexical, typescript_lexical
 from open_skeleton.analyzers.base import Analyzer
 from open_skeleton.analyzers.csharp_lexical import CSharpLexicalAnalyzer
 from open_skeleton.analyzers.documented_measurements import DocumentedMeasurementAnalyzer
@@ -1179,8 +1180,8 @@ def build_analyzers(
 
     return (
         PythonAstAnalyzer(executor=executor, workers=workers, cache=cache),
-        TypeScriptLexicalAnalyzer(executor=executor, workers=workers),
-        RustLexicalAnalyzer(executor=executor, workers=workers),
+        TypeScriptLexicalAnalyzer(executor=executor, workers=workers, cache=cache),
+        RustLexicalAnalyzer(executor=executor, workers=workers, cache=cache),
         JavaLexicalAnalyzer(),
         ProjectMetadataAnalyzer(),
         SqlSchemaAnalyzer(),
@@ -1453,3 +1454,36 @@ def analyze_snapshot(
         ),
         coverage=coverage,
     )
+
+
+# Each reader that stores per-file outcomes, by the prefix its cache keys
+# carry. The reader owns the shape of what it writes down, because only the
+# reader knows it; this only knows which reader to ask.
+_OUTCOME_CODECS = {
+    PythonAstAnalyzer.name: (python_ast.outcome_to_json, python_ast.outcome_from_json),
+    TypeScriptLexicalAnalyzer.name: (
+        typescript_lexical.outcome_to_json,
+        typescript_lexical.outcome_from_json,
+    ),
+    RustLexicalAnalyzer.name: (rust_lexical.outcome_to_json, rust_lexical.outcome_from_json),
+}
+
+
+def _codec_for(key: Sequence[str]) -> tuple[Any, Any]:
+    reader = str(key[0]).split("/", 1)[0] if key else ""
+    try:
+        return _OUTCOME_CODECS[reader]
+    except KeyError:
+        raise KeyError(f"no reader owns cached entries named {reader!r}") from None
+
+
+def encode_outcome(key: Sequence[str], value: Any) -> dict[str, Any]:
+    """Write one reader's per-file outcome down, whichever reader it came from."""
+
+    return dict(_codec_for(key)[0](value))
+
+
+def decode_outcome(key: Sequence[str], data: dict[str, Any]) -> Any:
+    """Read one back. An entry no reader claims raises, and `reuse.load` drops it."""
+
+    return _codec_for(key)[1](data)

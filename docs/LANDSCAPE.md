@@ -93,13 +93,14 @@ artifact this engine exists to replace.
   kernel (vendor-stated). This engine takes 35 seconds end to end on Django
   with four workers, because it writes about 270,000 hash-pinned receipts and
   the claims built on them. The receipts are the product, but the gap is real.
-- **Incremental re-analysis, beyond the Python reader.** Per-file facts are now
-  named by the bytes they were read from rather than by the snapshot, so an
-  unchanged file's facts survive a new snapshot, and the Python reader reuses
-  its per-file outcomes instead of reading again. The other ten readers do not
-  yet, the cross-file passes cannot, and nothing is kept between processes: the
-  cache lives for as long as the caller holds it. See
-  [PERFORMANCE.md](PERFORMANCE.md) for what that is worth and what it is not.
+- **Incremental re-analysis, beyond three readers.** Per-file facts are named by
+  the bytes they were read from rather than by the snapshot, so an unchanged
+  file's facts survive a new snapshot; the Python, TypeScript and Rust readers
+  reuse per-file outcomes across processes, and a save writes only the rows the
+  ledger does not already hold. A one-line edit to mypy costs 7.6 s against
+  32.8 s. The other eight readers do not reuse, the cross-file passes cannot,
+  and no TypeScript or Rust repository was available to measure on. See
+  [PERFORMANCE.md](PERFORMANCE.md).
 - **Scope of the baseline comparison.** The external specification carries a
   requirements catalogue, interface analysis and operational material this
   engine does not attempt. Fact coverage is 96.9% of what that document says is
@@ -174,14 +175,15 @@ this engine is built to make.
 
 Ordered by what most limits the mission today.
 
-1. **Finish incremental re-analysis.** The identity half is done: per-file
-   facts are keyed by content hash and reader version, bound to snapshots
-   through the file list rather than per fact, and the Python reader reuses its
-   per-file outcomes. What remains is the other ten readers, which have no
-   per-file outcome type yet; a cache that survives the process, since this one
-   lives only as long as its caller; and the cross-file passes -- resolution,
-   the censuses, claim merging -- which are now the largest part of analysis
-   and are not per-file work at all.
+1. **Finish incremental re-analysis.** Identity, storage and the write path are
+   done: per-file facts are keyed by content hash and reader version, bound to
+   snapshots through the file list rather than per fact, reused across
+   processes by three readers, and written only when the ledger does not
+   already hold them. What remains is the eight readers that still run whole;
+   the cross-file passes -- resolution, the censuses, claim merging -- which
+   are not per-file work at all and are now most of what a warm analysis costs;
+   and a measurement on a real TypeScript or Rust repository, which this
+   machine has none of.
 2. **Ingest compiler-accurate indexes.** Accept SCIP (and language-server
    output) as receipted evidence, the way the Hum semantic graph is ingested,
    so TypeScript, Rust and Java facts can be `verified` against a resolver

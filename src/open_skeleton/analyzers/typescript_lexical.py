@@ -34,6 +34,7 @@ from open_skeleton.parallel import (
     submit_chunks,
 )
 from open_skeleton.policy import describes_the_product
+from open_skeleton.reuse import ReadCache, rebound, record_from_json, record_to_json
 
 ANALYZER_NAME = "typescript-lexical"
 ANALYZER_VERSION = "typescript-lexical/v1"
@@ -1896,6 +1897,40 @@ def _state_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _module_set_digest(module_names: dict[str, str]) -> str:
+    """One string standing for every module name the snapshot holds.
+
+    Part of a cached entry's key because it is an input to reading a file
+    rather than context around it: an import is resolved against this set, so
+    adding or removing a module can change what a file that nobody edited
+    says about its own imports.
+    """
+
+    return hashlib.sha256("\0".join(sorted(module_names.values())).encode("utf-8")).hexdigest()
+
+
+def _cache_key(file_record: FileRecord, module: str, module_set: str) -> tuple[str, ...]:
+    """Everything `_read_typescript_files` is given for one file, bar the clock."""
+
+    return (ANALYZER_VERSION, file_record.path, file_record.sha256, module, module_set)
+
+
+def _rebind(part: tuple[Any, ...], snapshot_id: str, created_at: str) -> tuple[Any, ...]:
+    """One file's cached records, as the run reusing them would have produced them."""
+
+    def mint(claim: ClaimRecord) -> str:
+        return stable_id("claim", (snapshot_id, claim.category, claim.claim, ANALYZER_VERSION))
+
+    def again(records: list[Any]) -> list[Any]:
+        return [
+            rebound(item, snapshot_id=snapshot_id, created_at=created_at, mint_claim=mint)
+            for item in records
+        ]
+
+    symbols, edges, evidence, claims, failures, counted = part
+    return (again(symbols), again(edges), again(evidence), again(claims), failures, counted)
+
+
 def _read_typescript_files(
     snapshot: Snapshot,
     files: list[FileRecord],
@@ -2581,9 +2616,18 @@ class TypeScriptLexicalAnalyzer:
     version = ANALYZER_VERSION
     eligibility = "language"
 
-    def __init__(self, executor: Executor | None = None, workers: int = 1) -> None:
+    def __init__(
+        self,
+        executor: Executor | None = None,
+        workers: int = 1,
+        cache: ReadCache | None = None,
+    ) -> None:
         self.executor = executor
         self.workers = max(1, workers)
+        # Like the pool, this may change how long a run takes and never what
+        # it produces: a reused file's records take the place its read would
+        # have filled, in the same order.
+        self.cache = cache
 
     def analyze(self, snapshot: Snapshot) -> AnalysisResult:
         started = time.perf_counter()
@@ -2598,16 +2642,56 @@ class TypeScriptLexicalAnalyzer:
         analyzed_files = 0
 
         context = (created_at, module_names)
-        if self.executor is not None and len(eligible) > 1:
+
+        # What an earlier run already read, held by position so a reused file
+        # lands exactly where its read would have and the merge below cannot
+        # tell the two apart.
+        reused: list[Any] = [None] * len(eligible)
+        keys: list[tuple[str, ...]] = []
+        if self.cache is not None:
+            module_set = _module_set_digest(module_names)
+            keys = [
+                _cache_key(item, module_names.get(item.path, ""), module_set) for item in eligible
+            ]
+            reused = [self.cache.get(key) for key in keys]
+        pending = [index for index, found in enumerate(reused) if found is None]
+        unread = [eligible[index] for index in pending]
+
+        if self.executor is not None and len(unread) > 1:
             chunks = chunk_by_weight(
-                eligible,
-                [item.size_bytes for item in eligible],
+                unread,
+                [item.size_bytes for item in unread],
                 CHUNKS_PER_WORKER * self.workers,
             )
             futures = submit_chunks(self.executor, _read_typescript_files, chunks, context)
-            parts = gather_in_order(snapshot, futures, chunks, _read_typescript_files, context)
+            fresh = gather_in_order(snapshot, futures, chunks, _read_typescript_files, context)
+        elif self.cache is None:
+            fresh = _read_typescript_files(snapshot, unread, context)
         else:
-            parts = _read_typescript_files(snapshot, eligible, context)
+            # One call per file, so each file's records can be stored under
+            # its own key. This reader states that a run over a list of files
+            # is the concatenation of runs over its consecutive parts, which
+            # is what lets the files be split across workers at all; a list of
+            # one is the smallest such part, and a check over a fixture holds
+            # the two to byte-identical output.
+            fresh = [
+                part
+                for item in unread
+                for part in _read_typescript_files(snapshot, [item], context)
+            ]
+
+        if self.cache is None:
+            parts = fresh
+        else:
+            parts = []
+            by_index = dict(zip(pending, fresh, strict=True))
+            for index, found in enumerate(reused):
+                if found is None:
+                    part = by_index[index]
+                    self.cache.put(keys[index], part)
+                    parts.append(part)
+                else:
+                    parts.append(_rebind(found, snapshot.snapshot_id, created_at))
         for (
             part_symbols,
             part_edges,
@@ -2643,3 +2727,30 @@ class TypeScriptLexicalAnalyzer:
             claims=tuple(sorted(claims, key=lambda item: item.claim_id)),
             coverage=(coverage,),
         )
+
+
+def outcome_to_json(part: tuple[Any, ...]) -> dict[str, Any]:
+    """One file's records as JSON types, for a store that outlives this process."""
+
+    symbols, edges, evidence, claims, failures, counted = part
+    return {
+        "symbols": [record_to_json(item) for item in symbols],
+        "edges": [record_to_json(item) for item in edges],
+        "evidence": [record_to_json(item) for item in evidence],
+        "claims": [record_to_json(item) for item in claims],
+        "failures": list(failures),
+        "analyzed_files": int(counted),
+    }
+
+
+def outcome_from_json(data: dict[str, Any]) -> tuple[Any, ...]:
+    """The records a store wrote, rebuilt so they equal the ones that were read."""
+
+    return (
+        [record_from_json(SymbolRecord, row) for row in data["symbols"]],
+        [record_from_json(EdgeRecord, row) for row in data["edges"]],
+        [record_from_json(EvidenceRecord, row) for row in data["evidence"]],
+        [record_from_json(ClaimRecord, row) for row in data["claims"]],
+        list(data["failures"]),
+        int(data["analyzed_files"]),
+    )

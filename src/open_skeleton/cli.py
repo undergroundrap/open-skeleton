@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from open_skeleton import __version__, reuse
-from open_skeleton.analysis import analyze_snapshot
-from open_skeleton.analyzers import python_ast
+from open_skeleton.analysis import analyze_snapshot, decode_outcome, encode_outcome
 from open_skeleton.audit import audit_claims
 from open_skeleton.benchmark import run_benchmark
 from open_skeleton.dashboard import serve_dashboard
@@ -500,12 +499,10 @@ def _analyze(args: argparse.Namespace) -> int:
     # this matters most for -- a gate between an agent's turns -- is the one
     # case that never benefits.
     cache_path = state_dir / "read-cache.sqlite3"
-    cache = (
-        reuse.ReadCache() if args.no_reuse else reuse.load(cache_path, python_ast.outcome_from_json)
-    )
+    cache = reuse.ReadCache() if args.no_reuse else reuse.load(cache_path, decode_outcome)
     result = analyze_snapshot(snapshot, hum_index=args.hum_index, jobs=args.jobs, cache=cache)
     if not args.no_reuse:
-        reuse.save(cache_path, cache, python_ast.outcome_to_json)
+        reuse.save(cache_path, cache, encode_outcome)
         reuse.forget_absent(cache_path, {item.path for item in snapshot.files})
     ledger_path = state_dir / "evidence.sqlite3"
     ledger = EvidenceLedger(ledger_path)

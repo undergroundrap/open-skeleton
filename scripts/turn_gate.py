@@ -49,8 +49,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from open_skeleton import reuse  # noqa: E402
-from open_skeleton.analysis import analyze_snapshot  # noqa: E402
-from open_skeleton.analyzers import python_ast  # noqa: E402
+from open_skeleton.analysis import (  # noqa: E402
+    analyze_snapshot,
+    decode_outcome,
+    encode_outcome,
+)
 from open_skeleton.audit import audit_claims  # noqa: E402
 from open_skeleton.ledger import EvidenceLedger  # noqa: E402
 from open_skeleton.scanner import scan_repository  # noqa: E402
@@ -144,9 +147,9 @@ def run(
     # engine: the gate's latency is the loop's latency, and a gate nobody can
     # afford to run is a gate nobody runs.
     cache_path = state / "read-cache.sqlite3"
-    cache = reuse.load(cache_path, python_ast.outcome_from_json)
+    cache = reuse.load(cache_path, decode_outcome)
     result = analyze_snapshot(snapshot, hum_index=hum_index or None, jobs=jobs, cache=cache)
-    reuse.save(cache_path, cache, python_ast.outcome_to_json)
+    reuse.save(cache_path, cache, encode_outcome)
     reuse.forget_absent(cache_path, {item.path for item in snapshot.files})
 
     ledger = EvidenceLedger(state / "evidence.sqlite3")

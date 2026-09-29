@@ -40,7 +40,7 @@ import sqlite3
 import zlib
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any
@@ -143,7 +143,7 @@ def record_from_json(cls: type[Any], data: dict[str, Any]) -> Any:
     return cls(**values)
 
 
-def load(path: Path, decode: Callable[[dict[str, Any]], Any]) -> ReadCache:
+def load(path: Path, decode: Callable[[CacheKey, dict[str, Any]], Any]) -> ReadCache:
     """Every entry a previous run wrote, or an empty cache.
 
     Anything unreadable is an empty cache rather than an error. A cache is an
@@ -173,13 +173,13 @@ def load(path: Path, decode: Callable[[dict[str, Any]], Any]) -> ReadCache:
         try:
             key = tuple(json.loads(row["key_json"]))
             payload = zlib.decompress(row["outcome_deflated"]).decode("utf-8")
-            cache.entries[key] = decode(json.loads(payload))
-        except (ValueError, TypeError, KeyError, zlib.error):
+            cache.entries[key] = decode(key, json.loads(payload))
+        except (ValueError, TypeError, KeyError, IndexError, zlib.error):
             continue
     return cache
 
 
-def save(path: Path, cache: ReadCache, encode: Callable[[Any], dict[str, Any]]) -> int:
+def save(path: Path, cache: ReadCache, encode: Callable[[CacheKey, Any], dict[str, Any]]) -> int:
     """Write the entries this store does not already hold, and return how many.
 
     Only what is missing, because rewriting every entry costs about as much as
@@ -219,7 +219,8 @@ def save(path: Path, cache: ReadCache, encode: Callable[[Any], dict[str, Any]]) 
                         # spends the run's time to save disk nobody is short
                         # of.
                         zlib.compress(
-                            json.dumps(encode(value), separators=(",", ":")).encode("utf-8"), 1
+                            json.dumps(encode(key, value), separators=(",", ":")).encode("utf-8"),
+                            1,
                         ),
                     ),
                 )
@@ -248,3 +249,45 @@ def forget_absent(path: Path, keep: set[str]) -> int:
     except (sqlite3.Error, OSError):
         return 0
     return len(gone)
+
+
+def rebound(
+    record: Any,
+    *,
+    snapshot_id: str,
+    created_at: str,
+    mint_claim: Callable[[Any], str] | None = None,
+) -> Any:
+    """A cached record, as the run reusing it would have produced it.
+
+    Only the fields naming the run are rewritten. Every identifier of a
+    per-file fact is a digest of the file's bytes and survives untouched,
+    which is the whole reason a record can be reused at all.
+
+    Which fields those are is read from the dataclass rather than listed per
+    reader, so a record class that gains one is handled rather than quietly
+    left carrying the wrong run's clock.
+
+    `verified_at` reproduces the shape it had instead of the rule that set it.
+    Every reader sets it to the run's clock or to nothing, and which of the two
+    depends on the record's own content, which reuse has not changed -- so a
+    value that was there gets the new clock and a value that was absent stays
+    absent, whatever the reader's reason was.
+
+    A claim is minted again rather than rewritten, because a claim id hashes
+    the snapshot on purpose so that two files stating the same thing merge
+    into one claim carrying both receipts. The recipe belongs to the reader,
+    so the reader passes it.
+    """
+
+    names = {field.name for field in dataclass_fields(record)}
+    changes: dict[str, Any] = {}
+    if "snapshot_id" in names:
+        changes["snapshot_id"] = snapshot_id
+    if "created_at" in names:
+        changes["created_at"] = created_at
+    if "verified_at" in names:
+        changes["verified_at"] = created_at if record.verified_at is not None else None
+    if mint_claim is not None and "claim_id" in names:
+        changes["claim_id"] = mint_claim(record)
+    return replace(record, **changes)
