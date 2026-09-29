@@ -159,6 +159,50 @@ resolution to a symbol that no longer exists under that name.
 python benchmarks/scaling/run_incremental_ceiling.py -- <repository>
 ```
 
+### What one change makes untrue
+
+Reuse is only correct for facts that depend on the file they were read from
+and nothing else. `benchmarks/scaling/run_reader_locality.py` makes one change
+at a time -- edit a file's bytes, add a file, remove a file -- and asks every
+reader what it now says about the files that did **not** change.
+
+| Change | Evidence | Symbols | Edges | Claims |
+|---|---|---|---|---|
+| edit one file | local | local | local | local |
+| add a file | local | local | local | 2 census claims went |
+| remove a file | local | **1 changed under the same identifier** | local | 2 census claims came |
+
+So a cache may reuse an unchanged file's evidence, symbols and edges when a
+file is edited or added, and may not when a file is removed. The one symbol
+that moved is the case worth stating: its identifier is the bytes of
+`tests/test_python_analyzer.py`, which did not change, so a cache keyed on
+identity would have hit. Its `external_calls` metadata records where each call
+lands, and a call into a module the snapshot no longer holds is reclassified
+from `this repository` to `dependency`. Same name, different answer.
+
+Two further dependencies are already recorded above: a resolved edge depends on
+the file it lands in as well as the file it was read from, and the four or five
+census receipts depend on the whole inventory.
+
+The first version of this instrument deleted every second file rather than
+making one realistic change. It found 4,306 Python receipts renamed and was
+about to be read as "the Python reader is not per-file". The perturbation had
+deleted `src/open_skeleton/__init__.py`, so package roots moved and every
+qualified name in the repository lost its `open_skeleton.` prefix. A
+measurement has to perturb the way a repository actually changes, or it reports
+the shape of its own experiment.
+
+```bash
+python benchmarks/scaling/run_reader_locality.py -- <repository>
+```
+
+This enumeration is incomplete, and the instrument says so rather than
+implying otherwise. On this repository the TypeScript, Java, C#, PowerShell and
+Hum readers are exercised by no files, so they are reported as `none` and no
+verdict about them has been reached. Running it over zod, a Java repository and
+a C# repository would close that gap; a reader reported as `none` must not be
+read as a reader reported as local.
+
 ### Reading is no longer the largest stage
 
 Those rates say a read cache would nearly always hit. They do not say the run
