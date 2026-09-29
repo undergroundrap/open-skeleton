@@ -251,7 +251,42 @@ produced a mismatch from the third alone.
 python benchmarks/scaling/run_corpus.py --jobs 1 4 -- <repository>
 ```
 
-### Reading is no longer the largest stage
+### What a cache that outlived its process would cost
+
+The cache lives as long as the caller holds it, so a library caller or the MCP
+server reuses across analyses and the command line reuses nothing: each
+invocation starts empty. That makes the agent-loop case -- `turn_gate.py` run
+between turns, a fresh process each time -- the one case that gets no benefit,
+which is the case the rest of this document argues matters most.
+
+Whether that is worth fixing is a question about the cost of reloading, so it
+was measured before anything was built. Encoding mypy's 220,211 Python records
+as JSON and reading them back:
+
+| Step | Time | Size |
+|---|---:|---:|
+| Cold analysis, for comparison | 8.73 s | |
+| Encode to JSON | 1.33 s | 115.5 MB |
+| Compress (gzip, level 1) | 0.80 s | 31.3 MB |
+| Decompress | 0.25 s | |
+| Decode and rebuild records | 0.99 s | |
+
+Reloading costs about 1.6 s against 8.7 s of reading, so it is worth having.
+Writing costs about 2.1 s a run, which says the store should rewrite the
+entries that changed rather than all of them -- one row per file in SQLite, the
+way the ledger already works, rather than one document rewritten each time.
+
+One hazard turned up in the measurement and would not have turned up in the
+design. Records survive a JSON round trip exactly, except symbols: a symbol's
+`metadata` is free-form, `state_fields` holds tuples inside it, and JSON
+returns them as lists, so 2 of this repository's 4,345 Python symbols came back
+unequal. Nothing persisted can see the difference -- the ledger stores metadata
+through `json.dumps` already, and `spec/diagrams.py` coerces the values back
+with `tuple(item)` for exactly that reason -- but the in-memory records differ,
+and a cache that returns a record unequal to the one a cold run would build is
+the thing the oracle exists to reject. A store has to preserve tuples or the
+reader has to stop producing them inside metadata; the measurement does not
+decide which.
 
 Those rates say a read cache would nearly always hit. They do not say the run
 would get much faster, and the stage table is why. On mypy, on the same
