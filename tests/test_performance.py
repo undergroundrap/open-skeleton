@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 import tracemalloc
 from pathlib import Path
@@ -14,16 +13,26 @@ from unittest import TestCase
 from open_skeleton.analysis import analyze_snapshot
 from open_skeleton.scanner import scan_repository
 
-# On a machine whose disk is not shared with anyone, this pipeline finishes in
-# about a second and ten is a generous ceiling. A hosted runner is a throttled
-# VM on contended storage and took twenty-two for the same work, so asserting
-# the tight budget there measures the runner rather than this code — and a test
-# that goes red because somebody else's VM was busy teaches people to ignore
-# red. The tight budget therefore runs where it means something, and a much
-# looser one runs everywhere to catch a genuine hang or a runaway regression.
-TIGHT_BUDGET_SECONDS = 10.0
+# A budget is only worth having if going over it means this code got slower.
+# Wall-clock time does not mean that: a hosted runner is a throttled VM on
+# contended storage and took twenty-two seconds for work that takes a few here,
+# and a test that goes red because some machine was busy teaches people to
+# ignore red. That was met by exempting hosted runners, which left the budget
+# measuring a quiet machine and going red on a busy one -- this repository's own
+# gate failed three times in one afternoon while benchmarks ran beside it.
+#
+# So the budget is on processor time, which describes the code in the way the
+# allocation ceiling below already does. On a quiet machine this work spends
+# about 3.1 seconds of it and 3.3 of wall clock; most of both is `tracemalloc`,
+# which roughly doubles the run and is the price of the allocation ceiling.
+# Processor time is not immune to a loaded machine -- a run during a benchmark
+# went over -- but it moves far less than wall clock, and a threefold margin is
+# still a regression this would catch.
+#
+# A wall-clock ceiling stays beside it, loose enough to mean only one thing:
+# something hung, or the machine is in no state to be running tests at all.
+PROCESSOR_BUDGET_SECONDS = 10.0
 HANG_CEILING_SECONDS = 180.0
-ON_SHARED_RUNNER = bool(os.environ.get("CI"))
 
 
 class PerformanceSmokeTests(TestCase):
@@ -38,8 +47,13 @@ class PerformanceSmokeTests(TestCase):
 
             tracemalloc.start()
             started = time.perf_counter()
+            # Serial by default, so this process does the work and its
+            # processor time is the work. A worker pool would spend its time
+            # in children and not be counted here.
+            spent = time.process_time()
             snapshot = scan_repository(root)
             result = analyze_snapshot(snapshot)
+            processor = time.process_time() - spent
             duration = time.perf_counter() - started
             _, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
@@ -49,9 +63,15 @@ class PerformanceSmokeTests(TestCase):
             # Allocation is a property of the code and holds on any machine.
             self.assertLess(peak, 64 * 1024 * 1024)
 
-            budget = HANG_CEILING_SECONDS if ON_SHARED_RUNNER else TIGHT_BUDGET_SECONDS
+            self.assertLess(
+                processor,
+                PROCESSOR_BUDGET_SECONDS,
+                f"pipeline spent {processor:.1f}s of processor time against a "
+                f"{PROCESSOR_BUDGET_SECONDS:.0f}s budget",
+            )
             self.assertLess(
                 duration,
-                budget,
-                f"pipeline took {duration:.1f}s against a {budget:.0f}s budget",
+                HANG_CEILING_SECONDS,
+                f"pipeline took {duration:.1f}s of wall clock, which is not a slow "
+                f"machine but something wrong",
             )
