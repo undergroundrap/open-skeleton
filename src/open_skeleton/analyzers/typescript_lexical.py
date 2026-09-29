@@ -1886,7 +1886,10 @@ def _state_fields(tokens: list[Token]) -> dict[str, dict[str, Any]]:
     return {
         field: {
             "values": sorted(observed),
-            "entries": sorted(entries.get(field, set())),
+            # Lists, for the reason `python_ast._state_fields` gives: this
+            # metadata is JSON everywhere it is stored, and a tuple is a
+            # distinction only the in-memory record can see.
+            "entries": [list(item) for item in sorted(entries.get(field, set()))],
         }
         for field, observed in values.items()
         if len(observed) >= MIN_STATE_VALUES

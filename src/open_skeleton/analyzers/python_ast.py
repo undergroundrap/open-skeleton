@@ -819,7 +819,14 @@ def _state_fields(tree: ast.Module) -> dict[str, dict[str, Any]]:
     return {
         field: {
             "values": sorted(entry["values"]),
-            "entries": sorted(entry["entries"]),
+            # Lists rather than tuples, because this metadata is stored and
+            # read back as JSON everywhere it goes -- `metadata_json` in the
+            # ledger, the exports, a reader cache -- and JSON has one sequence
+            # type. A tuple here was a distinction only the in-memory record
+            # could see: `spec/diagrams.py` already coerces these back with
+            # `tuple(item)` for exactly that reason, and a record rebuilt from
+            # any store compared unequal to the one a cold run built.
+            "entries": [list(item) for item in sorted(entry["entries"])],
         }
         for field, entry in fields.items()
         if len(entry["values"]) >= MIN_STATE_VALUES

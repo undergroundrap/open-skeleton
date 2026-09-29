@@ -260,3 +260,86 @@ class CacheSafetyTests(TestCase):
             next(iter(versions)).startswith("python-ast/"),
             "a cached entry is not filed under the reader that produced it",
         )
+
+
+STATEFUL_PYTHON = """\
+class Machine:
+    def start(self) -> None:
+        self.status = "idle"
+
+    def run(self) -> None:
+        if self.status == "idle":
+            self.status = "running"
+        else:
+            self.status = "blocked"
+"""
+
+STATEFUL_TYPESCRIPT = """\
+export class Machine {
+  status = "idle";
+  run() {
+    if (this.status === "idle") {
+      this.status = "running";
+    } else {
+      this.status = "blocked";
+    }
+  }
+}
+"""
+
+
+def _tuple_paths(value: Any, trail: str = "") -> list[str]:
+    """Every place a tuple sits inside a value, named by where it sits."""
+
+    found: list[str] = []
+    if isinstance(value, tuple):
+        found.append(trail or "<root>")
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found.extend(_tuple_paths(item, f"{trail}.{key}" if trail else str(key)))
+    elif isinstance(value, list | tuple):
+        for item in value:
+            found.extend(_tuple_paths(item, f"{trail}[]"))
+    return found
+
+
+class RecordFidelityTests(TestCase):
+    """A record has to survive being written down and read back.
+
+    Every store this engine has puts records through JSON -- `metadata_json`
+    in the ledger, the exports, and any cache that outlives a process -- and
+    JSON has one sequence type. A tuple inside a record's free-form metadata
+    is therefore a distinction only the in-memory record can see: it is
+    invisible in everything persisted, and it makes a record rebuilt from any
+    store compare unequal to the one a cold run built.
+
+    `spec/diagrams.py` already coerces these values back with `tuple(item)`,
+    which is the same fact noticed from the other end. This fails by naming
+    the field, so a reader that introduces one is told where.
+    """
+
+    def test_no_record_holds_a_tuple_where_a_store_would_return_a_list(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "app").mkdir()
+            (root / "app" / "machine.py").write_text(STATEFUL_PYTHON, encoding="utf-8")
+            (root / "app" / "machine.ts").write_text(STATEFUL_TYPESCRIPT, encoding="utf-8")
+            result = analyze_snapshot(scan_repository(root))
+
+        stateful = [item for item in result.symbols if "state_fields" in (item.metadata or {})]
+        self.assertTrue(
+            stateful,
+            "the fixture recorded no state fields; this test is guarding nothing",
+        )
+        self.assertEqual(
+            sorted({item.analyzer.split("/")[0] for item in stateful}),
+            ["python-ast", "typescript-lexical"],
+            "both readers that build state fields have to be covered",
+        )
+
+        offenders = sorted(
+            f"{item.analyzer} {item.path} {where}"
+            for item in result.symbols
+            for where in _tuple_paths(item.metadata or {})
+        )
+        self.assertEqual(offenders[:5], [], "a record holds a tuple a store cannot return")
